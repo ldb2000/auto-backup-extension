@@ -1,0 +1,16 @@
+# Journaux des sessions headless
+.agents-logs/
+# Préférences locales Claude Code (non partagées)
+.claude/settings.local.json
+# Secrets
+.env
+.env.*
+secrets/
+# Réponses du setup (peuvent contenir du contexte privé)
+setup.env
+# Fichiers temporaires de setup.sh
+*.tmp.*
+# Fichiers temporaires des agents (corps de PR)
+.pr-body.md
+# Documents de travail Superpowers (non partagés)
+.superpowers/

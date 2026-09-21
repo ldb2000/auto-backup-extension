@@ -1,0 +1,41 @@
+# Traite une issue avec l'équipe d'agents directement sur un runner GitHub.
+# DÉSACTIVÉ par défaut (if: false). Pour activer :
+#   1. Ajoute le secret ANTHROPIC_API_KEY (Settings → Secrets and variables → Actions),
+#      ou remplace par claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}.
+#   2. Supprime la ligne « if: false » ci-dessous.
+#   3. Lance-le depuis l'onglet Actions (Run workflow) avec un numéro d'issue « ready ».
+# Documentation : https://code.claude.com/docs/en/github-actions
+name: Agents — traiter une issue
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Numéro de l'issue (label ready)
+        required: true
+        type: string
+
+jobs:
+  traite-issue:
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Branche d'issue
+        run: |
+          git config user.name "claude-agents[bot]"
+          git config user.email "claude-agents@users.noreply.github.com"
+          git checkout -b "issue-${{ inputs.issue }}-ci"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: "/traite-issue ${{ inputs.issue }}"
+          claude_args: "--max-turns 150 --permission-mode acceptEdits"
