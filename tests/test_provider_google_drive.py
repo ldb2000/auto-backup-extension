@@ -263,6 +263,9 @@ async def _jusqu_a_l_autorisation(
         resultat["flow_id"], {CONF_PROVIDER: PROVIDER_GOOGLE_DRIVE}
     )
     assert resultat["step_id"] == "identifiants"
+    # Le placeholder `{fournisseur}` affiche le libellé lisible, jamais
+    # l'identifiant technique `google_drive`.
+    assert resultat["description_placeholders"]["fournisseur"] == LIBELLE_GOOGLE_DRIVE
 
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"],
@@ -378,6 +381,9 @@ async def test_le_parcours_complet_connecte_un_compte_google(
     # Le compte autorisé a été identifié, et sert de nom par défaut.
     assert resultat["step_id"] == "destination"
     assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
+    # Le placeholder `{fournisseur}` de cette étape affiche aussi le libellé
+    # lisible, comme celui de l'étape « identifiants ».
+    assert resultat["description_placeholders"]["fournisseur"] == LIBELLE_GOOGLE_DRIVE
     appels_about = _appels(aioclient_mock, URL_ABOUT)
     assert appels_about, "l'ajout doit interroger `about` pour identifier le compte"
     # Les deux crochets sont joués sur la **même** destination provisoire : le

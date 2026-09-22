@@ -356,6 +356,9 @@ async def test_le_parcours_complet_connecte_un_compte_dropbox(
     # Critère : le nom du compte est proposé par défaut.
     assert resultat["step_id"] == "destination"
     assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
+    # Le placeholder `{fournisseur}` de cette étape affiche aussi le libellé
+    # lisible, comme celui de l'étape « identifiants ».
+    assert resultat["description_placeholders"]["fournisseur"] == LIBELLE_DROPBOX
 
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"],
