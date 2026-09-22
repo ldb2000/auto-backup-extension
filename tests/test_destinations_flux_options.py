@@ -61,7 +61,12 @@ from custom_components.auto_backup.destinations import (
 )
 from custom_components.auto_backup.destinations.flow import (
     _identifiant_disponible,
+    _libelle_du_fournisseur,
     _retention,
+)
+from custom_components.auto_backup.destinations.providers.google_drive import (
+    LIBELLE_GOOGLE_DRIVE,
+    PROVIDER_GOOGLE_DRIVE,
 )
 from destinations_factices import (
     CLIENT_ID_FACTICE,
@@ -195,10 +200,20 @@ async def test_sans_fournisseur_enregistre_l_ajout_est_impossible(
     entree_auto_backup: MockConfigEntry,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Aucun fournisseur livré : le flux le dit au lieu d'un formulaire vide."""
-    resultat = await ouvrir_les_options(
-        entree_auto_backup.entry_id, "ajouter_destination"
-    )
+    """Registre vide : le flux le dit au lieu d'afficher un formulaire vide.
+
+    Depuis l'issue #13, l'intégration livre un fournisseur réel (Google Drive) :
+    le registre n'est donc jamais vide en pratique. Le cas reste possible — un
+    fournisseur retiré, un registre nettoyé par un test — et le flux doit
+    continuer de l'annoncer proprement.
+    """
+    with patch(
+        "custom_components.auto_backup.destinations.flow.list_providers",
+        return_value=(),
+    ):
+        resultat = await ouvrir_les_options(
+            entree_auto_backup.entry_id, "ajouter_destination"
+        )
 
     assert resultat["type"] is FlowResultType.ABORT
     assert resultat["reason"] == "aucun_fournisseur"
@@ -210,12 +225,21 @@ async def test_le_choix_du_fournisseur_liste_le_registre(
     fournisseur_factice: str,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Critère : les fournisseurs proposés sont ceux du registre."""
+    """Critère : les fournisseurs proposés sont ceux du registre.
+
+    Les fournisseurs factices y côtoient Google Drive, enregistré par
+    l'intégration elle-même (issue #13), qui s'affiche sous son libellé.
+    """
     resultat = await ouvrir_les_options(entree.entry_id, "ajouter_destination")
 
     selecteur = resultat["data_schema"].schema[CONF_PROVIDER]
-    proposes = [option["value"] for option in selecteur.config["options"]]
-    assert proposes == [PROVIDER_FACTICE, PROVIDER_OAUTH_FACTICE]
+    proposes = {
+        option["value"]: option["label"] for option in selecteur.config["options"]
+    }
+    assert {PROVIDER_FACTICE, PROVIDER_OAUTH_FACTICE} <= set(proposes)
+    # Un fournisseur sans libellé garde son identifiant technique.
+    assert proposes[PROVIDER_FACTICE] == PROVIDER_FACTICE
+    assert proposes[PROVIDER_GOOGLE_DRIVE] == LIBELLE_GOOGLE_DRIVE
 
 
 ### Parcours complet d'ajout ###
@@ -816,6 +840,19 @@ def test_une_retention_illisible_est_refusee() -> None:
     """Une valeur non numérique ne peut pas devenir une rétention."""
     with pytest.raises(DestinationConfigError):
         _retention({CONF_RETENTION_DAYS: "sept"}, CONF_RETENTION_DAYS)
+
+
+def test_un_fournisseur_sans_libelle_garde_son_identifiant() -> None:
+    """Le libellé est facultatif : un fournisseur qui n'en a pas reste lisible.
+
+    Le cas couvre aussi un fournisseur absent du registre : une destination
+    peut citer un fournisseur retiré depuis, et le sélecteur de suppression
+    doit tout de même l'afficher.
+    """
+    assert _libelle_du_fournisseur(PROVIDER_FACTICE) == PROVIDER_FACTICE
+    assert _libelle_du_fournisseur("fournisseur_inexistant") == (
+        "fournisseur_inexistant"
+    )
 
 
 def test_un_identifiant_deja_pris_recoit_un_suffixe() -> None:

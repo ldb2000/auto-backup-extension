@@ -33,7 +33,8 @@
             "autorisation_refusee": "Authorisation refused by the provider: {erreur}.",
             "jeton_invalide": "The provider returned an unusable token: the destination was not created.",
             "fournisseur_invalide": "The chosen provider is no longer available or does not support the requested authorisation.",
-            "configuration_invalide": "The destination configuration could not be saved."
+            "configuration_invalide": "The destination configuration could not be saved.",
+            "echec_fournisseur": "The provider rejected the first request: {detail}."
         },
         "error": {
             "identifiants_invalides": "Enter your application's client ID and secret.",

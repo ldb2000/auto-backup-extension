@@ -26,6 +26,7 @@ from ..const import (
 from .errors import DestinationConfigError, DestinationNotFoundError
 from .manager import DestinationManager
 from .models import DestinationConfig
+from .providers import enregistrer_les_fournisseurs
 from .schema import DESTINATIONS_SCHEMA
 
 
@@ -53,9 +54,14 @@ def async_setup_destinations(
 ) -> DestinationManager:
     """Charge les destinations de l'entrée et les expose dans `hass.data`.
 
+    Les fournisseurs livrés (Google Drive, issue #13) sont enregistrés ici, au
+    démarrage de l'entrée : le registre est ainsi peuplé avant toute lecture des
+    destinations persistées et avant l'ouverture du flux d'options.
+
     Le gestionnaire obtenu suit les options de l'entrée : il se recharge quand
     elles changent et disparaît de `hass.data` au déchargement de l'entrée.
     """
+    enregistrer_les_fournisseurs()
     manager = DestinationManager(hass)
     manager.async_load(async_destination_configs(entry))
     hass.data[DATA_DESTINATIONS] = manager

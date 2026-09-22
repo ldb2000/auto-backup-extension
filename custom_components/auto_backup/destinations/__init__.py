@@ -9,8 +9,9 @@ depuis l'issue #7 — l'autorisation OAuth2 (`oauth`), le signalement des
 destinations à ré-autoriser (`reauth`) et les étapes d'interface qui étendent
 le flux d'options upstream (`flow`).
 
-Les fournisseurs concrets sont ajoutés par les issues suivantes ; aucun accès
-réseau n'est réalisé ici.
+Les fournisseurs concrets vivent dans le sous-paquet `providers` — Google Drive
+depuis l'issue #13 — et sont chargés par `enregistrer_les_fournisseurs()` au
+démarrage de l'entrée. Aucun accès réseau n'est réalisé par ce module.
 """
 
 from __future__ import annotations
