@@ -4,7 +4,7 @@
 Reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter la possibilité de sauvegarder directement sur dropbox et google drive
 
 ## Stack
-- Langage : Python 3.13 (`.python-version`), gestionnaire de projet et d'environnement : `uv`
+- Langage : Python 3.14 (`.python-version`), gestionnaire de projet et d'environnement : `uv`
 - Backend : intégration Home Assistant `custom_components/auto_backup` (HACS, domaine `auto_backup`)
 - Frontend : aucun (l'UI est fournie par Home Assistant : config flow et entités)
 - BDD : aucune (l'état est persisté via le `Store` de Home Assistant)
