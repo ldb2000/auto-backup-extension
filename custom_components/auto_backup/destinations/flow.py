@@ -1,7 +1,8 @@
 """Gestion des destinations distantes depuis le flux d'options (issue #7).
 
 Ce module apporte au flux d'options upstream un menu et les étapes d'ajout, de
-ré-autorisation et de suppression d'une destination. Il n'existe pas dans
+ré-autorisation et de suppression d'une destination, ainsi que — depuis
+l'issue #8 — les réglages du téléversement (délai maximum). Il n'existe pas dans
 l'upstream et ne modifie aucune de ses lignes : `config_flow.py` se contente
 d'envelopper sa classe `OptionsFlowHandler` par `etendre_le_flux_d_options()`,
 qui construit une sous-classe portant les étapes ci-dessous
@@ -58,11 +59,17 @@ from ..const import (
     CONF_PROVIDER,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
+    CONF_UPLOAD_TIMEOUT,
     DEFAULT_DESTINATION_FOLDER,
+    DEFAULT_UPLOAD_TIMEOUT,
     OAUTH_AUTHORIZE_URL_TIMEOUT,
     OAUTH_TOKEN_TIMEOUT,
 )
-from .config_entry import async_destination_configs, options_avec_destinations
+from .config_entry import (
+    async_destination_configs,
+    options_avec_destinations,
+    options_avec_reglage,
+)
 from .errors import DestinationConfigError, UnknownProviderError
 from .models import DestinationConfig
 from .oauth import (
@@ -109,6 +116,28 @@ def _retention(user_input: Mapping[str, Any], cle: str) -> int | None:
         raise DestinationConfigError(f"{cle} doit être un nombre entier") from err
 
 
+def _delai_de_televersement(valeur: Any) -> int:
+    """Convertit le délai saisi en secondes entières, ou lève.
+
+    Le sélecteur numérique de Home Assistant renvoie un flottant, et ne borne
+    volontairement pas la saisie : la contrainte — un entier **strictement
+    positif** — est vérifiée ici, en un seul endroit, pour que l'utilisateur
+    reçoive un message explicite plutôt qu'un refus générique du schéma. Un
+    délai nul ou négatif couperait tout téléversement avant même qu'il commence.
+    """
+    try:
+        secondes = int(float(valeur))
+    except (TypeError, ValueError) as err:
+        raise DestinationConfigError(
+            f"{CONF_UPLOAD_TIMEOUT} doit être un nombre de secondes"
+        ) from err
+    if secondes <= 0:
+        raise DestinationConfigError(
+            f"{CONF_UPLOAD_TIMEOUT} doit être strictement positif"
+        )
+    return secondes
+
+
 def _identifiant_disponible(nom: str, pris: Iterable[str]) -> str:
     """Fabrique un identifiant stable, lisible et unique dans l'entrée.
 
@@ -129,12 +158,14 @@ def _identifiant_disponible(nom: str, pris: Iterable[str]) -> str:
 
 
 class GestionDesDestinationsMixin:
-    """Étapes du flux d'options propres aux destinations distantes.
+    """Étapes du flux d'options propres au fork.
 
     Le mélange est appliqué à la classe upstream par
     `etendre_le_flux_d_options()` : l'étape `init` reste **exactement** le
     formulaire upstream (`auto_purge`, `backup_timeout`), simplement atteinte
-    depuis le menu au lieu d'être la première étape.
+    depuis le menu au lieu d'être la première étape. Les réglages propres au
+    fork — aujourd'hui le délai de téléversement — ont leur propre étape, pour
+    que le schéma upstream reste intact.
     """
 
     # Le point d'entrée du flux devient le menu ; `init` reste une étape.
@@ -197,8 +228,59 @@ class GestionDesDestinationsMixin:
         options = ["ajouter_destination"]
         if self._configurations():
             options += ["reautoriser_destination", "supprimer_destination"]
-        options.append("init")
+        options += ["reglages_televersement", "init"]
         return self.async_show_menu(step_id="menu", menu_options=options)
+
+    ### Réglages du téléversement ###
+
+    async def async_step_reglages_televersement(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Délai maximum accordé à l'envoi d'une sauvegarde, en secondes.
+
+        Le réglage vit dans les options de l'entrée, aux côtés de ceux de
+        l'upstream ; `CoordinateurTeleversement` le relit à chaque
+        téléversement, il s'applique donc sans redémarrage. Les autres options
+        — destinations comprises — sont reconduites telles quelles.
+        """
+        erreurs: dict[str, str] = {}
+        propose: Any = self.config_entry.options.get(
+            CONF_UPLOAD_TIMEOUT, DEFAULT_UPLOAD_TIMEOUT
+        )
+
+        if user_input is not None:
+            try:
+                secondes = _delai_de_televersement(user_input.get(CONF_UPLOAD_TIMEOUT))
+            except DestinationConfigError as err:
+                _LOGGER.debug("Délai de téléversement refusé : %s", err)
+                erreurs[CONF_UPLOAD_TIMEOUT] = "delai_invalide"
+                propose = user_input.get(CONF_UPLOAD_TIMEOUT, propose)
+            else:
+                _LOGGER.info("Délai maximum d'un téléversement : %s s", secondes)
+                return self.async_create_entry(
+                    data=options_avec_reglage(
+                        self.config_entry, CONF_UPLOAD_TIMEOUT, secondes
+                    )
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_UPLOAD_TIMEOUT): NumberSelector(
+                    NumberSelectorConfig(
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="s",
+                    )
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id="reglages_televersement",
+            data_schema=self.add_suggested_values_to_schema(
+                schema, {CONF_UPLOAD_TIMEOUT: propose}
+            ),
+            errors=erreurs,
+        )
 
     ### Ajout d'une destination ###
 

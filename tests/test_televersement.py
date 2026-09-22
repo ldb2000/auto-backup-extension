@@ -14,6 +14,8 @@ Aucun test ne touche un fournisseur réel ni le réseau.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,6 +24,7 @@ import aiohttp
 import pytest
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant_custom_component.common import (
@@ -38,11 +41,14 @@ from custom_components.auto_backup.const import (
     ATTR_SIZE,
     ATTR_SLUG,
     ATTR_UPLOAD_TO,
+    CONF_AUTO_PURGE,
+    CONF_BACKUP_TIMEOUT,
     CONF_DESTINATIONS,
     CONF_UPLOAD_TIMEOUT,
     DATA_AUTO_BACKUP,
     DATA_DESTINATIONS,
     DATA_UPLOADS,
+    DEFAULT_UPLOAD_TIMEOUT,
     DOMAIN,
     EVENT_BACKUP_FAILED,
     EVENT_BACKUP_START,
@@ -54,7 +60,11 @@ from custom_components.auto_backup.const import (
     SERVICE_BACKUP_FULL,
     SERVICE_BACKUP_PARTIAL,
 )
-from custom_components.auto_backup.destinations import DestinationError
+from custom_components.auto_backup.destinations import (
+    DestinationConfigError,
+    DestinationError,
+)
+from custom_components.auto_backup.destinations.flow import _delai_de_televersement
 from custom_components.auto_backup.destinations.upload import (
     DELAI_CONFIRMATION_DEMANDE,
     ErreurLectureSauvegarde,
@@ -71,6 +81,9 @@ from custom_components.auto_backup.handlers import (
     SupervisorHandler,
 )
 from destinations_factices import DestinationEnMemoire, config_factice
+
+# Signature de la fixture `ouvrir_les_options` (cf. `tests/conftest.py`).
+type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
 # Plus grand qu'un morceau de lecture (64 Kio) : la lecture doit rendre
 # plusieurs morceaux, preuve qu'elle n'avale pas le fichier d'un bloc.
@@ -1218,3 +1231,174 @@ async def test_le_coordinateur_disparait_au_dechargement(
     await hass.async_block_till_done()
 
     assert DATA_UPLOADS not in hass.data
+
+
+### RÉGLAGE DU DÉLAI DEPUIS L'INTERFACE ###
+#
+# Critère 6 de l'issue #8 : « son délai maximum est configurable dans les
+# options ». Le formulaire upstream (`init`) ignore cette option ; c'est une
+# étape propre au fork, atteinte depuis le menu du flux d'options.
+
+
+# Délai choisi dans l'interface par les tests : assez grand pour qu'aucun
+# téléversement factice ne l'atteigne, assez singulier pour être reconnu.
+DELAI_CHOISI = 45
+
+
+def _valeur_proposee(resultat: dict[str, Any], cle: str) -> Any:
+    """Valeur pré-remplie par le formulaire pour ce champ."""
+    for marqueur in resultat["data_schema"].schema:
+        if marqueur == cle:
+            return (marqueur.description or {}).get("suggested_value")
+    raise AssertionError(f"champ « {cle} » absent du formulaire")
+
+
+async def _regler_le_delai(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+    delai: Any,
+) -> dict[str, Any]:
+    """Ouvre les réglages du téléversement et soumet ce délai."""
+    resultat = await ouvrir_les_options(entree.entry_id, "reglages_televersement")
+    assert resultat["step_id"] == "reglages_televersement"
+
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], user_input={CONF_UPLOAD_TIMEOUT: delai}
+    )
+    await hass.async_block_till_done()
+    return resultat
+
+
+async def test_le_formulaire_propose_le_delai_en_vigueur(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Le champ est pré-rempli : valeur par défaut, puis valeur configurée."""
+    instance = await _demarrer(hass, fichier_de_sauvegarde)
+
+    resultat = await ouvrir_les_options(
+        instance.entree.entry_id, "reglages_televersement"
+    )
+    assert resultat["type"] is FlowResultType.FORM
+    assert _valeur_proposee(resultat, CONF_UPLOAD_TIMEOUT) == DEFAULT_UPLOAD_TIMEOUT
+
+    await _regler_le_delai(hass, instance.entree, ouvrir_les_options, DELAI_CHOISI)
+
+    resultat = await ouvrir_les_options(
+        instance.entree.entry_id, "reglages_televersement"
+    )
+    assert _valeur_proposee(resultat, CONF_UPLOAD_TIMEOUT) == DELAI_CHOISI
+
+
+async def test_le_delai_saisi_dans_l_interface_est_celui_du_coordinateur(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Le délai réglé dans l'UI est celui qui borne le téléversement suivant.
+
+    La preuve est prise au plus près : `asyncio.timeout()` est observé pendant
+    l'envoi, et reçoit bien la valeur saisie — sans redémarrage de l'entrée.
+    """
+    instance = await _demarrer(hass, fichier_de_sauvegarde)
+
+    resultat = await _regler_le_delai(
+        hass, instance.entree, ouvrir_les_options, DELAI_CHOISI
+    )
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+
+    # Le sélecteur numérique renvoie un flottant ; l'option persistée est un
+    # entier de secondes, et les options upstream restent complétées.
+    assert instance.entree.options[CONF_UPLOAD_TIMEOUT] == DELAI_CHOISI
+    assert isinstance(instance.entree.options[CONF_UPLOAD_TIMEOUT], int)
+    assert CONF_AUTO_PURGE in instance.entree.options
+    assert CONF_BACKUP_TIMEOUT in instance.entree.options
+
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    with patch(
+        "custom_components.auto_backup.destinations.upload.asyncio.timeout",
+        wraps=asyncio.timeout,
+    ) as chronometre:
+        await hass.services.async_call(
+            DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(succes) == 1
+    delais = [appel.args[0] for appel in chronometre.call_args_list if appel.args]
+    assert float(DELAI_CHOISI) in delais
+
+
+async def test_le_delai_regle_survit_aux_reglages_de_sauvegarde(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Enregistrer le formulaire upstream n'efface plus le délai ni les destinations.
+
+    Le formulaire upstream remplace l'intégralité des options par son contenu :
+    sans le report des clés du fork, le délai réglé juste avant disparaîtrait
+    en silence.
+    """
+    instance = await _demarrer(hass, fichier_de_sauvegarde)
+    await _regler_le_delai(hass, instance.entree, ouvrir_les_options, DELAI_CHOISI)
+
+    resultat = await ouvrir_les_options(instance.entree.entry_id, "init")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"],
+        user_input={CONF_AUTO_PURGE: False, CONF_BACKUP_TIMEOUT: 45},
+    )
+    await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    assert instance.entree.options[CONF_AUTO_PURGE] is False
+    assert instance.entree.options[CONF_UPLOAD_TIMEOUT] == DELAI_CHOISI
+    assert instance.entree.options[CONF_DESTINATIONS] == [config_factice()]
+    assert hass.data[DATA_UPLOADS]._delai == float(DELAI_CHOISI)
+
+
+@pytest.mark.parametrize("delai", [0, -30, 0.4])
+async def test_un_delai_nul_ou_negatif_est_refuse(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+    ouvrir_les_options: OuvrirLesOptions,
+    delai: float,
+) -> None:
+    """Un délai qui ne laisse aucune chance au téléversement est refusé."""
+    instance = await _demarrer(hass, fichier_de_sauvegarde)
+
+    resultat = await _regler_le_delai(hass, instance.entree, ouvrir_les_options, delai)
+
+    assert resultat["type"] is FlowResultType.FORM
+    assert resultat["errors"] == {CONF_UPLOAD_TIMEOUT: "delai_invalide"}
+    assert CONF_UPLOAD_TIMEOUT not in instance.entree.options
+    # La saisie refusée reste affichée, pour être corrigée plutôt que retapée.
+    assert _valeur_proposee(resultat, CONF_UPLOAD_TIMEOUT) == delai
+
+
+@pytest.mark.parametrize(
+    ("saisie", "attendu"),
+    [(1, 1), (DELAI_CHOISI, DELAI_CHOISI), ("120", 120), (1800.0, 1800)],
+)
+def test_un_delai_valide_devient_un_entier_de_secondes(
+    saisie: Any, attendu: int
+) -> None:
+    """Le flottant du sélecteur devient un nombre entier de secondes."""
+    assert _delai_de_televersement(saisie) == attendu
+
+
+@pytest.mark.parametrize("saisie", [None, "", "jamais"])
+def test_un_delai_non_numerique_est_refuse(saisie: Any) -> None:
+    """Une valeur qui n'est pas un nombre est refusée, pas interprétée."""
+    with pytest.raises(DestinationConfigError):
+        _delai_de_televersement(saisie)

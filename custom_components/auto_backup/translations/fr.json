@@ -41,7 +41,8 @@
             "nom_deja_utilise": "Une destination porte déjà ce nom.",
             "dossier_invalide": "Le dossier doit être un chemin relatif composé de lettres, de chiffres, d'espaces et de « - _ . ( ) », dont les niveaux sont séparés par « / » — par exemple « Sauvegardes/Home Assistant ».",
             "destination_invalide": "La destination n'a pas pu être créée avec ces valeurs.",
-            "aucune_selection": "Sélectionnez au moins une destination."
+            "aucune_selection": "Sélectionnez au moins une destination.",
+            "delai_invalide": "Le délai doit être un nombre entier de secondes strictement positif."
         },
         "step": {
             "menu": {
@@ -51,6 +52,7 @@
                     "ajouter_destination": "Ajouter une destination",
                     "reautoriser_destination": "Ré-autoriser une destination",
                     "supprimer_destination": "Supprimer une destination",
+                    "reglages_televersement": "Réglages du téléversement",
                     "init": "Réglages des sauvegardes"
                 }
             },
@@ -95,6 +97,13 @@
                 "description": "La configuration et l'autorisation des destinations choisies seront effacées. Les sauvegardes déjà déposées chez le fournisseur ne sont pas supprimées.",
                 "data": {
                     "destinations": "Destinations à supprimer"
+                }
+            },
+            "reglages_televersement": {
+                "title": "Réglages du téléversement",
+                "description": "Délai maximum accordé à l'envoi d'une sauvegarde vers une destination distante. Au-delà, l'envoi est interrompu et signalé par l'événement « auto_backup.upload_failed » ; la sauvegarde locale, elle, reste intacte. Comptez large pour une sauvegarde volumineuse ou une connexion lente.",
+                "data": {
+                    "upload_timeout": "Délai maximum d'un téléversement (secondes)"
                 }
             },
             "init": {
