@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -26,6 +27,7 @@ from ..const import (
     CONF_DESTINATION_ID,
     CONF_FOLDER,
     CONF_PROVIDER,
+    CONF_PROVIDER_DATA,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     DEFAULT_DESTINATION_FOLDER,
@@ -181,6 +183,47 @@ def chemin_de_dossier(valeur: Any) -> str:
 
 RETENTION_SCHEMA = vol.Any(None, entier_strictement_positif)
 
+# Bornes des données de fournisseur (`provider_data`, issue #13). Ce champ
+# accueille le peu qu'un fournisseur a besoin de retenir sur le compte autorisé
+# — l'adresse du compte Google, par exemple. Il n'a pas vocation à devenir un
+# fourre-tout : ces bornes l'empêchent de grossir sans qu'on le décide.
+MAX_CLES_FOURNISSEUR = 20
+MAX_LONGUEUR_VALEUR_FOURNISSEUR = 500
+
+
+def donnees_de_fournisseur(valeur: Any) -> dict[str, Any]:
+    """Valide les données propres à un fournisseur et les renvoie copiées.
+
+    Elles sont persistées telles quelles dans l'entrée de configuration : seules
+    des valeurs scalaires sérialisables en JSON sont acceptées, sous des clés
+    textuelles, en nombre et en longueur bornés. Aucun secret n'a sa place ici :
+    les identifiants d'application et le jeton ont leurs propres champs.
+    """
+    if not isinstance(valeur, Mapping):
+        raise vol.Invalid(
+            f"les données de fournisseur doivent être un dictionnaire, reçu {valeur!r}"
+        )
+    if len(valeur) > MAX_CLES_FOURNISSEUR:
+        raise vol.Invalid(
+            "les données de fournisseur ne peuvent pas dépasser "
+            f"{MAX_CLES_FOURNISSEUR} clés, reçu {len(valeur)}"
+        )
+    valide: dict[str, Any] = {}
+    for cle, contenu in valeur.items():
+        nom = texte_non_vide(cle)
+        if contenu is not None and not isinstance(contenu, str | int | float | bool):
+            raise vol.Invalid(
+                f"la donnée de fournisseur « {nom} » doit être un texte, un nombre, "
+                f"un booléen ou être absente, reçu {type(contenu).__name__}"
+            )
+        if isinstance(contenu, str) and len(contenu) > MAX_LONGUEUR_VALEUR_FOURNISSEUR:
+            raise vol.Invalid(
+                f"la donnée de fournisseur « {nom} » ne peut pas dépasser "
+                f"{MAX_LONGUEUR_VALEUR_FOURNISSEUR} caractères"
+            )
+        valide[nom] = contenu
+    return valide
+
 
 def horodatage(valeur: Any) -> float:
     """Valide un horodatage epoch (secondes), tel que renvoyé par `time.time()`."""
@@ -223,6 +266,9 @@ DESTINATION_SCHEMA = vol.Schema(
         vol.Optional(CONF_CLIENT_ID): vol.Any(None, texte_non_vide),
         vol.Optional(CONF_CLIENT_SECRET): vol.Any(None, texte_non_vide),
         vol.Optional(CONF_TOKEN): vol.Any(None, TOKEN_SCHEMA),
+        # Données propres au fournisseur (issue #13), elles aussi sans valeur
+        # par défaut : une destination qui n'en a pas est persistée comme avant.
+        vol.Optional(CONF_PROVIDER_DATA): vol.Any(None, donnees_de_fournisseur),
     }
 )
 

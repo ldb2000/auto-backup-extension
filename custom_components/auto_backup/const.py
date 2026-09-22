@@ -108,3 +108,10 @@ OAUTH_TOKEN_TIMEOUT = 30
 # Préfixe de l'identifiant du problème (« repair issue ») signalant qu'une
 # destination doit être ré-autorisée.
 ISSUE_REAUTH_PREFIX = "reauthentification_requise_"
+
+### FOURNISSEURS DE DESTINATIONS (issue #13) ###
+# Données propres au fournisseur, persistées avec la destination : ce qu'il a appris
+# du compte autorisé et qui n'est ni un identifiant d'application ni un jeton —
+# l'adresse du compte Google Drive, par exemple. Facultatif : une destination qui
+# n'en a pas est persistée exactement comme avant.
+CONF_PROVIDER_DATA = "provider_data"

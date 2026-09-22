@@ -19,6 +19,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.auto_backup.const import (
     CONF_FOLDER,
+    CONF_PROVIDER_DATA,
     DEFAULT_DESTINATION_FOLDER,
     EVENT_REMOTE_PURGE,
     EVENT_UPLOAD_FAILED,
@@ -27,6 +28,7 @@ from custom_components.auto_backup.const import (
 )
 from custom_components.auto_backup.destinations import (
     DESTINATION_SCHEMA,
+    VALEUR_MASQUEE,
     DestinationAuthError,
     DestinationConfig,
     DestinationConfigError,
@@ -621,6 +623,75 @@ def test_les_evenements_du_fork_sont_prefixes_et_distincts() -> None:
     assert len(set(evenements)) == len(evenements)
     for evenement in evenements:
         assert evenement.startswith("auto_backup")
+
+
+### Données propres au fournisseur (issue #13) ###
+
+
+def test_les_donnees_de_fournisseur_sont_absentes_par_defaut() -> None:
+    """Une destination qui n'en a pas est persistée exactement comme avant."""
+    config = DestinationConfig.from_dict(config_factice())
+
+    assert config.provider_data is None
+    assert CONF_PROVIDER_DATA not in config.as_dict()
+
+
+def test_les_donnees_de_fournisseur_sont_relues_et_copiees() -> None:
+    """Elles font l'aller-retour, sans partager leur dictionnaire d'origine."""
+    origine = {"account_email": "camille@exemple.test", "quota": 42, "actif": True}
+    brute = config_factice(provider_data=origine)
+
+    config = DestinationConfig.from_dict(brute)
+
+    assert config.provider_data == origine
+    assert config.as_dict()[CONF_PROVIDER_DATA] == origine
+    origine["account_email"] = "autre@exemple.test"
+    assert config.provider_data["account_email"] == "camille@exemple.test"
+
+
+def test_les_donnees_de_fournisseur_sont_masquees_dans_les_journaux() -> None:
+    """Ce ne sont pas des secrets, mais elles identifient une personne."""
+    config = DestinationConfig.from_dict(
+        config_factice(provider_data={"account_email": "camille@exemple.test"})
+    )
+
+    assert "camille@exemple.test" not in repr(config)
+    assert config.as_dict(masquer=True)[CONF_PROVIDER_DATA] == {
+        "account_email": VALEUR_MASQUEE
+    }
+    # Sans masquage, c'est bien la valeur qui est écrite dans l'entrée.
+    assert config.as_dict()[CONF_PROVIDER_DATA]["account_email"] == (
+        "camille@exemple.test"
+    )
+
+
+@pytest.mark.parametrize(
+    "donnees",
+    [
+        pytest.param("pas un dictionnaire", id="chaine"),
+        pytest.param({"compte": {"email": "a@exemple.test"}}, id="valeur_imbriquee"),
+        pytest.param({"compte": ["a@exemple.test"]}, id="valeur_liste"),
+        pytest.param({"  ": "vide"}, id="cle_vide"),
+        pytest.param({1: "cle_non_textuelle"}, id="cle_non_textuelle"),
+        pytest.param({f"cle_{i}": i for i in range(21)}, id="trop_de_cles"),
+        pytest.param({"compte": "a" * 501}, id="valeur_trop_longue"),
+    ],
+)
+def test_des_donnees_de_fournisseur_aberrantes_sont_refusees(donnees: object) -> None:
+    """Le schéma et la dataclass refusent les mêmes valeurs, comme ailleurs."""
+    with pytest.raises(vol.Invalid):
+        DESTINATION_SCHEMA(config_factice(provider_data=donnees))
+
+    with pytest.raises(DestinationConfigError):
+        DestinationConfig.from_dict(config_factice(provider_data=donnees))
+
+    with pytest.raises(DestinationConfigError):
+        DestinationConfig(
+            destination_id="destination_test",
+            provider=PROVIDER_FACTICE,
+            name="Destination de test",
+            provider_data=donnees,
+        )
 
 
 ### ADR ###

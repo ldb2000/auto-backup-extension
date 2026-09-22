@@ -19,12 +19,18 @@ from ..const import (
     CONF_DESTINATION_ID,
     CONF_FOLDER,
     CONF_PROVIDER,
+    CONF_PROVIDER_DATA,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     DEFAULT_DESTINATION_FOLDER,
 )
 from .errors import DestinationConfigError
-from .schema import DESTINATION_SCHEMA, TOKEN_SCHEMA, chemin_de_dossier
+from .schema import (
+    DESTINATION_SCHEMA,
+    TOKEN_SCHEMA,
+    chemin_de_dossier,
+    donnees_de_fournisseur,
+)
 
 # Remplace toute valeur secrète dans une représentation journalisable. La valeur
 # est volontairement constante et sans longueur indicative : un masque du type
@@ -100,19 +106,39 @@ def _valide_jeton(valeur: Any) -> dict[str, Any] | None:
         raise DestinationConfigError(f"token invalide : {err}") from err
 
 
+def _valide_donnees_de_fournisseur(valeur: Any) -> dict[str, Any] | None:
+    """Valide les données propres au fournisseur et les renvoie copiées, ou `None`.
+
+    Comme pour le jeton, la copie est délibérée : la configuration est immuable
+    et ne doit pas partager son dictionnaire avec les options de l'entrée.
+    """
+    if valeur is None:
+        return None
+    if not isinstance(valeur, Mapping):
+        raise DestinationConfigError(
+            "provider_data doit être un dictionnaire ou être absent"
+        )
+    try:
+        return donnees_de_fournisseur(dict(valeur))
+    except (vol.Invalid, TypeError, ValueError) as err:
+        raise DestinationConfigError(f"provider_data invalide : {err}") from err
+
+
 def _masque(valeur: Any) -> str | None:
     """Renvoie `None` si la valeur est absente, le masque constant sinon."""
     return None if valeur is None else VALEUR_MASQUEE
 
 
-def _jeton_masque(jeton: Mapping[str, Any] | None) -> dict[str, str] | None:
-    """Réduit un jeton à ses clés : la structure sans aucune valeur.
+def _cles_masquees(donnees: Mapping[str, Any] | None) -> dict[str, str] | None:
+    """Réduit un dictionnaire à ses clés : la structure sans aucune valeur.
 
     Savoir qu'un `refresh_token` existe aide au diagnostic ; sa valeur, jamais.
+    Le même traitement s'applique aux données de fournisseur : elles ne portent
+    pas de secret, mais peuvent identifier une personne (adresse du compte).
     """
-    if jeton is None:
+    if donnees is None:
         return None
-    return dict.fromkeys(jeton, VALEUR_MASQUEE)
+    return dict.fromkeys(donnees, VALEUR_MASQUEE)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -138,6 +164,13 @@ class DestinationConfig:
     confusables Unicode sont refusés, car les fournisseurs le reprennent tel
     quel pour bâtir un chemin distant. La règle unique vit dans
     `chemin_de_dossier()`.
+
+    `provider_data` (issue #13) porte ce que le fournisseur a appris du compte
+    autorisé et qui n'est ni un identifiant d'application ni un jeton :
+    l'adresse du compte Google Drive, par exemple. Facultatif et borné
+    (cf. `donnees_de_fournisseur()`), il n'est pas persisté quand il est absent,
+    et ses valeurs sont masquées comme celles du jeton : ce ne sont pas des
+    secrets, mais elles peuvent identifier une personne.
     """
 
     destination_id: str
@@ -149,6 +182,7 @@ class DestinationConfig:
     client_id: str | None = None
     client_secret: str | None = None
     token: Mapping[str, Any] | None = None
+    provider_data: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Revalide les invariants, y compris hors du schéma voluptuous."""
@@ -166,6 +200,9 @@ class DestinationConfig:
                 self, nom_champ, _valide_secret(nom_champ, getattr(self, nom_champ))
             )
         object.__setattr__(self, "token", _valide_jeton(self.token))
+        object.__setattr__(
+            self, "provider_data", _valide_donnees_de_fournisseur(self.provider_data)
+        )
 
     @property
     def utilise_oauth(self) -> bool:
@@ -196,6 +233,7 @@ class DestinationConfig:
             client_id=valide.get(CONF_CLIENT_ID),
             client_secret=valide.get(CONF_CLIENT_SECRET),
             token=valide.get(CONF_TOKEN),
+            provider_data=valide.get(CONF_PROVIDER_DATA),
         )
 
     def as_dict(self, *, masquer: bool = False) -> dict[str, Any]:
@@ -205,8 +243,9 @@ class DestinationConfig:
         sans OAuth2 est persistée exactement comme avant l'issue #7.
 
         Avec `masquer=True`, les secrets (`client_id`, `client_secret`, jeton)
-        sont remplacés par `VALEUR_MASQUEE` et le jeton est réduit à ses clés :
-        c'est la seule forme qui peut être journalisée ou affichée.
+        sont remplacés par `VALEUR_MASQUEE`, et le jeton comme les données de
+        fournisseur sont réduits à leurs clés : c'est la seule forme qui peut
+        être journalisée ou affichée.
         """
         donnees: dict[str, Any] = {
             CONF_DESTINATION_ID: self.destination_id,
@@ -224,7 +263,13 @@ class DestinationConfig:
             )
         if self.token is not None:
             donnees[CONF_TOKEN] = (
-                _jeton_masque(self.token) if masquer else dict(self.token)
+                _cles_masquees(self.token) if masquer else dict(self.token)
+            )
+        if self.provider_data is not None:
+            donnees[CONF_PROVIDER_DATA] = (
+                _cles_masquees(self.provider_data)
+                if masquer
+                else dict(self.provider_data)
             )
         return donnees
 
@@ -237,7 +282,8 @@ class DestinationConfig:
             f"retention_count={self.retention_count!r}, "
             f"client_id={_masque(self.client_id)!r}, "
             f"client_secret={_masque(self.client_secret)!r}, "
-            f"token={_jeton_masque(self.token)!r})"
+            f"token={_cles_masquees(self.token)!r}, "
+            f"provider_data={_cles_masquees(self.provider_data)!r})"
         )
 
 
