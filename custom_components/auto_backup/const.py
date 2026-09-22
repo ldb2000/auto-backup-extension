@@ -9,6 +9,10 @@ if TYPE_CHECKING:
     from .destinations import DestinationManager
     from .destinations.oauth import EtatOAuth
     from .destinations.upload import CoordinateurTeleversement
+    from .destinations.retention import (
+        CoordinateurPurgeDistante,
+        RegistreSauvegardesDistantes,
+    )
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -157,3 +161,27 @@ IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
 # exemple. Elles évitent de rappeler l'API pour savoir à quel compte une destination
 # est rattachée, et servent à détecter qu'une ré-autorisation a changé de compte.
 CONF_PROVIDER_DATA = "provider_data"
+
+### RÉTENTION ET PURGE DISTANTES (issue #9) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Toute la logique vit dans
+# `destinations/retention.py` ; `manager.py` n'est pas touché.
+
+# Registre persistant des sauvegardes déposées par le fork chez un fournisseur :
+# destination -> liste d'entrées {remote_id, slug, name, created_at, size}. C'est
+# lui qui rend une sauvegarde distante purgeable : un fichier que l'utilisateur a
+# déposé lui-même n'y figure pas, donc n'est jamais supprimé (cf. l'ADR).
+STORAGE_KEY_REMOTE_BACKUPS = "remote_backups"
+STORAGE_VERSION_REMOTE_BACKUPS = 1
+
+DATA_REMOTE_BACKUPS: HassKey[RegistreSauvegardesDistantes] = HassKey(
+    f"{DOMAIN}_remote_backups"
+)
+DATA_REMOTE_PURGE: HassKey[CoordinateurPurgeDistante] = HassKey(
+    f"{DOMAIN}_remote_purge"
+)
+
+# Champs propres au registre et à l'événement `auto_backup.remote_purge`, en
+# complément d'ATTR_DESTINATION, ATTR_DESTINATION_NAME, ATTR_REMOTE_ID,
+# ATTR_SIZE, ATTR_SLUG et ATTR_NAME ci-dessus.
+ATTR_CREATED_AT = "created_at"
+ATTR_REMOTE_IDS = "remote_ids"
