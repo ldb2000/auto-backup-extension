@@ -61,7 +61,9 @@ OPERATIONS_ATTENDUES = {
 PROPRIETES_ATTENDUES = {"destination_id", "provider", "name"}
 
 # Dossiers distants refusés : traversée, chemin absolu, séparateur Windows,
-# segment vide, espace de bordure, caractère de contrôle ou non imprimable.
+# segment vide, espace de bordure, caractère de contrôle ou non imprimable,
+# confusable Unicode dont la forme NFKC est une traversée, caractère hors liste
+# blanche, et longueur excessive (au total ou par segment).
 DOSSIERS_REFUSES = [
     "..",
     ".",
@@ -86,17 +88,36 @@ DOSSIERS_REFUSES = [
     "Sauvegardes\n",
     "Sauvegardes\x00HA",
     "Sauvegardes\u202eHA",
+    # Confusables Unicode : leur forme NFKC vaut « .. », « a/../b » et « a/.. ».
+    "\uff0e\uff0e",
+    "a\uff0f..\uff0fb",
+    "a/\u2025",
+    # Espace sans chasse (U+200B), invisible dans un formulaire.
+    "a\u200bb",
+    # Caractères hors liste blanche.
+    "Sauvegardes*",
+    "Sauvegardes/HA?",
+    # Longueurs : plus de 255 caractères au total, plus de 100 par segment.
+    "S" * 256,
+    "S" * 101,
 ]
 
-# Dossiers distants acceptés : chemins relatifs POSIX, accents compris.
+# Dossiers distants acceptés : chemins relatifs POSIX, accents compris, sous la
+# forme (entrée, valeur normalisée attendue en sortie).
 DOSSIERS_ACCEPTES = [
-    "Sauvegardes",
-    "Sauvegardes/HA",
-    DEFAULT_DESTINATION_FOLDER,
-    "Home Assistant/2026-09",
-    "a.b/c_d-e",
-    "Sauvegardes/mes..archives",
-    "Sauvegardes/Été",
+    ("Sauvegardes", "Sauvegardes"),
+    ("Sauvegardes/HA", "Sauvegardes/HA"),
+    (DEFAULT_DESTINATION_FOLDER, DEFAULT_DESTINATION_FOLDER),
+    ("Home Assistant/2026-09", "Home Assistant/2026-09"),
+    ("a.b/c_d-e", "a.b/c_d-e"),
+    ("Sauvegardes (2026)", "Sauvegardes (2026)"),
+    ("Sauvegardes/mes..archives", "Sauvegardes/mes..archives"),
+    ("Sauvegardes/Été", "Sauvegardes/Été"),
+    # Les bornes de longueur sont inclusives : 100 caractères par segment.
+    ("S" * 100 + "/" + "S" * 100, "S" * 100 + "/" + "S" * 100),
+    # Normalisation NFKC : la valeur renvoyée est la forme normalisée, qui est
+    # aussi celle que les règles ont vérifiée.
+    ("Sauvegardes/\uff28", "Sauvegardes/H"),
 ]
 
 
@@ -249,15 +270,19 @@ def test_le_dossier_refuse_la_traversee_et_les_chemins_absolus(dossier: str) -> 
         )
 
 
-@pytest.mark.parametrize("dossier", DOSSIERS_ACCEPTES)
-def test_le_dossier_accepte_un_chemin_relatif_posix(dossier: str) -> None:
-    """Un chemin relatif POSIX est accepté et conservé tel quel.
+@pytest.mark.parametrize(("dossier", "attendu"), DOSSIERS_ACCEPTES)
+def test_le_dossier_accepte_un_chemin_relatif_posix(dossier: str, attendu: str) -> None:
+    """Un chemin relatif POSIX est accepté et renvoyé sous sa forme NFKC.
 
     Couvre les trois points d'entrée, comme le test symétrique sur les
     dossiers refusés : le schéma voluptuous appelé seul (tel qu'utilisé pour
     relire les options de l'entrée), `from_dict()` et la construction directe
-    de la dataclass doivent tous renvoyer le dossier normalisé à l'identique,
-    sans qu'aucun n'altère silencieusement une valeur pourtant acceptée.
+    de la dataclass doivent tous renvoyer la même valeur normalisée, sans
+    qu'aucun n'altère autrement une valeur pourtant acceptée.
+
+    La sortie attendue est comparée à la forme NFKC et non à l'entrée brute :
+    c'est cette forme qui a été validée, et c'est elle qui sera persistée puis
+    transmise au fournisseur.
     """
     valide = DESTINATION_SCHEMA(config_factice(folder=dossier))
     depuis_dict = DestinationConfig.from_dict(config_factice(folder=dossier))
@@ -268,9 +293,9 @@ def test_le_dossier_accepte_un_chemin_relatif_posix(dossier: str) -> None:
         folder=dossier,
     )
 
-    assert valide[CONF_FOLDER] == dossier
-    assert depuis_dict.folder == dossier
-    assert direct.folder == dossier
+    assert valide[CONF_FOLDER] == attendu
+    assert depuis_dict.folder == attendu
+    assert direct.folder == attendu
 
 
 @pytest.mark.parametrize("donnees", ["pas-un-dictionnaire", 12, ["a", "b"]])

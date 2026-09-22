@@ -68,10 +68,13 @@ class DestinationConfig:
     destination instanciée ne voit pas sa configuration changer sous ses pieds :
     une modification passe par un rechargement des destinations.
 
-    `folder` est un chemin relatif POSIX (`Sauvegardes/HA`) : la traversée de
-    répertoires, les chemins absolus, les séparateurs Windows, les segments
-    vides, les espaces de bordure et les caractères de contrôle sont refusés,
-    car les fournisseurs le reprennent tel quel pour bâtir un chemin distant.
+    `folder` est un chemin relatif POSIX (`Sauvegardes/HA`), normalisé en NFKC
+    puis restreint à une liste blanche de caractères et borné en longueur : la
+    traversée de répertoires, les chemins absolus, les séparateurs Windows, les
+    segments vides, les espaces de bordure, les caractères de contrôle et les
+    confusables Unicode sont refusés, car les fournisseurs le reprennent tel
+    quel pour bâtir un chemin distant. La règle unique vit dans
+    `chemin_de_dossier()`.
     """
 
     destination_id: str
