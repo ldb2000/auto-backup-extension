@@ -114,6 +114,15 @@ backup:
       default: true
       selector:
         boolean:
+    upload_to: &upload_to
+      name: Upload to
+      description: Remote destinations (name or id) to upload the backup to after creation.
+      example: "[Dropbox]"
+      selector:
+        select:
+          multiple: true
+          custom_value: true
+          options: [ ]
 
 backup_full:
   name: Backup Full
@@ -134,6 +143,7 @@ backup_full:
     location: *location
     download_path: *download_path
     compressed: *compressed
+    upload_to: *upload_to
 
 backup_partial:
   name: Backup Partial
@@ -173,6 +183,7 @@ backup_partial:
     location: *location
     download_path: *download_path
     compressed: *compressed
+    upload_to: *upload_to
 
 purge:
   name: Purge

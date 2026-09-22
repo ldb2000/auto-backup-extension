@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from unittest.mock import patch
 
@@ -874,6 +874,15 @@ async def test_le_cycle_de_vie_des_sauvegardes_reste_a_implementer(
 
     with pytest.raises(NotImplementedError, match="#11"):
         await destination.async_upload("/backup/ha.tar", name="ha")
+
+    async def flux() -> AsyncIterator[bytes]:
+        yield b""
+
+    # Forme d'appel du coordinateur de téléversement (issue #8).
+    with pytest.raises(NotImplementedError, match="#11"):
+        await destination.async_upload(
+            None, name="ha", slug="abc", stream=flux(), size=0, filename="ha.tar"
+        )
     with pytest.raises(NotImplementedError, match="#12"):
         await destination.async_list_backups()
     with pytest.raises(NotImplementedError, match="#12"):

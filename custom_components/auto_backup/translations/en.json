@@ -43,7 +43,8 @@
             "nom_deja_utilise": "A destination already uses this name.",
             "dossier_invalide": "The folder must be a relative path made of letters, digits, spaces and “- _ . ( )”, with levels separated by “/” — for example “Backups/Home Assistant”.",
             "destination_invalide": "The destination could not be created with these values.",
-            "aucune_selection": "Select at least one destination."
+            "aucune_selection": "Select at least one destination.",
+            "delai_invalide": "The timeout must be a whole number of seconds, greater than zero."
         },
         "step": {
             "menu": {
@@ -53,6 +54,7 @@
                     "ajouter_destination": "Add a destination",
                     "reautoriser_destination": "Re-authorise a destination",
                     "supprimer_destination": "Remove a destination",
+                    "reglages_televersement": "Upload settings",
                     "init": "Backup settings"
                 }
             },
@@ -97,6 +99,13 @@
                 "description": "The configuration and authorisation of the chosen destinations will be erased. Backups already uploaded to the provider are not deleted.",
                 "data": {
                     "destinations": "Destinations to remove"
+                }
+            },
+            "reglages_televersement": {
+                "title": "Upload settings",
+                "description": "Maximum time allowed to send a backup to a remote destination. Past that, the upload is aborted and reported through the “auto_backup.upload_failed” event; the local backup itself is left untouched. Allow plenty of time for a large backup or a slow connection.",
+                "data": {
+                    "upload_timeout": "Upload timeout (seconds)"
                 }
             },
             "init": {

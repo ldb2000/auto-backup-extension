@@ -21,8 +21,10 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
 capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-**Actuellement disponible : connexion des comptes cloud.** Le téléversement et la rétention
-distante arrivent dans les versions suivantes.
+**Actuellement disponible : connexion des comptes cloud et mécanique de téléversement.**
+L'option `upload_to` des services de sauvegarde envoie la sauvegarde créée vers les destinations
+configurées (voir « Téléversement des sauvegardes » ci-dessous) ; l'envoi effectif chez chaque
+fournisseur et la rétention distante arrivent dans les versions suivantes.
 
 - **Dropbox** : la **connexion du compte est disponible** — voir le guide
   [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; le téléversement et la purge
@@ -35,8 +37,9 @@ La configuration des destinations se fait depuis l'interface de Home Assistant, 
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
 
 Les options de l'intégration s'ouvrent sur un menu : **Ajouter une destination**,
-**Ré-autoriser une destination**, **Supprimer une destination**, et les **réglages des
-sauvegardes** d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
+**Ré-autoriser une destination**, **Supprimer une destination**, **Réglages du téléversement**
+(délai maximum accordé à l'envoi d'une sauvegarde, 1800 secondes par défaut), et les **réglages
+des sauvegardes** d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
 d'une application OAuth2 créée par vos soins chez le fournisseur, dans laquelle vous déclarez
 l'URL de redirection affichée par le formulaire — de la forme
 `https://votre-instance/auth/auto_backup/callback`. 
@@ -50,6 +53,36 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
 
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
+
+### Téléversement des sauvegardes
+
+Une sauvegarde créée par les services `auto_backup.backup`, `backup_full` ou `backup_partial` peut
+être téléversée automatiquement vers une ou plusieurs destinations configurées, en ajoutant
+l'option `upload_to` à l'appel de service :
+
+```yaml
+service: auto_backup.backup
+data:
+  upload_to:
+    - destination-dropbox-perso
+    - nom-autre-destination
+```
+
+L'option `upload_to` accepte une liste d'identifiants ou de noms de destinations. La sauvegarde
+est créée localement en premier, puis envoyée en tâche de fond, destination après destination.
+Un échec de téléversement n'empêche pas les autres destinations d'être traitées et ne supprime
+jamais la sauvegarde locale.
+
+Le **délai maximum d'un téléversement** est configurable par l'entrée « Réglages du
+téléversement » du menu d'options de l'intégration (délai par défaut : 1800 secondes, soit
+30 minutes). Cette valeur se relit à chaque envoi et s'applique donc sans redémarrage.
+
+**Événements** : trois événements sont émis pendant le téléversement :
+- `auto_backup.upload_start` : le téléversement vers une destination commence ;
+- `auto_backup.upload_successful` : le téléversement a réussi (champs : `name`, `slug`,
+  `destination`, `destination_name`, `size`, `remote_id`) ;
+- `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
+  `destination`, `destination_name`, `error`).
 
 ## Développement
 

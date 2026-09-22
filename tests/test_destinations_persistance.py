@@ -18,9 +18,11 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.auto_backup.const import (
+    CLES_DU_FORK,
     CONF_AUTO_PURGE,
     CONF_BACKUP_TIMEOUT,
     CONF_DESTINATIONS,
+    CONF_UPLOAD_TIMEOUT,
     DATA_DESTINATIONS,
     DEFAULT_BACKUP_TIMEOUT,
     DOMAIN,
@@ -30,7 +32,7 @@ from custom_components.auto_backup.destinations import (
     DestinationConfigError,
     DestinationManager,
     async_persist_destinations,
-    preserve_destinations,
+    preserve_fork_options,
 )
 from destinations_factices import PROVIDER_FACTICE, config_factice
 
@@ -198,9 +200,27 @@ async def test_le_flux_d_options_conserve_les_destinations(
     ]
 
 
-def test_le_report_des_destinations_est_neutre_sans_destination() -> None:
-    """Sans destination configurée, les options soumises ne sont pas modifiées."""
-    assert preserve_destinations({}, {CONF_AUTO_PURGE: True}) == {CONF_AUTO_PURGE: True}
+def test_le_report_des_options_du_fork_est_neutre_sans_option_du_fork() -> None:
+    """Sans option du fork configurée, les options soumises ne sont pas modifiées."""
+    assert preserve_fork_options({}, {CONF_AUTO_PURGE: True}) == {CONF_AUTO_PURGE: True}
+
+
+def test_le_report_couvre_toutes_les_options_du_fork() -> None:
+    """Chaque clé de `CLES_DU_FORK` est reportée, et aucune n'est inventée.
+
+    Le test part de la liste elle-même : une option ajoutée par une issue
+    suivante est donc couverte sans qu'il faille revenir ici, et elle échouera
+    tant qu'elle n'est pas reportée.
+    """
+    assert set(CLES_DU_FORK) == {CONF_DESTINATIONS, CONF_UPLOAD_TIMEOUT}
+
+    existantes = {cle: f"valeur de {cle}" for cle in CLES_DU_FORK}
+    reportees = preserve_fork_options(
+        {**existantes, "cle_upstream": "remplacée par le formulaire"},
+        {CONF_AUTO_PURGE: True},
+    )
+
+    assert reportees == {CONF_AUTO_PURGE: True, **existantes}
 
 
 async def test_les_destinations_disparaissent_au_dechargement(

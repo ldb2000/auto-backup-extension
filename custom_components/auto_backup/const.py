@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from .manager import AutoBackup
     from .destinations import DestinationManager
     from .destinations.oauth import EtatOAuth
+    from .destinations.upload import CoordinateurTeleversement
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -80,6 +81,36 @@ EVENT_UPLOAD_START = f"{DOMAIN}.upload_start"
 EVENT_UPLOAD_SUCCESSFUL = f"{DOMAIN}.upload_successful"
 EVENT_UPLOAD_FAILED = f"{DOMAIN}.upload_failed"
 EVENT_REMOTE_PURGE = f"{DOMAIN}.remote_purge"
+
+### TÉLÉVERSEMENT APRÈS CRÉATION (issue #8) ###
+# Coordinateur qui corrèle un appel de service avec la sauvegarde créée, puis
+# téléverse celle-ci en tâche de fond (cf. `destinations/upload.py`).
+DATA_UPLOADS: HassKey[CoordinateurTeleversement] = HassKey(f"{DOMAIN}_uploads")
+
+# Option des services `backup`, `backup_full` et `backup_partial` : la ou les
+# destinations distantes vers lesquelles envoyer la sauvegarde créée.
+ATTR_UPLOAD_TO = "upload_to"
+
+# Champs des événements `auto_backup.upload_*`, en complément d'ATTR_NAME,
+# ATTR_SLUG et ATTR_ERROR ci-dessus.
+ATTR_DESTINATION = "destination"
+ATTR_DESTINATION_NAME = "destination_name"
+ATTR_SIZE = "size"
+ATTR_REMOTE_ID = "remote_id"
+
+# Délai maximum d'un téléversement, en secondes. Lu dans `entry.options`, où il
+# est réglé par l'étape « Réglages du téléversement » du flux d'options du fork
+# (cf. `destinations/flow.py` et docs/UPSTREAM.md).
+CONF_UPLOAD_TIMEOUT = "upload_timeout"
+DEFAULT_UPLOAD_TIMEOUT = 1800
+
+# Options portées par le fork, et elles seules. Le flux d'options upstream
+# remplace l'intégralité des options par le contenu de son formulaire, qui
+# ignore ces clés : elles doivent lui être reportées à chaque enregistrement,
+# sans quoi elles seraient effacées en silence (cf.
+# `destinations/config_entry.py`, `preserve_fork_options()`). Toute option
+# ajoutée par le fork doit donc être inscrite ici.
+CLES_DU_FORK = (CONF_DESTINATIONS, CONF_UPLOAD_TIMEOUT)
 
 ### AUTORISATION OAUTH2 DES DESTINATIONS (issue #7) ###
 # Ajouts du fork (cf. docs/UPSTREAM.md) : flux d'autorisation OAuth2 conduit depuis

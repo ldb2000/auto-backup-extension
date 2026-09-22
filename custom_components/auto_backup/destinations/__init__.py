@@ -24,7 +24,8 @@ from .config_entry import (
     async_setup_destinations,
     jeton_persiste,
     options_avec_destinations,
-    preserve_destinations,
+    options_avec_reglage,
+    preserve_fork_options,
 )
 from .destination import RemoteDestination
 from .errors import (
@@ -106,7 +107,8 @@ __all__ = [
     "list_providers",
     "normaliser_le_jeton",
     "options_avec_destinations",
-    "preserve_destinations",
+    "options_avec_reglage",
+    "preserve_fork_options",
     "provider",
     "provider_label",
     "reauthentification_requise",
