@@ -31,7 +31,13 @@ package = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-p no:cacheprovider"
+# La couverture de `custom_components/auto_backup` est mesurée et affichée à chaque
+# exécution (critère d'acceptation de l'issue #4) ; `-p no:cacheprovider` évite
+# d'écrire un cache pytest dans le dépôt.
+addopts = "-p no:cacheprovider --cov=custom_components/auto_backup --cov-report=term-missing"
+markers = [
+    "network: test nécessitant un accès réseau (GitHub via le CLI `gh`) ; ignoré sauf si `--tests-reseau` est passé.",
+]
 
 [tool.ruff]
 target-version = "py314"

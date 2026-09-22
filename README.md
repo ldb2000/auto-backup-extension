@@ -52,6 +52,11 @@ de Home Assistant annoncée aux utilisateurs de l'intégration reste **2025.1.0*
 Le répertoire `custom_components/auto_backup/` est exclu du reformatage `ruff` pour rester
 identique à l'upstream (voir [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
 
+`uv run pytest` démarre l'intégration dans une instance Home Assistant de test et affiche la
+couverture de `custom_components/auto_backup`. Les fixtures disponibles, la structure des
+tests et les tests réseau (`--tests-reseau`) sont décrits dans
+[`docs/tests.md`](docs/tests.md).
+
 ## Travailler avec l'équipe d'agents
 
 Ce projet est piloté par des issues GitHub traitées par des agents Claude Code (voir `docs/guide-agents.md` et `CLAUDE.md`).
