@@ -41,6 +41,15 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 
 ### Modifié
 
+- `README.md` : la section sur l'ajout d'une destination précise désormais que l'URL externe
+  doit être HTTPS et publiquement accessible (pas locale `.local` ni adresse IP nue),
+  et que certains fournisseurs comme Google Drive refusent les URI non publiques. Refs #7
+- `docs/adr/0001-destinations-distantes.md` : la section « Points ouverts pour les issues
+  suivantes » s'enrichit de remarques du métier pour les issues #8, #10, #13, #17, #18 et #19 :
+  procédure de déclaration d'URI de redirection chez les fournisseurs, prérequis d'URL externe
+  publique (notamment pour Google Drive), libellés utilisateur du sélecteur de fournisseur,
+  stabilité des références lors du rafraîchissement, cohérence de la ré-authentification. Refs #7
+- `docs/README.md` : ajout de `ci.md` à l'index de documentation. Refs #7
 - Le script ad hoc `tests/check_issue_2.py` est remplacé par `tests/test_conformite_upstream.py` : les contrôles hors ligne sont exécutés par `pytest`, la comparaison avec le dépôt upstream est marquée `network` et ne s'exécute qu'avec `uv run pytest --tests-reseau`. Refs #4
 - Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
 - `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6

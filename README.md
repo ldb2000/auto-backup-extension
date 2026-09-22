@@ -32,9 +32,14 @@ Les options de l'intégration s'ouvrent sur un menu : **Ajouter une destination*
 sauvegardes** d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
 d'une application OAuth2 créée par vos soins chez le fournisseur, dans laquelle vous déclarez
 l'URL de redirection affichée par le formulaire — de la forme
-`https://votre-instance/auth/auto_backup/callback`. Votre instance doit donc avoir une URL
-externe configurée (Paramètres > Système > Réseau) pour que le fournisseur puisse vous y
-ramener.
+`https://votre-instance/auth/auto_backup/callback`. 
+
+Votre instance doit donc avoir une **URL externe configurée** (Paramètres > Système > Réseau)
+pour que le fournisseur puisse vous y ramener. Cette URL doit être :
+- **HTTPS** (pas HTTP) : requis par les fournisseurs pour des raisons de sécurité ;
+- **publiquement accessible** : elle ne peut pas être locale (`.local`) ou basée sur une adresse
+  IP nue (par exemple, `192.168.1.10`). Certains fournisseurs comme Google Drive refusent les
+  URI locales ou privées.
 
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.

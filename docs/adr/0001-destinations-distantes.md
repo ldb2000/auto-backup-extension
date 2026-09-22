@@ -325,6 +325,32 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   distante). Ils sont définis ici pour laisser le schéma de constantes stable et lisible, et
   pour que les issues suivantes n'aient qu'à les émettre sans les déclarer.
 
+- **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
+  doit être déclarée chez le fournisseur. **À traiter en #10 (Dropbox) et #13 (Google Drive)** :
+  chaque fournisseur doit livrer une procédure pas à pas claire pour cette déclaration. Google
+  Drive refuse les URI non HTTPS et non publiques (`.local`, adresse IP nue), ce qui signifie
+  qu'une instance sans URL externe publique ne pourra pas connecter Google Drive. La doc utilisateur
+  (#19) devra expliciter ce prérequis au moment de la découverte du fournisseur.
+
+- **Libellés de fournisseur** : le sélecteur affiche actuellement l'identifiant technique
+  (`dropbox`, `google_drive`) comme libellé utilisateur. **À remédier au plus tard en #18**
+  (interface de gestion des destinations) : il faut afficher des libellés lisibles
+  (« Dropbox », « Google Drive »).
+
+- **Stabilité des références lors du rafraîchissement du jeton** : un rafraîchissement de jeton
+  réécrit les options de l'entrée et recrée les instances de destination du gestionnaire, ce qui
+  invalide toute référence antérieure. **À traiter en #8** (téléversement) : conserver la référence
+  obtenue au début d'une opération (vers le gestionnaire, vers une destination), plutôt que de
+  la demander à nouveau, pour garantir que le reste de l'opération utilise les données stables
+  de son début.
+
+- **Cohérence de la ré-authentification** : un problème Home Assistant (repair issue) est créé
+  pour une destination en attente de ré-autorisation, mais il n'est pas réparable automatiquement.
+  **À traiter en #17** (notifications et ré-authentification) : si une notification persistante
+  est ajoutée pour les destinations en défaut d'accès, elle ne doit pas doubler le problème
+  Home Assistant — la faire disparaître en même temps que le problème, une fois la destination
+  ré-autorisée ou supprimée.
+
 ## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
