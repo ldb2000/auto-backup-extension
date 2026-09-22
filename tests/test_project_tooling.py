@@ -27,6 +27,10 @@ PAQUETS_DEV_ATTENDUS = {
     "ruff",
 }
 
+# Plancher minimal exigé par l'issue #3 : `requires-python >= 3.13`. Le projet peut
+# viser plus haut (Home Assistant >= 2026.3 exige Python >= 3.14.2) sans casser ce test.
+PLANCHER_PYTHON_MINIMAL = (3, 13)
+
 ENTREES_GITIGNORE_ATTENDUES = {
     ".venv/",
     "__pycache__/",
@@ -47,6 +51,20 @@ def _pyproject() -> dict:
     return tomllib.loads(contenu.decode("utf-8"))
 
 
+def _plancher_requires_python(requires_python: str) -> tuple[int, ...]:
+    """Renvoie le plancher `>=X.Y[.Z]` de `requires-python` sous forme de tuple.
+
+    Le contrôle est sémantique (comparaison de tuples) et non textuel : monter la
+    cible Python du projet (3.13 -> 3.14, etc.) ne doit pas casser ce test, seule
+    une régression sous le plancher minimal soutenu doit le faire échouer.
+    """
+    correspondance = re.search(r">=\s*(\d+(?:\.\d+)*)", requires_python)
+    assert correspondance, (
+        f"requires-python doit déclarer un plancher '>=X.Y', trouvé {requires_python!r}"
+    )
+    return tuple(int(partie) for partie in correspondance.group(1).split("."))
+
+
 def test_pyproject_est_parsable_avec_tomllib() -> None:
     """`pyproject.toml` est un TOML valide et déclare un nom de projet."""
     donnees = _pyproject()
@@ -54,10 +72,17 @@ def test_pyproject_est_parsable_avec_tomllib() -> None:
 
 
 def test_requires_python_vise_au_moins_3_13() -> None:
-    donnees = _pyproject()
-    requires_python = donnees["project"]["requires-python"]
-    assert requires_python.startswith(">=3.13"), (
-        f"requires-python doit commencer par '>=3.13', trouvé {requires_python!r}"
+    """Le plancher `requires-python` ne descend pas sous Python 3.13.
+
+    Critère d'acceptation de l'issue #3 : `requires-python >= 3.13`. Le projet
+    cible aujourd'hui une version plus récente (cf. `.python-version`), ce que ce
+    test autorise explicitement.
+    """
+    requires_python = _pyproject()["project"]["requires-python"]
+    plancher = _plancher_requires_python(requires_python)
+    minimal = ".".join(str(partie) for partie in PLANCHER_PYTHON_MINIMAL)
+    assert plancher >= PLANCHER_PYTHON_MINIMAL, (
+        f"requires-python doit valoir au moins >={minimal}, trouvé {requires_python!r}"
     )
 
 

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import py_compile
+import re
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -27,9 +29,32 @@ def _json_files() -> list[Path]:
     return sorted(INTEGRATION_DIR.rglob("*.json"))
 
 
+def _plancher_requires_python() -> tuple[int, ...]:
+    """Plancher `>=X.Y[.Z]` déclaré par `requires-python` dans `pyproject.toml`.
+
+    Le plancher est lu dans `pyproject.toml` plutôt que recopié ici : monter la
+    cible Python du projet ne demande qu'une seule modification, et ce test
+    contrôle bien ce qu'il annonce, à savoir la cohérence entre l'interpréteur
+    courant et la version déclarée.
+    """
+    pyproject = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_bytes().decode("utf-8")
+    )
+    requires_python = pyproject["project"]["requires-python"]
+    correspondance = re.search(r">=\s*(\d+(?:\.\d+)*)", requires_python)
+    assert correspondance, (
+        f"requires-python doit déclarer un plancher '>=X.Y', trouvé {requires_python!r}"
+    )
+    return tuple(int(partie) for partie in correspondance.group(1).split("."))
+
+
 def test_python_supporte_la_version_minimale() -> None:
     """L'environnement d'exécution respecte le `requires-python` du projet."""
-    assert sys.version_info >= (3, 13, 2)
+    plancher = _plancher_requires_python()
+    assert sys.version_info[: len(plancher)] >= plancher, (
+        f"interpréteur {sys.version.split()[0]} sous le plancher déclaré "
+        f">={'.'.join(map(str, plancher))}"
+    )
 
 
 def test_l_integration_est_presente() -> None:
