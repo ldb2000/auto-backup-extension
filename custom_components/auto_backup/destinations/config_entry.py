@@ -15,6 +15,7 @@ from homeassistant.const import CONF_TOKEN
 from homeassistant.core import HomeAssistant, callback
 
 from ..const import (
+    CLES_DU_FORK,
     CONF_AUTO_PURGE,
     CONF_BACKUP_TIMEOUT,
     CONF_DESTINATION_ID,
@@ -185,15 +186,34 @@ def async_persist_token(
 
 
 @callback
-def preserve_destinations(
+def preserve_fork_options(
     options: Mapping[str, Any], user_input: dict[str, Any]
 ) -> dict[str, Any]:
-    """Réinjecte les destinations dans les options soumises par le flux d'options.
+    """Réinjecte les options du fork dans celles soumises par le flux d'options.
 
     Le flux d'options upstream remplace l'intégralité des options par le contenu
-    de son formulaire, qui ne connaît pas les destinations : sans ce report, les
-    destinations configurées seraient perdues au premier enregistrement.
+    de son formulaire, qui ne connaît aucune des options du fork : sans ce
+    report, les destinations configurées et le délai de téléversement seraient
+    perdus au premier enregistrement des réglages de sauvegarde.
+
+    Le report porte sur **toutes** les clés de `CLES_DU_FORK`, et sur elles
+    seules : une option ajoutée par une issue suivante est donc protégée du seul
+    fait d'y être inscrite, sans nouvelle modification ici ni dans
+    `config_flow.py`. Les clés absentes des options ne sont pas inventées.
     """
-    if CONF_DESTINATIONS not in options:
-        return dict(user_input)
-    return {**user_input, CONF_DESTINATIONS: options[CONF_DESTINATIONS]}
+    return {
+        **user_input,
+        **{cle: options[cle] for cle in CLES_DU_FORK if cle in options},
+    }
+
+
+@callback
+def options_avec_reglage(entry: ConfigEntry, cle: str, valeur: Any) -> dict[str, Any]:
+    """Options de l'entrée, une option du fork (`CLES_DU_FORK`) mise à jour.
+
+    Comme `options_avec_destinations()`, rien n'est écrit ici : le flux
+    d'options a besoin du dictionnaire pour le renvoyer à Home Assistant. Les
+    options upstream manquantes sont complétées, sans quoi l'écouteur de mise à
+    jour upstream lèverait sur une entrée qui n'a jamais visité son formulaire.
+    """
+    return {**_options_completees(entry), cle: valeur}
