@@ -38,8 +38,23 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Unicité du nom d'une destination vérifiée à la saisie, et message d'erreur explicite sur le dossier distant (deux points laissés ouverts par l'issue #6). Refs #7
 - Traductions françaises et anglaises des nouvelles étapes, erreurs, abandons et du problème de ré-autorisation (`translations/fr.json`, `translations/en.json`), clés upstream conservées. Refs #7
 - Fournisseur factice OAuth2 pour les tests (`DestinationOAuthEnMemoire`, fixtures `fournisseur_oauth_factice` et `ouvrir_les_options`) et couverture du parcours complet avec un mock HTTP : ajout, retour d'autorisation simulé puis réel, rafraîchissement, ré-authentification, suppression. Refs #7
+- Fournisseur **Dropbox** (`destinations/providers/dropbox.py`) : le flux d'ajout propose « Dropbox », demande la clé et le secret de l'application créée par l'utilisateur, puis le redirige vers `https://www.dropbox.com/oauth2/authorize`. Refs #10
+- Demande d'autorisation Dropbox en accès hors-ligne (`token_access_type=offline`, jeton de rafraîchissement) et limitée à trois portées : `account_info.read`, `files.metadata.read`, `files.content.write` — chacune justifiée dans l'ADR et dans la documentation utilisateur. Refs #10
+- Identification du compte Dropbox après l'autorisation (`users/get_current_account`) : le nom affiché est proposé comme nom de destination (« Dropbox – Jeanne Dupont ») et l'identifiant de compte est conservé avec la destination. Refs #10
+- Ré-autorisation sans perte : seuls les identifiants d'application et le jeton sont remplacés (`dataclasses.replace`), les données du compte (`provider_data`) et le reste de la configuration de la destination sont conservés. Refs #10
+- Destination provisoire du flux d'ajout cloisonnée : son identifiant ne peut être attribué à aucune destination réelle, et un refus d'accès survenu pendant l'autorisation n'invite plus, dans les journaux, à ré-autoriser une destination qui n'existe pas. Refs #10
+- Sous-paquet `destinations/providers/` et point unique d'enregistrement des fournisseurs livrés (`enregistrer_les_fournisseurs()`, appelé par `async_setup_destinations()`) : ajouter un fournisseur ne touche aucun module upstream. Refs #10
+- Libellé lisible d'un fournisseur (`RemoteDestination.LABEL`, `provider_label()`) utilisé par le sélecteur du flux d'options — point laissé ouvert par l'issue #7. Refs #10
+- Crochets facultatifs `async_nom_par_defaut()` et `async_donnees_du_fournisseur()` sur `RemoteDestination`, et champ `provider_data` sur `DestinationConfig` (scalaires JSON, masqués dans les journaux comme le jeton). Refs #10
+- Message dédié au refus d'autorisation (`options.abort.autorisation_annulee`, fr et en) : `access_denied` n'est plus affiché brut, et le flux reste relançable sans redémarrer Home Assistant. Refs #10
+- Documentation utilisateur `docs/destinations/dropbox.md` : création de l'application sur la console développeur, type d'accès « App folder » recommandé et sa conséquence sur le dossier distant, portées à cocher, URI de redirection `https://<instance>/auth/auto_backup/callback`, relevé de la clé et du secret, dépannage et limites. Refs #10
+- Tests du fournisseur Dropbox (`tests/test_provider_dropbox.py`, mock HTTP, aucune valeur réelle) : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, parcours complet, nom par défaut, identifiants refusés puis flux relancé, autorisation refusée, rafraîchissement du jeton, accès révoqué, vérification d'accès, erreurs HTTP et absence de secret dans les journaux en niveau `debug`. Refs #10
 
 ### Modifié
+
+- `custom_components/auto_backup/const.py` : ajout de `IDENTIFIANT_PROVISOIRE` dans le bloc d'autorisation OAuth2 (partagé par le flux d'ajout et le signalement de ré-authentification) et de `CONF_PROVIDER_DATA` à la fin du bloc du fork. Refs #10
+- `docs/adr/0001-destinations-distantes.md` : nouvelle section « Fournisseur Dropbox » (absence de SDK, justification de chaque portée, « App folder » recommandé, crochets ajoutés au socle, correspondance entre codes HTTP Dropbox et erreurs typées) ; les points ouverts « URI de redirection » et « Libellés de fournisseur » sont marqués traités. Refs #10
+- `docs/README.md`, `docs/tests.md` et `README.md` : index de la documentation des destinations, section « Tester un fournisseur réel » et renvoi vers la page Dropbox. Refs #10
 
 - `README.md` : la section sur l'ajout d'une destination précise désormais que l'URL externe
   doit être HTTPS et publiquement accessible (pas locale `.local` ni adresse IP nue),

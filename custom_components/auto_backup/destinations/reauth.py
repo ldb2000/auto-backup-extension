@@ -26,7 +26,12 @@ import logging
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 
-from ..const import DATA_DESTINATIONS, DOMAIN, ISSUE_REAUTH_PREFIX
+from ..const import (
+    DATA_DESTINATIONS,
+    DOMAIN,
+    IDENTIFIANT_PROVISOIRE,
+    ISSUE_REAUTH_PREFIX,
+)
 from .models import DestinationConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,17 +51,32 @@ def identifiant_du_probleme(destination_id: str) -> str:
 def async_signaler_la_reauthentification(
     hass: HomeAssistant, config: DestinationConfig
 ) -> None:
-    """Marque la destination à ré-autoriser et crée le problème correspondant."""
+    """Marque la destination à ré-autoriser et crée le problème correspondant.
+
+    La destination fictive du flux d'ajout (`IDENTIFIANT_PROVISOIRE`) est le seul
+    cas où le refus n'est pas journalisé en avertissement : l'utilisateur est en
+    train d'autoriser, et le flux efface le signalement dans la foulée.
+    """
     gestionnaire = hass.data.get(DATA_DESTINATIONS)
     if gestionnaire is not None:
         gestionnaire.async_marquer_la_reauthentification(config.destination_id)
 
-    _LOGGER.warning(
-        "La destination « %s » (%s) doit être ré-autorisée : le fournisseur a "
-        "refusé de renouveler l'accès",
-        config.name,
-        config.provider,
-    )
+    if config.destination_id == IDENTIFIANT_PROVISOIRE:
+        # Destination fictive du flux d'ajout : l'utilisateur est justement en
+        # train d'autoriser, il n'a rien à ré-autoriser. Alerter le nommerait
+        # « Autorisation en cours » dans les journaux, pour un signalement que le
+        # flux efface aussitôt (`_async_decrire_le_compte()`).
+        _LOGGER.debug(
+            "Le fournisseur %s a refusé l'accès pendant l'autorisation",
+            config.provider,
+        )
+    else:
+        _LOGGER.warning(
+            "La destination « %s » (%s) doit être ré-autorisée : le fournisseur a "
+            "refusé de renouveler l'accès",
+            config.name,
+            config.provider,
+        )
     ir.async_create_issue(
         hass,
         DOMAIN,

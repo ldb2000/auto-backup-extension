@@ -44,8 +44,11 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
 
-Aucun fournisseur cloud n'est encore livré : Dropbox et Google Drive viendront s'enregistrer
-dans ce même parcours.
+**Dropbox** est le premier fournisseur livré : la connexion d'un compte est opérationnelle, et
+la marche à suivre — création de l'application Dropbox, type d'accès conseillé, portées à
+cocher, URI de redirection à déclarer — est décrite dans
+[`docs/destinations/dropbox.md`](docs/destinations/dropbox.md). Le téléversement et la purge
+distante suivront ; Google Drive viendra s'enregistrer dans ce même parcours.
 
 ## Développement
 

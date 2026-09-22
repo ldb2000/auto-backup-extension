@@ -623,6 +623,70 @@ def test_les_evenements_du_fork_sont_prefixes_et_distincts() -> None:
         assert evenement.startswith("auto_backup")
 
 
+### Données du compte du fournisseur (issue #10) ###
+
+
+def test_les_donnees_du_fournisseur_sont_validees() -> None:
+    """`provider_data` n'accepte que des scalaires JSON sous des clés textuelles."""
+    config = DestinationConfig(
+        destination_id="d1",
+        provider="factice",
+        name="Destination",
+        provider_data={"account_id": "dbid:factice", "verifie": True, "quota": 2},
+    )
+
+    assert config.provider_data == {
+        "account_id": "dbid:factice",
+        "verifie": True,
+        "quota": 2,
+    }
+    assert config.as_dict()["provider_data"] == config.provider_data
+
+
+def test_des_donnees_de_fournisseur_vides_ne_sont_pas_persistees() -> None:
+    """Un fournisseur qui ne décrit pas le compte n'ajoute aucune clé creuse."""
+    config = DestinationConfig(
+        destination_id="d1", provider="factice", name="Destination", provider_data={}
+    )
+
+    assert config.provider_data is None
+    assert "provider_data" not in config.as_dict()
+
+
+@pytest.mark.parametrize(
+    "valeur",
+    [
+        "dbid:factice",
+        ["dbid:factice"],
+        {"account_id": {"imbrique": "interdit"}},
+        {"": "clé vide"},
+    ],
+)
+def test_des_donnees_de_fournisseur_aberrantes_sont_refusees(valeur: object) -> None:
+    """Ni scalaire nu, ni liste, ni structure imbriquée, ni clé vide."""
+    with pytest.raises(DestinationConfigError):
+        DestinationConfig(
+            destination_id="d1",
+            provider="factice",
+            name="Destination",
+            provider_data=valeur,
+        )
+
+
+def test_les_donnees_du_fournisseur_survivent_a_un_aller_retour() -> None:
+    """Elles sont relues telles quelles depuis les options persistées."""
+    config = DestinationConfig.from_dict(
+        {
+            "destination_id": "d1",
+            "provider": "factice",
+            "name": "Destination",
+            "provider_data": {"account_id": "dbid:factice"},
+        }
+    )
+
+    assert config.provider_data == {"account_id": "dbid:factice"}
+
+
 ### ADR ###
 
 

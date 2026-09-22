@@ -12,8 +12,13 @@ Le parcours d'ajout d'une destination OAuth2 :
 ```text
 menu -> ajouter_destination -> identifiants -> autorisation (étape externe)
      -> [navigateur de l'utilisateur, puis retour sur OAUTH_CALLBACK_PATH]
-     -> jeton -> destination -> options enregistrées
+     -> jeton -> [description du compte] -> destination -> options enregistrées
 ```
+
+La description du compte (issue #10) est facultative : le fournisseur peut
+proposer un nom par défaut (« Dropbox - Jean Dupont ») et des données à
+persister (identifiant de compte). Un fournisseur qui ne le fait pas, ou dont
+l'appel échoue, laisse simplement le formulaire de nommage vide.
 
 L'étape externe est celle de Home Assistant (`async_external_step`) ; c'est la
 vue du fork (`destinations/oauth.py`) qui reprend le flux, la vue standard ne
@@ -26,6 +31,7 @@ import asyncio
 import logging
 import secrets
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from typing import Any
 
 import voluptuous as vol
@@ -59,11 +65,12 @@ from ..const import (
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     DEFAULT_DESTINATION_FOLDER,
+    IDENTIFIANT_PROVISOIRE,
     OAUTH_AUTHORIZE_URL_TIMEOUT,
     OAUTH_TOKEN_TIMEOUT,
 )
 from .config_entry import async_destination_configs, options_avec_destinations
-from .errors import DestinationConfigError, UnknownProviderError
+from .errors import DestinationConfigError, DestinationError, UnknownProviderError
 from .models import DestinationConfig
 from .oauth import (
     DestinationOAuth2Implementation,
@@ -75,7 +82,7 @@ from .oauth import (
     url_de_retour,
 )
 from .reauth import async_effacer_la_reauthentification
-from .registry import list_providers
+from .registry import create_destination, list_providers, provider_label
 from .schema import chemin_de_dossier
 
 _LOGGER = logging.getLogger(__name__)
@@ -89,9 +96,12 @@ RETENTION_NOMBRE_MAX = 1000
 # Longueur du suffixe aléatoire ajouté à un identifiant de destination déjà pris.
 LONGUEUR_SUFFIXE_IDENTIFIANT = 4
 
-# Identifiant de la destination fictive utilisée pendant l'ajout : l'autorisation
-# précède la création, et l'implémentation OAuth2 a besoin d'un identifiant.
-IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
+# Codes d'erreur OAuth2 (RFC 6749 §4.1.2.1) auxquels le fork sait répondre par un
+# message compréhensible plutôt que par le code brut. `access_denied` est celui
+# que renvoient Dropbox (#10) comme Google Drive (#13) quand l'utilisateur ferme
+# la page d'autorisation ou refuse l'accès : le lui montrer tel quel n'apprend
+# rien. Tout autre code reste rendu par le message générique, qui le cite.
+MOTIFS_DE_REFUS = {"access_denied": "autorisation_annulee"}
 
 
 def _retention(user_input: Mapping[str, Any], cle: str) -> int | None:
@@ -116,8 +126,14 @@ def _identifiant_disponible(nom: str, pris: Iterable[str]) -> str:
     reconnaissable dans les journaux et dans les options. En cas de collision —
     ou de nom sans aucun caractère translittérable — un suffixe aléatoire est
     ajouté, car l'identifiant ne doit jamais changer par la suite.
+
+    `IDENTIFIANT_PROVISOIRE` est traité comme déjà pris : une destination nommée
+    « Autorisation en cours » se translittérerait sinon exactement comme la
+    destination fictive du flux d'ajout, et le nettoyage de celle-ci
+    (`_async_decrire_le_compte()`) effacerait alors le signalement de
+    ré-authentification d'une destination bien réelle.
     """
-    deja_pris = set(pris)
+    deja_pris = {*pris, IDENTIFIANT_PROVISOIRE}
     base = slugify(nom) or "destination"
     if base not in deja_pris:
         return base
@@ -148,6 +164,8 @@ class GestionDesDestinationsMixin:
     _client_secret: str | None = None
     _token: dict[str, Any] | None = None
     _donnees_externes: dict[str, Any] | None = None
+    _nom_propose: str | None = None
+    _provider_data: dict[str, Any] | None = None
 
     ### Lecture de l'existant ###
 
@@ -213,6 +231,8 @@ class GestionDesDestinationsMixin:
         if user_input is not None:
             self._destination_id = None
             self._token = None
+            self._nom_propose = None
+            self._provider_data = None
             self._provider = user_input[CONF_PROVIDER]
             try:
                 spec = spec_oauth_du_fournisseur(self._provider)
@@ -228,7 +248,10 @@ class GestionDesDestinationsMixin:
                 vol.Required(CONF_PROVIDER): SelectSelector(
                     SelectSelectorConfig(
                         options=[
-                            SelectOptionDict(value=identifiant, label=identifiant)
+                            SelectOptionDict(
+                                value=identifiant,
+                                label=provider_label(identifiant),
+                            )
                             for identifiant in fournisseurs
                         ],
                         mode=SelectSelectorMode.DROPDOWN,
@@ -282,7 +305,7 @@ class GestionDesDestinationsMixin:
             errors=erreurs,
             description_placeholders={
                 "url_de_retour": retour,
-                "fournisseur": self._provider or "",
+                "fournisseur": self._libelle_du_fournisseur(),
             },
         )
 
@@ -322,10 +345,12 @@ class GestionDesDestinationsMixin:
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Le fournisseur a refusé ou l'utilisateur a annulé l'autorisation."""
-        erreur = (self._donnees_externes or {}).get("error", "inconnue")
+        erreur = str((self._donnees_externes or {}).get("error", "inconnue"))
+        if (motif := MOTIFS_DE_REFUS.get(erreur)) is not None:
+            return self.async_abort(reason=motif)
         return self.async_abort(
             reason="autorisation_refusee",
-            description_placeholders={"erreur": str(erreur)},
+            description_placeholders={"erreur": erreur},
         )
 
     async def async_step_jeton(
@@ -364,6 +389,8 @@ class GestionDesDestinationsMixin:
 
         if self._destination_id is not None:
             return self._terminer_la_reautorisation()
+
+        await self._async_decrire_le_compte()
         return await self.async_step_destination()
 
     async def async_step_destination(
@@ -426,11 +453,15 @@ class GestionDesDestinationsMixin:
         )
         if user_input is not None:
             schema = self.add_suggested_values_to_schema(schema, user_input)
+        elif self._nom_propose:
+            schema = self.add_suggested_values_to_schema(
+                schema, {CONF_NAME: self._nom_propose}
+            )
         return self.async_show_form(
             step_id="destination",
             data_schema=schema,
             errors=erreurs,
-            description_placeholders={"fournisseur": self._provider or ""},
+            description_placeholders={"fournisseur": self._libelle_du_fournisseur()},
         )
 
     def _construire(
@@ -452,7 +483,49 @@ class GestionDesDestinationsMixin:
             client_id=self._client_id,
             client_secret=self._client_secret,
             token=self._token,
+            provider_data=self._provider_data,
         )
+
+    ### Description du compte autorisé (issue #10) ###
+
+    async def _async_decrire_le_compte(self) -> None:
+        """Demande au fournisseur un nom par défaut et les données du compte.
+
+        Les deux crochets sont facultatifs (`RemoteDestination`) : un fournisseur
+        qui ne les surcharge pas ne provoque aucun appel réseau. Un échec — compte
+        injoignable, réponse inattendue, accès déjà refusé — n'interrompt pas
+        l'ajout : l'utilisateur nomme alors sa destination lui-même, plutôt que de
+        perdre une autorisation qu'il vient d'accorder.
+        """
+        self._nom_propose = None
+        self._provider_data = None
+
+        try:
+            destination = create_destination(self.hass, self._config_provisoire())
+        except DestinationConfigError as err:
+            _LOGGER.debug("Compte du fournisseur non décrit : %s", err)
+            return
+
+        try:
+            nom = await destination.async_nom_par_defaut()
+            donnees = await destination.async_donnees_du_fournisseur()
+        except (DestinationError, ClientError, TimeoutError) as err:
+            _LOGGER.warning(
+                "Le compte du fournisseur « %s » n'a pas pu être identifié : %s",
+                self._provider,
+                err,
+            )
+            return
+        finally:
+            # Un accès refusé ici (portée oubliée, jeton déjà révoqué) signalerait
+            # la destination **provisoire** à ré-autoriser : le problème créé
+            # nommerait une destination qui n'existe pas, que l'utilisateur ne
+            # pourrait donc ni ré-autoriser ni supprimer. Il est effacé aussitôt.
+            async_effacer_la_reauthentification(self.hass, IDENTIFIANT_PROVISOIRE)
+
+        propose = nom.strip() if isinstance(nom, str) else ""
+        self._nom_propose = propose or None
+        self._provider_data = dict(donnees) if donnees else None
 
     ### Ré-autorisation d'une destination existante ###
 
@@ -496,20 +569,23 @@ class GestionDesDestinationsMixin:
         )
 
     def _terminer_la_reautorisation(self) -> ConfigFlowResult:
-        """Remplace le jeton de la destination ré-autorisée et clôt le flux."""
+        """Remplace le jeton de la destination ré-autorisée et clôt le flux.
+
+        Seuls les trois champs d'autorisation changent : la destination est
+        recopiée par `dataclasses.replace()` plutôt que reconstruite champ par
+        champ, pour que rien d'autre ne puisse être perdu en chemin. Une
+        reconstruction manuelle avait déjà effacé `provider_data` (le compte
+        rattaché à la destination), et aurait effacé de la même façon tout champ
+        ajouté plus tard à `DestinationConfig`.
+        """
         configurations = self._configurations()
         identifiant = str(self._destination_id)
         if not any(config.destination_id == identifiant for config in configurations):
             return self.async_abort(reason="destination_inconnue")
 
         mises_a_jour = [
-            DestinationConfig(
-                destination_id=config.destination_id,
-                provider=config.provider,
-                name=config.name,
-                folder=config.folder,
-                retention_days=config.retention_days,
-                retention_count=config.retention_count,
+            replace(
+                config,
                 client_id=self._client_id or config.client_id,
                 client_secret=self._client_secret or config.client_secret,
                 token=self._token,
@@ -589,6 +665,32 @@ class GestionDesDestinationsMixin:
         except UnknownProviderError:
             return False
 
+    def _libelle_du_fournisseur(self) -> str:
+        """Nom lisible du fournisseur en cours (« Dropbox »), pour l'affichage."""
+        if not self._provider:
+            return ""
+        try:
+            return provider_label(self._provider)
+        except UnknownProviderError:
+            return self._provider
+
+    def _config_provisoire(self) -> DestinationConfig:
+        """Configuration de travail de la destination en cours d'ajout.
+
+        Elle porte le jeton fraîchement obtenu mais n'est pas persistée : elle
+        permet d'instancier le fournisseur avant que l'utilisateur n'ait nommé sa
+        destination. La session OAuth2 ne trouvant aucun jeton persisté sous cet
+        identifiant, elle utilise celui-ci.
+        """
+        return DestinationConfig(
+            destination_id=IDENTIFIANT_PROVISOIRE,
+            provider=str(self._provider),
+            name="Autorisation en cours",
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            token=self._token,
+        )
+
     def _implementation(self) -> DestinationOAuth2Implementation:
         """Implémentation OAuth2 du parcours en cours.
 
@@ -600,11 +702,7 @@ class GestionDesDestinationsMixin:
         if self._destination_id is not None:
             config = self._configuration(self._destination_id)
         if config is None:
-            config = DestinationConfig(
-                destination_id=IDENTIFIANT_PROVISOIRE,
-                provider=str(self._provider),
-                name="Autorisation en cours",
-            )
+            config = self._config_provisoire()
         return implementation_de_la_destination(
             self.hass,
             config,
