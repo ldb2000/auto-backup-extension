@@ -92,7 +92,7 @@ Tous les agents lisent le `CLAUDE.md` à la racine : c'est lui qui évite que ch
 
 ## Workflow agents
 - Une issue = une branche = un worktree = une PR
-- Ne jamais pousser sur main, ne jamais merger
+- Ne jamais pousser directement sur main. Le merge d'une PR par l'orchestrateur est autorisé uniquement après CI verte et validation métier OK ; main reste protégée par les checks CI obligatoires
 - Critères d'acceptation de l'issue = définition de "fini"
 - Doute sur le besoin : commenter l'issue et passer le label `needs-human`
 ```
