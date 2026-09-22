@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
@@ -24,6 +25,7 @@ from custom_components.auto_backup.const import (
     EVENT_UPLOAD_SUCCESSFUL,
 )
 from custom_components.auto_backup.destinations import (
+    DESTINATION_SCHEMA,
     DestinationAuthError,
     DestinationConfig,
     DestinationConfigError,
@@ -56,6 +58,45 @@ OPERATIONS_ATTENDUES = {
 }
 
 PROPRIETES_ATTENDUES = {"destination_id", "provider", "name"}
+
+# Dossiers distants refusés : traversée, chemin absolu, séparateur Windows,
+# segment vide, espace de bordure, caractère de contrôle ou non imprimable.
+DOSSIERS_REFUSES = [
+    "..",
+    ".",
+    "../x",
+    "../../etc/passwd",
+    "a/../b",
+    "a/..",
+    "./a",
+    "/",
+    "/abs",
+    "/etc/passwd",
+    "C:/Sauvegardes",
+    "c:\\Sauvegardes",
+    "a\\b",
+    "\\\\serveur\\partage",
+    "a//b",
+    "a/b/",
+    " Sauvegardes",
+    "Sauvegardes ",
+    "a/ b",
+    "a/b ",
+    "Sauvegardes\n",
+    "Sauvegardes\x00HA",
+    "Sauvegardes\u202eHA",
+]
+
+# Dossiers distants acceptés : chemins relatifs POSIX, accents compris.
+DOSSIERS_ACCEPTES = [
+    "Sauvegardes",
+    "Sauvegardes/HA",
+    DEFAULT_DESTINATION_FOLDER,
+    "Home Assistant/2026-09",
+    "a.b/c_d-e",
+    "Sauvegardes/mes..archives",
+    "Sauvegardes/Été",
+]
 
 
 def _destination(hass: HomeAssistant, **surcharges) -> DestinationEnMemoire:
@@ -181,6 +222,45 @@ def test_les_champs_texte_refusent_le_vide(champ: str, valeur: object) -> None:
     """Identifiant, fournisseur, nom et dossier doivent être non vides."""
     with pytest.raises(DestinationConfigError):
         DestinationConfig.from_dict(config_factice(**{champ: valeur}))
+
+
+@pytest.mark.parametrize("dossier", DOSSIERS_REFUSES)
+def test_le_dossier_refuse_la_traversee_et_les_chemins_absolus(dossier: str) -> None:
+    """Le dossier distant ne doit pas pouvoir désigner autre chose que lui-même.
+
+    Il est repris tel quel par les fournisseurs pour bâtir le chemin distant
+    d'une sauvegarde : `folder = "../../etc/passwd"` doit être refusé par le
+    schéma comme par la dataclass, y compris construite directement en Python,
+    sans quoi un téléversement sortirait du dossier configuré.
+    """
+    with pytest.raises(vol.Invalid):
+        DESTINATION_SCHEMA(config_factice(folder=dossier))
+
+    with pytest.raises(DestinationConfigError):
+        DestinationConfig.from_dict(config_factice(folder=dossier))
+
+    with pytest.raises(DestinationConfigError):
+        DestinationConfig(
+            destination_id="d1",
+            provider=PROVIDER_FACTICE,
+            name="Destination",
+            folder=dossier,
+        )
+
+
+@pytest.mark.parametrize("dossier", DOSSIERS_ACCEPTES)
+def test_le_dossier_accepte_un_chemin_relatif_posix(dossier: str) -> None:
+    """Un chemin relatif POSIX est accepté et conservé tel quel."""
+    depuis_dict = DestinationConfig.from_dict(config_factice(folder=dossier))
+    direct = DestinationConfig(
+        destination_id="d1",
+        provider=PROVIDER_FACTICE,
+        name="Destination",
+        folder=dossier,
+    )
+
+    assert depuis_dict.folder == dossier
+    assert direct.folder == dossier
 
 
 @pytest.mark.parametrize("donnees", ["pas-un-dictionnaire", 12, ["a", "b"]])

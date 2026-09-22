@@ -108,6 +108,12 @@ La fixture `fournisseur_factice` enregistre le fournisseur dans le registre glob
 puis l'en retire : tout test qui enregistre un fournisseur doit faire de même, sous peine de
 polluer les tests suivants.
 
+Le champ `folder` d'une destination est un **chemin relatif POSIX** : `tests/test_destinations.py`
+éprouve, pour le schéma voluptuous comme pour `DestinationConfig` (par `from_dict()` et par
+construction directe), les valeurs refusées — traversée `..`, chemin absolu, séparateur Windows,
+segment vide, espace de bordure, caractère de contrôle — et les valeurs acceptées ; la règle est
+justifiée dans [l'ADR des destinations distantes](adr/0001-destinations-distantes.md).
+
 ## Modifier l'intégration importée
 
 Le répertoire `custom_components/auto_backup/` contient le code importé de l'upstream

@@ -19,7 +19,7 @@ from ..const import (
     DEFAULT_DESTINATION_FOLDER,
 )
 from .errors import DestinationConfigError
-from .schema import DESTINATION_SCHEMA
+from .schema import DESTINATION_SCHEMA, chemin_de_dossier
 
 
 def _valide_texte(nom_champ: str, valeur: Any) -> str:
@@ -29,6 +29,19 @@ def _valide_texte(nom_champ: str, valeur: Any) -> str:
             f"{nom_champ} doit être une chaîne non vide, reçu {valeur!r}"
         )
     return valeur.strip()
+
+
+def _valide_dossier(nom_champ: str, valeur: Any) -> str:
+    """Renvoie le dossier normalisé en chemin relatif POSIX, sinon lève.
+
+    La règle vit dans `chemin_de_dossier()`, partagée avec le schéma : une
+    destination construite directement en Python ne doit pas pouvoir échapper à
+    la protection contre la traversée de répertoires.
+    """
+    try:
+        return chemin_de_dossier(valeur)
+    except vol.Invalid as err:
+        raise DestinationConfigError(f"{nom_champ} invalide : {err}") from err
 
 
 def _valide_retention(nom_champ: str, valeur: Any) -> int | None:
@@ -54,6 +67,11 @@ class DestinationConfig:
     gérés par Home Assistant (issue #7). Il est immuable, ce qui garantit qu'une
     destination instanciée ne voit pas sa configuration changer sous ses pieds :
     une modification passe par un rechargement des destinations.
+
+    `folder` est un chemin relatif POSIX (`Sauvegardes/HA`) : la traversée de
+    répertoires, les chemins absolus, les séparateurs Windows, les segments
+    vides, les espaces de bordure et les caractères de contrôle sont refusés,
+    car les fournisseurs le reprennent tel quel pour bâtir un chemin distant.
     """
 
     destination_id: str
@@ -65,10 +83,11 @@ class DestinationConfig:
 
     def __post_init__(self) -> None:
         """Revalide les invariants, y compris hors du schéma voluptuous."""
-        for nom_champ in ("destination_id", "provider", "name", "folder"):
+        for nom_champ in ("destination_id", "provider", "name"):
             object.__setattr__(
                 self, nom_champ, _valide_texte(nom_champ, getattr(self, nom_champ))
             )
+        object.__setattr__(self, "folder", _valide_dossier("folder", self.folder))
         for nom_champ in ("retention_days", "retention_count"):
             object.__setattr__(
                 self, nom_champ, _valide_retention(nom_champ, getattr(self, nom_champ))

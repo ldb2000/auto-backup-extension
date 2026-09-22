@@ -123,6 +123,33 @@ permet à `#9` (rétention distante) et `#17` (notifications et ré-authentifica
 une seule fois pour tous les fournisseurs. Un fournisseur qui ne sait pas qualifier un échec lève
 `DestinationError` : l'appelant reste correct, il perd seulement en finesse de réaction.
 
+## Validation du dossier distant : un chemin relatif POSIX
+
+Le champ `folder` n'est pas un texte libre : les fournisseurs Dropbox (#10) et Google Drive (#13)
+le reprendront tel quel pour bâtir le chemin distant d'une sauvegarde. Validé comme simple chaîne
+non vide, `folder = "../../etc/passwd"` aurait été accepté, et un téléversement serait sorti du
+dossier choisi par l'utilisateur — chez le fournisseur, ou sur toute machine qui synchronise ce
+dossier vers un système de fichiers local.
+
+`folder` est donc validé deux fois, comme les rétentions (schéma voluptuous à l'entrée,
+`DestinationConfig` à la construction), par `chemin_de_dossier()` — seule implémentation de la
+règle, afin que les deux chemins de validation ne puissent pas diverger :
+
+| Refusé | Exemples |
+| --- | --- |
+| segment de traversée `..` ou `.` | `../x`, `a/../b`, `./a` |
+| chemin absolu : `/` en tête ou lettre de lecteur | `/etc/passwd`, `C:/Sauvegardes` |
+| séparateur Windows | `a\b`, `\\serveur\partage` |
+| segment vide | `a//b`, `a/b/` |
+| espace en tête ou en fin de segment | `" Sauvegardes"`, `a/ b` |
+| caractère de contrôle ou non imprimable | `Sauvegardes\n`, `Sauvegardes\x00HA` |
+
+Restent acceptés `Sauvegardes`, `Sauvegardes/HA`, les accents et la valeur par défaut
+`Home Assistant` : seul `/` sépare les segments, et la valeur renvoyée est le chemin normalisé.
+
+La règle vit dans le socle et non chez chaque fournisseur : un fournisseur ajouté plus tard hérite
+de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relatif déjà assaini.
+
 ## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
@@ -134,6 +161,9 @@ une seule fois pour tous les fournisseurs. Un fournisseur qui ne sait pas qualif
 - Les rétentions (`retention_days`, `retention_count`) sont facultatives, indépendantes et
   validées deux fois : par le schéma voluptuous à l'entrée, puis par la dataclass elle-même, de
   sorte qu'aucune destination ne puisse exister avec une rétention nulle ou négative.
+- Aucune destination ne peut donc exister avec une rétention nulle ou négative, ni avec un dossier
+  capable de désigner autre chose que lui-même : `tests/test_destinations.py` éprouve les valeurs
+  refusées et acceptées de `folder` par le schéma, par `from_dict()` et par construction directe.
 - Les destinations sont exposées dans `hass.data[DATA_DESTINATIONS]` via un `DestinationManager`
   qui suit les options de l'entrée et disparaît à son déchargement.
 - Rien n'est téléversé à ce stade : `#8` branchera le téléversement sur la création de
