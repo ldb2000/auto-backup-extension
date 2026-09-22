@@ -185,6 +185,30 @@ erreur ou par abus, ne se propage dans chaque requête et dans les options persi
 La règle vit dans le socle et non chez chaque fournisseur : un fournisseur ajouté plus tard hérite
 de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relatif déjà assaini.
 
+## Points ouverts pour les issues suivantes
+
+Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
+
+- **Liste blanche de caractères** : le refus des caractères `' & + ! ,` (apostrophe, ampersand,
+  plus, point d'exclamation, virgule) est strict pour cette issue. Une révision ultérieure en #7
+  pourra élargir cette liste en fonction des API des fournisseurs, avec un **message d'erreur
+  explicite** si la validation rejette un caractère qu'un utilisateur tente d'utiliser.
+
+- **Unicité des noms de destination** : deux destinations homonymes peuvent être configurées ; la
+  distinction se fait par identifiant interne. C'est un défaut connu, à traiter en #7 lors de
+  l'ajout de l'interface de configuration (formulaire, ajout, édition, suppression), qui devra
+  garantir l'unicité à la saisie.
+
+- **Fonction `unregister_provider`** : le registre exporte `unregister_provider` pour faciliter
+  les tests (voir `tests/destinations_factices.py`). **Cette fonction est un détail de test et ne
+  doit pas être documentée auprès des utilisateurs ni du fork** ; seuls les tests l'utiliseront.
+
+- **Événements** : quatre événements sont définis dans `const.py` (`auto_backup.upload_start`,
+  `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`),
+  mais leur **émission ne commence qu'à partir de #8** (téléversement) et **#9** (rétention
+  distante). Ils sont définis ici pour laisser le schéma de constantes stable et lisible, et
+  pour que les issues suivantes n'aient qu'à les émettre sans les déclarer.
+
 ## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
