@@ -28,7 +28,8 @@ défaut**. Pour les exécuter :
 uv run pytest --tests-reseau
 ```
 
-Ils sont ignorés si `gh` n'est pas installé.
+Prérequis : `gh` doit être installé et vous devez être authentifié avec `gh auth login`.
+Les tests sont ignorés si l'authentification échoue ou si `gh` n'est pas disponible.
 
 ## Structure
 
@@ -70,6 +71,28 @@ embarque est un paquet régulier : il l'emporterait sur celui du dépôt, qui es
 d'espace de noms. `tests/conftest.py` importe donc explicitement le paquet du dépôt avant
 toute création d'instance Home Assistant. L'intégration est ainsi chargée depuis ses fichiers
 réels, ce qui conditionne aussi la mesure de couverture.
+
+## Validation stricte des entités
+
+Le fichier `tests/test_entities.py` valide que la liste complète des entités créées par
+l'intégration correspond à celle attendue. Celle-ci est définie en constante `ENTITES_ATTENDUES`
+au début du fichier, organisée par domaine de plateforme (`sensor`, `binary_sensor`, `button`).
+
+Quand des entités sont ajoutées ou supprimées à l'intégration, cette liste doit être mise à jour
+en conséquence, sinon les tests échoueront. Il en est de même pour l'ordre ou l'identifiant
+unique (`unique_id`) de chaque entité.
+
+## Modifier l'intégration importée
+
+Le répertoire `custom_components/auto_backup/` contient le code importé de l'upstream
+(voir [`docs/UPSTREAM.md`](UPSTREAM.md)). **Aucune modification fonctionnelle de ce code ne doit
+être faite**, sauf lors d'une resynchronisation intentionnelle avec l'upstream. Les tests
+valident d'ailleurs cette identité (voir la section « Tests réseau » et
+[`tests/test_conformite_upstream.py`](../tests/test_conformite_upstream.py)).
+
+Si des extensions ou ajouts fonctionnels sont nécessaires, créer un module ou sous-répertoire
+dédié en dehors de `custom_components/auto_backup/`, et mettre à jour [`docs/UPSTREAM.md`](UPSTREAM.md)
+pour documenter ces écarts intentionnels.
 
 ## Périmètre
 
