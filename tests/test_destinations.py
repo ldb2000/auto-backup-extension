@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.auto_backup.const import (
+    CONF_FOLDER,
     DEFAULT_DESTINATION_FOLDER,
     EVENT_REMOTE_PURGE,
     EVENT_UPLOAD_FAILED,
@@ -250,7 +251,15 @@ def test_le_dossier_refuse_la_traversee_et_les_chemins_absolus(dossier: str) -> 
 
 @pytest.mark.parametrize("dossier", DOSSIERS_ACCEPTES)
 def test_le_dossier_accepte_un_chemin_relatif_posix(dossier: str) -> None:
-    """Un chemin relatif POSIX est accepté et conservé tel quel."""
+    """Un chemin relatif POSIX est accepté et conservé tel quel.
+
+    Couvre les trois points d'entrée, comme le test symétrique sur les
+    dossiers refusés : le schéma voluptuous appelé seul (tel qu'utilisé pour
+    relire les options de l'entrée), `from_dict()` et la construction directe
+    de la dataclass doivent tous renvoyer le dossier normalisé à l'identique,
+    sans qu'aucun n'altère silencieusement une valeur pourtant acceptée.
+    """
+    valide = DESTINATION_SCHEMA(config_factice(folder=dossier))
     depuis_dict = DestinationConfig.from_dict(config_factice(folder=dossier))
     direct = DestinationConfig(
         destination_id="d1",
@@ -259,6 +268,7 @@ def test_le_dossier_accepte_un_chemin_relatif_posix(dossier: str) -> None:
         folder=dossier,
     )
 
+    assert valide[CONF_FOLDER] == dossier
     assert depuis_dict.folder == dossier
     assert direct.folder == dossier
 
