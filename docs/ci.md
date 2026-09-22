@@ -116,25 +116,33 @@ côté dépôt, dont aucun ne concerne le code :
   `custom-component`, `backup`, `dropbox`, `google-drive` ;
 - **dépôt public**, pour satisfaire les contrôles `hacsjson` et `integration_manifest` :
   `hacs/action` ne lit pas ces deux fichiers via l'API GitHub authentifiée, elle les télécharge
-  en brut sur `raw.githubusercontent.com` **sans authentification**. Tant que le dépôt est
-  privé, ces requêtes renvoient 404 et les deux contrôles échouent (« Got None »). C'est un
-  prérequis côté dépôt au même titre que la description et les sujets, pas un défaut du code
-  ni du workflow.
+  en brut sur `raw.githubusercontent.com` **sans authentification**. Tant que le dépôt était
+  privé, ces requêtes renvoyaient 404 et les deux contrôles échouaient (« Got None »). Le dépôt
+  a été rendu public le 2026-09-22 : ce prérequis est satisfait et ces contrôles passent.
 
-Les autres contrôles passent sans aménagement, y compris sur un dépôt privé : `license` (MIT
-détectée par GitHub), `archived`, `issues`, `information` (`README.md`) et `brands` (le domaine
-`auto_backup` est déjà déclaré dans
-[home-assistant/brands](https://github.com/home-assistant/brands)). Le contenu de `hacs.json`
-est lui aussi valide tel quel (l'absence de `zip_release` est correcte, cf.
-[`UPSTREAM.md`](UPSTREAM.md)) : seul son accès en lecture anonyme manque tant que le dépôt
-reste privé.
+Les autres contrôles HACS passent également : `license` (MIT détectée par GitHub), `archived`,
+`issues`, `information` (`README.md`) et `brands` (le domaine `auto_backup` est déjà déclaré
+dans [home-assistant/brands](https://github.com/home-assistant/brands)). Le contenu de
+`hacs.json` est valide (l'absence de `zip_release` est correcte, cf. [`UPSTREAM.md`](UPSTREAM.md)).
 
-La protection de la branche `main` (CI obligatoire avant merge) relève du même prérequis de
-visibilité : sur un dépôt **privé**, les règles de protection de branche ne sont disponibles
-qu'avec un abonnement GitHub Pro ; sur un dépôt **public**, elles le sont sans abonnement.
+En résumé, les **9 contrôles HACS passent** depuis le rendu public du dépôt (2026-09-22).
+Les trois prérequis — description, topics, dépôt public — doivent être maintenus pour
+la conformité HACS en continu.
 
 Aucun fichier de `custom_components/auto_backup/` n'a été modifié pour satisfaire `hassfest` ou
 HACS : le code upstream importé passe les deux validations tel quel.
+
+### Protection de branche
+
+Le dépôt étant public, les règles de protection de branche sur `main` sont recommandées pour
+garantir que tout merge a passé les trois checks du workflow :
+
+- **Lint (ruff)** : `lint`
+- **Tests unitaires (pytest)** : `tests`
+- **Validation Home Assistant et HACS** : `validate`
+
+Cette configuration s'effectue dans les paramètres GitHub du dépôt (Branches → Branch protection
+rules → main), et seul le propriétaire du dépôt peut l'activer.
 
 ## Hors périmètre
 
