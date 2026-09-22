@@ -108,3 +108,13 @@ OAUTH_TOKEN_TIMEOUT = 30
 # Préfixe de l'identifiant du problème (« repair issue ») signalant qu'une
 # destination doit être ré-autorisée.
 ISSUE_REAUTH_PREFIX = "reauthentification_requise_"
+
+### FOURNISSEURS DE DESTINATION RÉELS (issues #10 et #13) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Les fournisseurs livrés vivent dans
+# `destinations/providers/` et s'enregistrent par `enregistrer_les_fournisseurs()`.
+
+# Données **non secrètes** renvoyées par le fournisseur au moment de l'autorisation et
+# conservées avec la destination : identifiant du compte Dropbox (`account_id`), par
+# exemple. Elles évitent de rappeler l'API pour savoir à quel compte une destination
+# est rattachée, et servent à détecter qu'une ré-autorisation a changé de compte.
+CONF_PROVIDER_DATA = "provider_data"

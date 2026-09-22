@@ -33,9 +33,14 @@ class RemoteDestination(ABC):
     de jeton, et conduit alors l'utilisateur dans son navigateur avant de créer
     la destination. Laissé à `None`, le fournisseur est réputé ne demander aucune
     autorisation externe.
+
+    `LABEL` (issue #10) est le nom du service tel qu'il est montré à
+    l'utilisateur (« Dropbox »). Laissé à `None`, le sélecteur du flux d'options
+    retombe sur l'identifiant technique du fournisseur.
     """
 
     OAUTH2_SPEC: ClassVar[OAuth2ProviderSpec | None] = None
+    LABEL: ClassVar[str | None] = None
 
     def __init__(self, hass: HomeAssistant, config: DestinationConfig) -> None:
         """Mémorise l'instance Home Assistant et la configuration figée."""
@@ -76,6 +81,36 @@ class RemoteDestination(ABC):
     def retention_count(self) -> int | None:
         """Nombre maximum de sauvegardes distantes, `None` si illimité."""
         return self._config.retention_count
+
+    @property
+    def provider_data(self) -> Mapping[str, Any]:
+        """Description du compte autorisé, telle qu'elle a été persistée."""
+        return self._config.provider_data or {}
+
+    ### Crochets facultatifs du flux d'ajout (issue #10) ###
+    #
+    # Ils sont appelés une fois le jeton obtenu, avant le formulaire de nommage,
+    # sur une **même** destination provisoire : un fournisseur qui mémorise la
+    # réponse du service n'a donc qu'un appel réseau à faire pour les deux. Un
+    # fournisseur qui ne les surcharge pas n'en fait aucun — le comportement
+    # d'avant l'issue #10 est conservé. Un échec n'interrompt pas l'ajout : le
+    # flux se contente de ne rien proposer (cf. `destinations/flow.py`).
+
+    async def async_nom_par_defaut(self) -> str | None:
+        """Nom proposé par défaut pour cette destination, `None` si aucun.
+
+        Un fournisseur qui sait nommer le compte autorisé (« Dropbox - Jean
+        Dupont ») le renvoie ici : le formulaire de nommage le pré-remplit.
+        """
+        return None
+
+    async def async_donnees_du_fournisseur(self) -> Mapping[str, Any] | None:
+        """Données **non secrètes** du compte à persister, `None` si aucune.
+
+        Elles sont validées par `PROVIDER_DATA_SCHEMA` (scalaires JSON) puis
+        écrites dans `DestinationConfig.provider_data`.
+        """
+        return None
 
     @abstractmethod
     async def async_check_connection(self) -> None:

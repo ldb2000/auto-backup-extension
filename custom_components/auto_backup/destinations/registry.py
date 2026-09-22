@@ -75,6 +75,20 @@ def get_provider(provider_id: str) -> DestinationFactory:
 
 
 @callback
+def provider_label(provider_id: str) -> str:
+    """Libellé lisible du fournisseur, son identifiant à défaut (issue #10).
+
+    Le libellé est déclaré par la fabrique elle-même (`RemoteDestination.LABEL`)
+    : un fournisseur qui n'en déclare pas — c'est le cas des fournisseurs
+    factices des tests — reste affiché sous son identifiant technique.
+    """
+    libelle = getattr(get_provider(provider_id), "LABEL", None)
+    if isinstance(libelle, str) and libelle.strip():
+        return libelle.strip()
+    return provider_id
+
+
+@callback
 def list_providers() -> tuple[str, ...]:
     """Identifiants des fournisseurs enregistrés, par ordre alphabétique."""
     return tuple(sorted(_FABRIQUES))
