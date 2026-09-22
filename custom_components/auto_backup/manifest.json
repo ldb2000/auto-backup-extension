@@ -1,0 +1,13 @@
+{
+  "domain": "auto_backup",
+  "name": "Auto Backup",
+  "after_dependencies": ["default_config", "backup", "hassio"],
+  "codeowners": ["@ldb2000"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/ldb2000/auto-backup-extension",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/ldb2000/auto-backup-extension/issues",
+  "requirements": [],
+  "version": "0.0.0"
+}
