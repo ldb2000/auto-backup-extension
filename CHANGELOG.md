@@ -59,10 +59,9 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 
 ### Modifié
 
-- `custom_components/auto_backup/const.py` : ajout de `IDENTIFIANT_PROVISOIRE` dans le bloc d'autorisation OAuth2 (partagé par le flux d'ajout et le signalement de ré-authentification) et de `CONF_PROVIDER_DATA` à la fin du bloc du fork. Refs #10
-- `docs/adr/0001-destinations-distantes.md` : nouvelle section « Fournisseur Dropbox » (absence de SDK, justification de chaque portée, « App folder » recommandé, crochets ajoutés au socle, correspondance entre codes HTTP Dropbox et erreurs typées) ; les points ouverts « URI de redirection » et « Libellés de fournisseur » sont marqués traités. Refs #10
-- `docs/README.md`, `docs/tests.md` et `README.md` : index de la documentation des destinations, section « Tester un fournisseur réel » et renvoi vers la page Dropbox. Refs #10
-
+- Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
+- `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6
+- Les exemptions `ruff` de l'upstream sont énumérées module par module dans `pyproject.toml` : le code du fork (`destinations/`) est soumis à toutes les règles et au formatage. Refs #6
 - `README.md` : la section sur l'ajout d'une destination précise désormais que l'URL externe
   doit être HTTPS et publiquement accessible (pas locale `.local` ni adresse IP nue),
   et que certains fournisseurs comme Google Drive refusent les URI non publiques. Refs #7
@@ -72,17 +71,17 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
   publique (notamment pour Google Drive), libellés utilisateur du sélecteur de fournisseur,
   stabilité des références lors du rafraîchissement, cohérence de la ré-authentification. Refs #7
 - `docs/README.md` : ajout de `ci.md` à l'index de documentation. Refs #7
-- Le script ad hoc `tests/check_issue_2.py` est remplacé par `tests/test_conformite_upstream.py` : les contrôles hors ligne sont exécutés par `pytest`, la comparaison avec le dépôt upstream est marquée `network` et ne s'exécute qu'avec `uv run pytest --tests-reseau`. Refs #4
-- Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
-- `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6
-- Les exemptions `ruff` de l'upstream sont énumérées module par module dans `pyproject.toml` : le code du fork (`destinations/`) est soumis à toutes les règles et au formatage. Refs #6
 - Le flux d'options ne s'ouvre plus directement sur le formulaire `auto_purge` / `backup_timeout` : il s'ouvre sur un menu, où ce formulaire reste accessible sous « Réglages des sauvegardes ». Refs #7
 - `docs/adr/0001-destinations-distantes.md` documente le choix de conduire l'autorisation OAuth2 dans le flux d'options plutôt qu'en flux de configuration, le stockage des secrets et le problème de ré-autorisation non réparable automatiquement. Refs #7
 - `tests/test_conformite_upstream.py` compte désormais `translations/fr.json` et `translations/en.json` parmi les fichiers upstream étendus : ils ne peuvent recevoir que des ajouts. Refs #7
+- `custom_components/auto_backup/const.py` : ajout de `IDENTIFIANT_PROVISOIRE` dans le bloc d'autorisation OAuth2 (partagé par le flux d'ajout et le signalement de ré-authentification) et de `CONF_PROVIDER_DATA` à la fin du bloc du fork. Refs #10
+- `docs/adr/0001-destinations-distantes.md` : nouvelle section « Fournisseur Dropbox » (absence de SDK, justification de chaque portée, « App folder » recommandé, crochets ajoutés au socle, correspondance entre codes HTTP Dropbox et erreurs typées) ; les points ouverts « URI de redirection » et « Libellés de fournisseur » sont marqués traités. Refs #10
+- `docs/README.md`, `docs/tests.md` et `README.md` : index de la documentation des destinations, section « Tester un fournisseur réel » et renvoi vers la page Dropbox. Refs #10
 - Le téléversement conserve la référence de destination obtenue au début de l'opération : un rafraîchissement de jeton (issue #7) réécrit les options et recrée les instances, sans que l'envoi en cours ne change d'objet en route. Refs #8
 - `RemoteDestination.async_upload()` accepte désormais un flux : `source` devient facultatif et les paramètres nommés `stream`, `size` et `filename` sont ajoutés. Les appels existants de la forme `async_upload(chemin, name=...)` restent valides. Refs #8
 - `custom_components/auto_backup/services.yaml` rejoint les fichiers upstream « étendus » de `tests/test_conformite_upstream.py` : le champ `upload_to` y est ajouté aux trois services de sauvegarde, sans qu'aucune ligne upstream ne soit modifiée. Refs #8
 - `custom_components/auto_backup/__init__.py` : la ligne upstream `await auto_backup.async_create_backup(data)` est ré-indentée pour entrer dans un `try`/`finally` qui garantit la libération de la demande de téléversement. C'est la seule ligne upstream retouchée du fork ; elle est justifiée dans `docs/UPSTREAM.md` et contrôlée par `REINDENTATIONS_TOLEREES` dans `tests/test_conformite_upstream.py`, qui exige que son contenu reste identique au caractère près. Refs #8
+- Le script ad hoc `tests/check_issue_2.py` est remplacé par `tests/test_conformite_upstream.py` : les contrôles hors ligne sont exécutés par `pytest`, la comparaison avec le dépôt upstream est marquée `network` et ne s'exécute qu'avec `uv run pytest --tests-reseau`. Refs #4
 
 ### Sécurité
 

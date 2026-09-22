@@ -305,7 +305,7 @@ de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relat
 
 Premier fournisseur réel. Il ne change rien au socle : il se range dans
 `destinations/providers/dropbox.py`, déclare une `OAUTH2_SPEC` et une fabrique, et
-n'est connu du reste du code que par le registre. Quatre points méritent d'être tracés.
+n'est connu du reste du code que par le registre. Six points méritent d'être tracés.
 
 ### Pas de SDK Dropbox
 
@@ -656,6 +656,29 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   l'absence de sous-entrées de configuration — choix retenu en #6 — a imposé de repousser des
   mécanismes robustes vers le flux d'options. Le plancher sera aligné sur **2026.3** par
   l'issue #28 pour lever cette limitation et migrer vers le modèle standard de Home Assistant.
+
+- **Limitation d'une corrélation par nom en présence d'appels concurrents (FAQ, issue #19)** :
+  deux appels **concurrents** portant le **même nom explicite** et `upload_to` ne sont pas
+  distinguables à l'intérieur de leurs fenêtres d'armement, qui se chevauchent ; la première
+  demande enregistrée est confirmée par la première sauvegarde démarrée. Le cas suppose deux
+  automatisations simultanées imposant le même nom, les deux avec `upload_to` ; le pire effet
+  est une inversion des destinations entre deux sauvegardes, et les sauvegardes locales ne sont
+  pas touchées. La FAQ #19 documenta la marche à suivre pour éviter ce scénario (noms explicites
+  différents, ou une seule automation avec `upload_to`).
+
+- **Traduction des champs de `services.yaml` (issue #18)** : le champ `upload_to` ajouté aux
+  trois services de sauvegarde reste libellé en anglais dans `services.yaml`, comme tout le reste
+  du fichier upstream (source de vérité des libellés par défaut). Les traductions françaises
+  vivent dans `translations/fr.json`, qui n'a pas encore de section `services` au moment de #8 ;
+  la traduction du champ y sera ajoutée en #18 pour que la formulation côté utilisateur soit
+  cohérente.
+
+- **Destination à ré-autoriser lors d'une purge (issue #9)** : une destination en attente de
+  ré-authentification (décision 4 de cet ADR) ne doit pas être contactée lors d'une opération de
+  purge distante (issue #9). Le gestionnaire expose `reauthentification_requise(destination_id)`
+  pour le vérifier ; l'issue #9 l'appelera avant d'appeler `async_list_backups()` et
+  `async_delete_backup()`, exactement comme #8 le fait pour le téléversement (voir la section
+  « Téléversement après création » ci-dessus).
 
 ## Conséquences
 

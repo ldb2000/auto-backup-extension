@@ -45,11 +45,41 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
 
-**Dropbox** est le premier fournisseur livré : la connexion d'un compte est opérationnelle, et
-la marche à suivre — création de l'application Dropbox, type d'accès conseillé, portées à
-cocher, URI de redirection à déclarer — est décrite dans
-[`docs/destinations/dropbox.md`](docs/destinations/dropbox.md). Le téléversement et la purge
-distante suivront ; Google Drive viendra s'enregistrer dans ce même parcours.
+**Dropbox** est le premier fournisseur livré : la connexion d'un compte est opérationnelle, le
+téléversement après création de sauvegarde est implémenté, et la marche à suivre — création de
+l'application Dropbox, type d'accès conseillé, portées à cocher, URI de redirection à déclarer —
+est décrite dans [`docs/destinations/dropbox.md`](docs/destinations/dropbox.md). La purge
+distante suivra ; Google Drive viendra s'enregistrer dans ce même parcours.
+
+### Téléversement des sauvegardes
+
+Une sauvegarde créée par les services `auto_backup.backup`, `backup_full` ou `backup_partial` peut
+être téléversée automatiquement vers une ou plusieurs destinations configurées, en ajoutant
+l'option `upload_to` à l'appel de service :
+
+```yaml
+service: auto_backup.backup
+data:
+  upload_to:
+    - destination-dropbox-perso
+    - nom-autre-destination
+```
+
+L'option `upload_to` accepte une liste d'identifiants ou de noms de destinations. La sauvegarde
+est créée localement en premier, puis envoyée en tâche de fond, destination après destination.
+Un échec de téléversement n'empêche pas les autres destinations d'être traitées et ne supprime
+jamais la sauvegarde locale.
+
+Le **délai maximum d'un téléversement** est configurable par l'entrée « Réglages du
+téléversement » du menu d'options de l'intégration (délai par défaut : 1800 secondes, soit
+30 minutes). Cette valeur se relit à chaque envoi et s'applique donc sans redémarrage.
+
+**Événements** : trois événements sont émis pendant le téléversement :
+- `auto_backup.upload_start` : le téléversement vers une destination commence ;
+- `auto_backup.upload_successful` : le téléversement a réussi (champs : `name`, `slug`,
+  `destination`, `destination_name`, `size`, `remote_id`) ;
+- `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
+  `destination`, `destination_name`, `error`).
 
 ## Développement
 
