@@ -29,6 +29,11 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Constantes du fork dans `const.py` : `DATA_DESTINATIONS`, `CONF_DESTINATIONS`, `CONF_DESTINATION_ID`, `CONF_PROVIDER`, `CONF_FOLDER`, `CONF_RETENTION_DAYS`, `CONF_RETENTION_COUNT`, `DEFAULT_DESTINATION_FOLDER` et les événements `auto_backup.upload_start`, `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`. Refs #6
 - Décision d'architecture documentée dans `docs/adr/0001-destinations-distantes.md` (support de persistance, registre de fournisseurs, hiérarchie d'erreurs). Refs #6
 - Tests du socle des destinations avec un fournisseur factice en mémoire (`tests/destinations_factices.py`, fixture `fournisseur_factice`) : cycle de vie, erreurs typées, registre, validation des rétentions et persistance après rechargement. Refs #6
+- Option `upload_to` sur les services `auto_backup.backup`, `backup_full` et `backup_partial` : une ou plusieurs destinations distantes, désignées par identifiant ou par nom, vers lesquelles la sauvegarde créée est envoyée. Une destination inconnue est refusée, en français, avant même la création de la sauvegarde. Refs #8
+- Téléversement de la sauvegarde après sa création, orchestré par `custom_components/auto_backup/destinations/upload.py` : lecture en flux (jamais en mémoire, ni par copie sur le disque) via l'API Supervisor (`/backups/<slug>/download`) ou via l'agent de sauvegarde local de Home Assistant Core, puis envoi en tâche de fond, destination après destination. Refs #8
+- Émission des événements `auto_backup.upload_start`, `auto_backup.upload_successful` (`name`, `slug`, `destination`, `destination_name`, `size`, `remote_id`) et `auto_backup.upload_failed` (les mêmes, plus `error`). Un échec est journalisé, laisse la sauvegarde locale intacte et n'empêche pas les autres destinations d'être traitées. Refs #8
+- Option `upload_timeout` : délai maximum d'un téléversement, 1800 s par défaut, lu dans les options de l'entrée. Elle n'est pas encore exposée dans le formulaire d'options (cf. `docs/UPSTREAM.md`). Refs #8
+- Tests du téléversement (`tests/test_televersement.py`) : lecture en flux Supervisor et Core, cas nominal, échec du fournisseur, destination inconnue, absence de `upload_to`, délai dépassé et poursuite des autres destinations après un échec. Refs #8
 
 ### Modifié
 
@@ -36,6 +41,8 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
 - `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6
 - Les exemptions `ruff` de l'upstream sont énumérées module par module dans `pyproject.toml` : le code du fork (`destinations/`) est soumis à toutes les règles et au formatage. Refs #6
+- `RemoteDestination.async_upload()` accepte désormais un flux : `source` devient facultatif et les paramètres nommés `stream`, `size` et `filename` sont ajoutés. Les appels existants de la forme `async_upload(chemin, name=...)` restent valides. Refs #8
+- `custom_components/auto_backup/services.yaml` rejoint les fichiers upstream « étendus » de `tests/test_conformite_upstream.py` : le champ `upload_to` y est ajouté aux trois services de sauvegarde, sans qu'aucune ligne upstream ne soit modifiée. Refs #8
 
 ### Sécurité
 

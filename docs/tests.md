@@ -46,6 +46,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_entities.py` | Entités créées et rattachement au device de service. |
 | `tests/test_destinations.py` | Socle des destinations distantes : contrat, types, erreurs, registre, gestionnaire. |
 | `tests/test_destinations_persistance.py` | Persistance des destinations dans l'entrée et rechargement après redémarrage. |
+| `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/destinations_factices.py` | Fournisseur de destination factice, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
@@ -128,6 +129,44 @@ Les cas Unicode sont écrits en séquences d'échappement (`\uff0e`) et non avec
 littéral : `ruff` refuse les caractères ambigus dans le code (RUF001/RUF002), et un confusable
 copié tel quel serait de toute façon illisible en revue.
 
+## Tester le téléversement d'une sauvegarde
+
+`tests/test_televersement.py` couvre l'issue #8 à deux niveaux.
+
+**La lecture en flux d'une sauvegarde locale**, pour les deux handlers upstream :
+
+- `SupervisorHandler` : la fixture `aioclient_mock` de
+  `pytest-homeassistant-custom-component` simule `GET /backups/<slug>/download`. Elle renvoie un
+  vrai `StreamReader`, ce qui permet de vérifier que la sauvegarde arrive en **plusieurs
+  morceaux** (le contenu de test dépasse les 64 Kio d'un morceau de lecture) et que la taille
+  vient de l'en-tête `Content-Length` ;
+- `BackupHandler` : un `BackupManager` en `MagicMock` renvoie une sauvegarde et un agent local
+  dont `get_backup_path()` pointe vers un fichier écrit dans `tmp_path`.
+
+**L'orchestration complète**, de l'appel de service aux événements `auto_backup.upload_*`. Le
+montage tient dans la fonction `_demarrer()` :
+
+```python
+instance = await _demarrer(hass, fichier_de_sauvegarde)  # destination factice chargée
+await hass.services.async_call(
+    DOMAIN, SERVICE_BACKUP, {"upload_to": "destination_test"}, blocking=True
+)
+await hass.async_block_till_done(wait_background_tasks=True)
+```
+
+Trois points méritent l'attention en écrivant un nouveau test :
+
+1. **`wait_background_tasks=True` est obligatoire.** Le téléversement s'exécute dans une tâche
+   de fond (`entry.async_create_background_task`) ; sans cet argument, `async_block_till_done()`
+   rend la main avant la fin du transfert et le test constate un état vide.
+2. **La création de sauvegarde est simulée**, en remplaçant `handler.create_backup` par un
+   `AsyncMock` qui renvoie `{"slug": ...}`. Le reste du chemin upstream (événements, expiration,
+   `download_path`) n'est pas court-circuité pour autant.
+3. **Le fournisseur factice consomme réellement le flux** : `octets_recus`, `taille_recue` et
+   `taille_annoncee` permettent de vérifier que ce qui est arrivé chez la destination est bien
+   le contenu du fichier. `attente_secondes` simule un transfert lent, ce qui éprouve le délai
+   maximum `upload_timeout` sans faire patienter la suite de tests.
+
 ## Modifier l'intégration importée
 
 Le répertoire `custom_components/auto_backup/` contient le code importé de l'upstream
@@ -148,6 +187,7 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 ## Périmètre
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
-entités) et le socle des destinations distantes (contrat, registre, persistance). Les
+entités), le socle des destinations distantes (contrat, registre, persistance) et le
+téléversement après création (lecture en flux, événements, échecs, délai maximum). Les
 fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

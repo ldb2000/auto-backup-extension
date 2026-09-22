@@ -33,8 +33,16 @@ Lien direct vers la révision :
 
 Le code propre au fork vit dans le sous-paquet `custom_components/auto_backup/destinations/`,
 absent de l'upstream : contrat commun des destinations distantes, types de données, erreurs
-typées, registre de fournisseurs et gestionnaire de destinations (issue #6). Les fournisseurs
-Dropbox et Google Drive viendront s'y greffer sans toucher au code upstream.
+typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis
+l'orchestration du téléversement après création (`destinations/upload.py`, issue #8). Les
+fournisseurs Dropbox et Google Drive viendront s'y greffer sans toucher au code upstream.
+
+`handlers.py` n'est, lui, **pas modifié du tout** : `destinations/upload.py` lit une sauvegarde
+en flux en s'appuyant sur `isinstance(handler, SupervisorHandler | BackupHandler)` et sur les
+attributs de ces handlers (`_session`, `_ip`, `_headers` ; `_manager`). Leur méthode
+`download_backup()` écrit obligatoirement dans un fichier, ce que le téléversement veut
+justement éviter. C'est le point de couplage à revérifier lors d'une resynchronisation : si
+l'upstream renomme ces attributs, `tests/test_televersement.py` échoue immédiatement.
 
 Les modules upstream ne sont, eux, **que complétés** : aucune ligne upstream n'est supprimée ni
 modifiée, ce qui garde la resynchronisation en simple report de diff.
@@ -45,20 +53,47 @@ modifiée, ce qui garde la resynchronisation en simple report de diff.
   `CONF_RETENTION_COUNT`, `DEFAULT_DESTINATION_FOLDER`, `EVENT_UPLOAD_START`,
   `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`. Aucune constante
   upstream n'est renommée ni modifiée, et les noms d'événements suivent la convention upstream
-  `<domaine>.<événement>`.
-- `custom_components/auto_backup/__init__.py` : deux lignes ajoutées — l'import de
+  `<domaine>.<événement>`. Le téléversement (#8) ajoute à la fin de ce même bloc l'import de
+  type `CoordinateurTeleversement`, la clé `DATA_UPLOADS`, l'option de service
+  `ATTR_UPLOAD_TO`, les champs d'événement `ATTR_DESTINATION`, `ATTR_DESTINATION_NAME`,
+  `ATTR_SIZE`, `ATTR_REMOTE_ID`, ainsi que `CONF_UPLOAD_TIMEOUT` et `DEFAULT_UPLOAD_TIMEOUT`.
+- `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
   `async_setup_destinations` et son appel dans `async_setup_entry`, qui charge les destinations
   configurées et les expose dans `hass.data[DATA_DESTINATIONS]`. Le nettoyage au déchargement
   passe par `entry.async_on_unload()`, ce qui évite de toucher à `async_unload_entry`.
+  L'issue #8 y ajoute : l'import d'`ATTR_UPLOAD_TO` et celui des trois fonctions de
+  `destinations/upload.py` ; la clé `upload_to` de `SCHEMA_BACKUP_BASE`, donc des trois
+  services de sauvegarde à la fois ; l'appel `async_setup_upload(hass, entry)` ; et, dans le
+  gestionnaire de service, `async_prepare_upload()` **avant**
+  `auto_backup.async_create_backup(data)` puis `async_release_upload()` après. Ce sont des
+  ajouts : la ligne d'appel upstream `await auto_backup.async_create_backup(data)` n'est ni
+  déplacée ni modifiée.
 - `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées — l'import de
   `preserve_destinations` et son appel dans `OptionsFlowHandler.async_step_init`. Le flux
   d'options upstream remplace l'intégralité des options par le contenu de son formulaire, qui
   ignore les destinations : sans ce report, enregistrer les options effacerait les destinations
   configurées.
+- `custom_components/auto_backup/services.yaml` : un champ `upload_to` ajouté aux services
+  `backup`, `backup_full` et `backup_partial` (défini une fois avec l'ancre YAML `&upload_to`,
+  référencé deux fois), à la fin de la liste des champs de chacun. Aucun champ upstream n'est
+  touché. Son libellé et sa description restent **en anglais**, comme tout le reste du fichier
+  upstream : ce fichier est la source de vérité des libellés par défaut de l'interface, et les
+  traductions françaises vivent dans `translations/fr.json`, qui n'a pas encore de section
+  `services`. Traduire ce seul champ rendrait le formulaire bilingue pour tout le monde.
 
 Le choix de persister les destinations dans `entry.options` plutôt qu'en sous-entrées de
 configuration est justifié dans
-[`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md).
+[`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md), tout comme la
+corrélation par événement retenue pour le téléversement.
+
+#### Option `upload_timeout` : pas de champ dans le formulaire d'options
+
+Le délai maximum d'un téléversement est lu dans `entry.options[CONF_UPLOAD_TIMEOUT]`, avec
+`DEFAULT_UPLOAD_TIMEOUT` (1800 s) comme valeur de repli. Le formulaire d'options upstream
+(`config_flow.py`) n'expose pas ce champ : l'y ajouter reviendrait à modifier le schéma
+upstream, et l'interface de configuration des destinations fait l'objet de l'issue #7. En
+attendant, la valeur se règle en éditant les options de l'entrée (par exemple depuis une
+restauration de configuration), et la valeur par défaut couvre les sauvegardes volumineuses.
 
 ### Comment ces écarts sont contrôlés
 
@@ -66,8 +101,9 @@ configuration est justifié dans
 
 - les fichiers réécrits (`manifest.json`) sortent de la comparaison ligne à ligne mais sont
   contrôlés par leurs propres tests ;
-- les modules upstream étendus (`__init__.py`, `const.py`, `config_flow.py`) sont comparés à
-  l'upstream : le test échoue si une ligne upstream y a été supprimée ou modifiée ;
+- les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `services.yaml`)
+  sont comparés à l'upstream : le test échoue si une ligne upstream y a été supprimée ou
+  modifiée ;
 - le reste du répertoire doit rester identique à la révision importée ;
 - aucun module du fork ne doit apparaître à la racine de `custom_components/auto_backup/` ;
 - chaque écart doit être listé dans cette page.

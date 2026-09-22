@@ -2,7 +2,9 @@
 
 - **Statut** : accepté
 - **Date** : 2026-09-22
-- **Issue** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+- **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle) et
+  [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement après
+  création) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -185,6 +187,115 @@ erreur ou par abus, ne se propage dans chaque requête et dans les options persi
 La règle vit dans le socle et non chez chaque fournisseur : un fournisseur ajouté plus tard hérite
 de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relatif déjà assaini.
 
+## Téléversement après création (issue #8)
+
+Le socle ci-dessus ne déclenche rien : l'issue #8 branche le téléversement sur la création de
+sauvegarde upstream. Trois décisions y sont prises, dans `destinations/upload.py`.
+
+### Corrélation par événement, pas par crochet dans le code upstream
+
+`AutoBackup._async_create_backup()` ne renvoie rien et n'offre aucun point d'extension : y
+brancher un appel exigerait de **modifier** des lignes du code importé, ce que le fork
+s'interdit (cf. [`../UPSTREAM.md`](../UPSTREAM.md)). L'upstream émet en revanche
+`auto_backup.backup_successful` avec le **nom** et le **slug** de la sauvegarde créée.
+
+| Option étudiée | Pourquoi elle n'a pas été retenue |
+| --- | --- |
+| Appeler le téléversement depuis `_async_create_backup()` | modifie le code upstream, à reporter à chaque resynchronisation |
+| Sous-classer `AutoBackup` et surcharger la méthode | dépend d'un détail d'implémentation privé, et l'upstream instancie la classe lui-même |
+| Écouter `auto_backup.backup_successful` | **retenue** : n'ajoute rien à l'upstream, et l'événement porte déjà le nom et le slug |
+
+Le gestionnaire de service enregistre donc, **avant** la création, une « demande de
+téléversement » ; `CoordinateurTeleversement` écoute l'événement et retrouve la demande.
+
+La clé de corrélation est le **nom de la sauvegarde**. Quand l'appel de service n'en fournit
+pas, `async_prepare_upload()` calcule celui que l'upstream aurait généré — en appelant sa
+propre méthode `AutoBackup.generate_backup_name()` — et le pose dans les données de l'appel.
+`validate_backup_config()` ne le remplace alors plus, puisqu'il ne nomme que les sauvegardes
+sans nom : le résultat est identique, mais le nom est connu des deux côtés.
+
+Trois garde-fous complètent la corrélation :
+
+- une demande n'est **honorée qu'après confirmation** : le coordinateur écoute aussi
+  `auto_backup.backup_start`, émis par l'upstream juste avant l'appel au Supervisor ou au
+  `BackupManager`, et marque la demande homonyme comme confirmée. Seule une demande confirmée
+  peut donner lieu à un téléversement ;
+- une demande **non confirmée** expire au bout de 30 secondes. C'est le seul cas de fuite
+  possible : `validate_backup_config()` peut refuser la configuration avant même d'émettre
+  `backup_start` (sauvegarde partielle sur une installation Core, par exemple). Sans cette
+  expiration, la demande resterait à attendre indéfiniment, et une sauvegarde **homonyme mais
+  sans rapport** créée plus tard l'aurait consommée — donc téléversée à l'insu de
+  l'utilisateur. Trente secondes couvrent largement l'écart réel entre l'enregistrement et
+  `backup_start` : un aller-retour `get_addons()` au plus, dans le même appel de service ;
+- `async_release_upload()`, appelé après la création, oublie une demande que la création n'a
+  pas honorée (échec du Supervisor, par exemple).
+
+Limite connue et assumée : deux sauvegardes créées **en parallèle** avec le **même nom
+explicite** ne sont pas distinguables ; la première demande enregistrée est consommée par la
+première sauvegarde terminée. Le cas suppose deux automatisations simultanées imposant le même
+nom, et reste sans incidence sur les sauvegardes locales.
+
+### Téléversement en tâche de fond, avec un délai maximum
+
+Le téléversement est lancé par `entry.async_create_background_task()` : l'appel de service rend
+la main dès la sauvegarde créée, et la tâche est annulée si l'entrée est déchargée. Un
+téléversement de plusieurs gigaoctets ne bloque donc ni le service, ni Home Assistant.
+
+Les destinations d'une même demande sont traitées **l'une après l'autre** : un flux ne se
+consomme qu'une fois, la sauvegarde est donc relue pour chacune. Les traiter en parallèle aurait
+imposé soit de garder le contenu en mémoire, soit d'ouvrir autant de lectures simultanées — deux
+façons de peser sur une machine qui vient déjà de produire une archive. L'échec de l'une
+n'interrompt jamais les suivantes : chaque destination a son propre `auto_backup.upload_failed`,
+et la sauvegarde locale n'est jamais touchée.
+
+Le délai maximum est `entry.options["upload_timeout"]`, en secondes, avec **1800 s** par défaut.
+Il est relu à chaque téléversement, donc modifiable sans redémarrage. Le formulaire d'options
+upstream ne l'expose pas encore : l'y ajouter modifierait le schéma upstream, et l'interface de
+configuration des destinations relève de l'issue #7.
+
+### Lecture en flux, jamais en mémoire
+
+Une sauvegarde pèse couramment plusieurs centaines de mégaoctets : elle ne doit être ni chargée
+en mémoire, ni recopiée sur le disque avant d'être envoyée. `async_ouvrir_sauvegarde()` renvoie
+donc un `ContenuSauvegarde` — un itérateur asynchrone de morceaux de 64 Kio, la taille totale
+quand elle est connue, et le nom d'archive — valable le temps d'un contexte :
+
+| Handler upstream | Source lue | Taille |
+| --- | --- | --- |
+| `SupervisorHandler` | `GET /backups/<slug>/download`, `content.iter_chunked()` | en-tête `Content-Length`, `None` s'il manque |
+| `BackupHandler` | fichier de l'agent de sauvegarde local, ouvert par `aiofiles` | `stat().st_size` |
+
+La sélection se fait par `isinstance`, dans le sous-paquet du fork : `handlers.py` reste
+identique à l'upstream. Sa méthode `download_backup()` n'était pas réutilisable, puisqu'elle
+écrit obligatoirement dans un fichier de destination.
+
+`RemoteDestination.async_upload()` est étendue en conséquence, de façon **rétrocompatible** :
+`source` devient facultatif et trois paramètres nommés apparaissent — `stream`, `size` et
+`filename`. Un appel de la forme `async_upload(chemin, name=...)` reste valide, mais un
+fournisseur doit savoir consommer `stream` : sous Supervisor, la sauvegarde n'existe nulle part
+sur le disque de Home Assistant.
+
+Un échec de lecture (Supervisor injoignable, fichier disparu) lève `ErreurLectureSauvegarde`,
+distincte de `DestinationError` : l'échec vient d'ici, pas du fournisseur distant.
+
+### Événements émis et validation de `upload_to`
+
+| Événement | Champs |
+| --- | --- |
+| `auto_backup.upload_start` | `name`, `slug`, `destination`, `destination_name` |
+| `auto_backup.upload_successful` | les précédents, plus `size` et `remote_id` |
+| `auto_backup.upload_failed` | les champs de `upload_start`, plus `error` |
+
+Une destination inconnue est refusée **avant** la création de la sauvegarde, par une
+`ServiceValidationError` en français qui liste les destinations configurées : mieux vaut ne rien
+créer que créer une sauvegarde dont l'utilisateur croira, à tort, qu'elle est partie.
+`upload_to` accepte un identifiant ou un nom (comparé sans tenir compte de la casse ni des
+espaces de bordure) ; un nom porté par plusieurs destinations est refusé plutôt qu'arbitré, en
+attendant l'unicité des noms promise par l'issue #7.
+
+Sans `upload_to`, rien de tout cela ne se déclenche : la clé est absente, aucune demande n'est
+enregistrée, aucun événement n'est émis, et le déroulement est exactement celui de l'upstream.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -204,10 +315,11 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   doit pas être documentée auprès des utilisateurs ni du fork** ; seuls les tests l'utiliseront.
 
 - **Événements** : quatre événements sont définis dans `const.py` (`auto_backup.upload_start`,
-  `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`),
-  mais leur **émission ne commence qu'à partir de #8** (téléversement) et **#9** (rétention
-  distante). Ils sont définis ici pour laisser le schéma de constantes stable et lisible, et
-  pour que les issues suivantes n'aient qu'à les émettre sans les déclarer.
+  `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`).
+  Les trois premiers sont **émis depuis #8** (voir la section « Téléversement après création »
+  ci-dessus) ; `auto_backup.remote_purge` attend **#9** (rétention distante). Ils sont définis
+  ici pour laisser le schéma de constantes stable et lisible, et pour que les issues suivantes
+  n'aient qu'à les émettre sans les déclarer.
 
 ## Conséquences
 
@@ -225,5 +337,5 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   refusées et acceptées de `folder` par le schéma, par `from_dict()` et par construction directe.
 - Les destinations sont exposées dans `hass.data[DATA_DESTINATIONS]` via un `DestinationManager`
   qui suit les options de l'entrée et disparaît à son déchargement.
-- Rien n'est téléversé à ce stade : `#8` branchera le téléversement sur la création de
-  sauvegarde, `#9` la rétention distante.
+- Le téléversement lui-même est branché par `#8` (section « Téléversement après création »
+  ci-dessus) ; `#9` y ajoutera la rétention distante.
