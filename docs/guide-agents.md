@@ -59,7 +59,7 @@ git --version   # worktrees natifs, rien à installer
 - [ ] `gh` authentifié avec les droits `repo` sur le dépôt cible
 - [ ] `jq` installé
 - [ ] Branche `main` protégée sur GitHub (PR obligatoire, pas de push direct) : c'est ton filet de sécurité si un agent dérape
-- [ ] Une commande de tests qui passe en local (`npm test`, `pytest`…), sinon l'agent tests n'a rien sur quoi s'appuyer
+- [ ] Une commande de tests qui passe en local (`uv run pytest`, `npm test`…), sinon l'agent tests n'a rien sur quoi s'appuyer
 
 ## Étape 1 : CLAUDE.md et permissions
 
@@ -79,11 +79,11 @@ Tous les agents lisent le `CLAUDE.md` à la racine : c'est lui qui évite que ch
 - BDD : ...
 
 ## Commandes
-- Installer : `npm ci`
-- Tests unitaires : `npm test`
-- Tests e2e : `npm run test:e2e`
-- Lint : `npm run lint`
-- Build : `npm run build`
+- Installer : `uv sync --group dev`
+- Tests unitaires : `uv run pytest`
+- Tests e2e : aucun
+- Lint : `uv run ruff check . && uv run ruff format --check .`
+- Build : aucun
 
 ## Conventions
 - Branches : `issue-<num>-<slug>`
@@ -117,8 +117,8 @@ Les permissions définissent ce que les agents peuvent faire sans te demander. L
       "Bash(git checkout:*)",
       "Bash(git worktree:*)",
       "Bash(git push -u origin issue-:*)",
-      "Bash(npm test:*)",
-      "Bash(npm run:*)"
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -133,7 +133,7 @@ Les permissions définissent ce que les agents peuvent faire sans te demander. L
 }
 ```
 
-Adapte les commandes `npm` à ta stack. Mets tes préférences personnelles dans `.claude/settings.local.json`, qui n'est pas commité.
+Ce projet utilise `uv` (voir la table des commandes ci-dessus et `CLAUDE.md`). Mets tes préférences personnelles dans `.claude/settings.local.json`, qui n'est pas commité.
 
 ## Étape 2 : créer l'équipe de subagents
 
@@ -418,7 +418,7 @@ while IFS='|' read -r NUM TITLE; do
 
   (
     cd "$WT"
-    # installer les dépendances si besoin : npm ci
+    # installer les dépendances si besoin : uv sync --group dev
     claude -p "/traite-issue $NUM" \
       --permission-mode acceptEdits \
       --max-turns 150 \

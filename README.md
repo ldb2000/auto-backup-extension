@@ -1,6 +1,6 @@
 # auto-backup-extension
 
-Objectif : reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter un backup dans Dropbox et Google Drive. 
+Objectif : reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter la possibilité de sauvegarder directement sur Dropbox et Google Drive. 
 
 ## Fork et licence
 
@@ -27,13 +27,30 @@ identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké d
 
 ## Développement
 
+Le projet utilise [`uv`](https://docs.astral.sh/uv/) et Python 3.14 (version épinglée dans
+`.python-version`). Les dépendances, la configuration de `pytest` et celle de `ruff` sont
+déclarées dans `pyproject.toml` ; `uv.lock` fige les versions installées.
+
 | Action | Commande |
 | --- | --- |
-| Installer | `—` |
-| Tests unitaires | `—` |
-| Tests e2e | `—` |
-| Lint | `—` |
-| Build | `—` |
+| Installer | `uv sync --group dev` |
+| Tests unitaires | `uv run pytest` |
+| Tests e2e | aucun |
+| Lint | `uv run ruff check . && uv run ruff format --check .` |
+| Build | aucun |
+
+La version de Home Assistant utilisée pour les tests est celle qu'épingle
+`pytest-homeassistant-custom-component` : les tests s'exécutent aujourd'hui contre
+**Home Assistant 2026.9.0** (via `pytest-homeassistant-custom-component` 0.13.363, versions
+figées dans `uv.lock`). C'est ce qui fixe le plancher de développement à Python 3.14.2,
+exigé par Home Assistant >= 2026.3.
+
+Ce plancher ne concerne que l'environnement de développement et de test. La version minimale
+de Home Assistant annoncée aux utilisateurs de l'intégration reste **2025.1.0**, déclarée dans
+`hacs.json`.
+
+Le répertoire `custom_components/auto_backup/` est exclu du reformatage `ruff` pour rester
+identique à l'upstream (voir [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
 
 ## Travailler avec l'équipe d'agents
 

@@ -20,11 +20,9 @@
       "Bash(git status:*)",
       "Bash(git switch:*)",
       "Bash(git worktree:*)",
-      "Bash(npm ci:*)",
-      "Bash(npm run build:*)",
-      "Bash(npm run lint:*)",
-      "Bash(npm run test:e2e:*)",
-      "Bash(npm test:*)"
+      "Bash(uv sync:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",

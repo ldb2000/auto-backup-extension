@@ -8,7 +8,7 @@ CLAUDE_BIN="${CLAUDE_BIN:-claude-perso}"
 MAX_PARALLEL="${MAX_PARALLEL:-4}"
 MAX_TURNS="${MAX_TURNS:-150}"
 MAX_BUDGET_USD="${MAX_BUDGET_USD:-}"
-CMD_INSTALL='npm ci'
+CMD_INSTALL='uv sync --group dev'
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
