@@ -715,10 +715,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 
 - **Stabilité des références lors du rafraîchissement du jeton** : un rafraîchissement de jeton
   réécrit les options de l'entrée et recrée les instances de destination du gestionnaire, ce qui
-  invalide toute référence antérieure. **À traiter en #8** (téléversement) : conserver la référence
-  obtenue au début d'une opération (vers le gestionnaire, vers une destination), plutôt que de
-  la demander à nouveau, pour garantir que le reste de l'opération utilise les données stables
-  de son début.
+  invalide toute référence antérieure. **Traité en #8** (téléversement) : le coordinateur conserve
+  la référence de destination obtenue au début d'une opération plutôt que de la demander à
+  nouveau ; #9 (rétention distante) doit appliquer la même règle.
 
 - **Cohérence de la ré-authentification** : un problème Home Assistant (repair issue) est créé
   pour une destination en attente de ré-autorisation, mais il n'est pas réparable automatiquement.
@@ -731,17 +730,13 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   `provider_data=self._provider_data or config.provider_data` qu'il faudra évaluer pour s'assurer
   que les données du fournisseur sont bien rafraîchies lors de la ré-autorisation sur un autre compte.
 
-- **Convergence des API entre fournisseurs lors de la fusion de #13 (Google Drive)** : l'issue
-  #10 (Dropbox) a ajouté plusieurs crochets facultatifs à la classe de base `RemoteDestination`
-  (`LABEL`, `async_nom_par_defaut()`, `async_donnees_du_fournisseur()`) et une fonction utilitaire
-  `provider_label()`. Une fois Google Drive (#13) fusionnée, **vérifier la stabilité** de ces
-  interfaces sur les deux implémentations et, si des divergences émergent :
-  - Consacrer une table explicite dans `destinations/providers/__init__.py` pour que le sélecteur
-    du flux d'options bascule sur un mécanisme plus robuste qu'une méthode `provider_label()`
-    importée du registre.
-  - Uniformiser le message de refus d'autorisation (`options.abort.autorisation_annulee`) et la
-    politique d'échec gracieux des crochets (actuellement : l'ajout ne s'interrompt pas si
-    `async_nom_par_defaut()` ou `async_donnees_du_fournisseur()` lèvent une exception).
+- **Convergence des API entre fournisseurs** : **traitée en #13** lors de la fusion avec #10.
+  Convention retenue : crochets déclarés comme méthodes d'instance sur `RemoteDestination`
+  (`async_nom_par_defaut()`, `async_donnees_du_fournisseur()`), libellé `LABEL` exposé par
+  `provider_label()`, table explicite `fournisseurs_livres()` dans `destinations/providers/__init__.py`,
+  motif de refus `autorisation_annulee` commun, `provider_data` borné. Politique d'échec d'un
+  crochet : l'ajout **s'interrompt** (abandon `echec_fournisseur`), voir la section « Échec d'un
+  crochet » ci-dessus.
 
 - **Plancher d'Home Assistant** : le fork annonce **2025.1.0** comme version minimale, mais
   l'absence de sous-entrées de configuration — choix retenu en #6 — a imposé de repousser des
