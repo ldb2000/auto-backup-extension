@@ -42,17 +42,45 @@ markers = [
 [tool.ruff]
 target-version = "py314"
 line-length = 88
+# Racines d'imports du dépôt. `tests/` en fait partie : pytest l'ajoute à
+# `sys.path`, les modules d'aide des tests (`destinations_factices`) sont donc du
+# code du dépôt et non des dépendances tierces pour le tri des imports.
+src = [".", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-# `custom_components/auto_backup/` est importé à l'identique depuis l'upstream
+# Les modules listés ici sont importés à l'identique depuis l'upstream
 # (cf. docs/UPSTREAM.md) : seules les règles de correction (pyflakes, erreurs de
 # syntaxe et de logique) s'y appliquent, les règles de style sont neutralisées
 # pour ne pas diverger de l'upstream et garder les resynchronisations lisibles.
-"custom_components/auto_backup/**" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+# Ils sont énumérés un par un, et non couverts par un motif du type
+# `custom_components/auto_backup/*.py` : dans les motifs de `ruff`, `*` traverse
+# les séparateurs de chemin, et un tel motif exempterait aussi le code propre au
+# fork rangé dans `custom_components/auto_backup/destinations/`, qui doit rester
+# soumis à toutes les règles et au formatage. `tests/test_project_tooling.py`
+# vérifie que cette liste correspond exactement aux modules upstream livrés.
+"custom_components/auto_backup/__init__.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/binary_sensor.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/button.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/config_flow.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/const.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/handlers.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/helpers.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/manager.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
+"custom_components/auto_backup/sensor.py" = ["E501", "W", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.format]
-# Même raison : le code upstream n'est pas reformaté.
-exclude = ["custom_components/auto_backup/**"]
+# Même raison : le code upstream n'est pas reformaté, celui du fork l'est.
+exclude = [
+    "custom_components/auto_backup/__init__.py",
+    "custom_components/auto_backup/binary_sensor.py",
+    "custom_components/auto_backup/button.py",
+    "custom_components/auto_backup/config_flow.py",
+    "custom_components/auto_backup/const.py",
+    "custom_components/auto_backup/handlers.py",
+    "custom_components/auto_backup/helpers.py",
+    "custom_components/auto_backup/manager.py",
+    "custom_components/auto_backup/sensor.py",
+]
