@@ -109,9 +109,22 @@ OAUTH_TOKEN_TIMEOUT = 30
 # destination doit être ré-autorisée.
 ISSUE_REAUTH_PREFIX = "reauthentification_requise_"
 
-### FOURNISSEURS DE DESTINATIONS (issue #13) ###
-# Données propres au fournisseur, persistées avec la destination : ce qu'il a appris
-# du compte autorisé et qui n'est ni un identifiant d'application ni un jeton —
-# l'adresse du compte Google Drive, par exemple. Facultatif : une destination qui
+# Identifiant de la destination fictive portée par le flux d'ajout : l'autorisation
+# précède la création de la destination, et l'implémentation OAuth2 a besoin d'un
+# identifiant. Il est partagé par le flux (`destinations/flow.py`), qui le produit,
+# et par le signalement de ré-authentification (`destinations/reauth.py`), qui doit
+# le reconnaître pour ne pas alerter sur une destination qui n'existe pas. Aucune
+# destination réelle ne peut le porter : `_identifiant_disponible()` l'exclut.
+IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
+
+### FOURNISSEURS DE DESTINATION RÉELS (issues #10 et #13) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Les fournisseurs livrés vivent dans
+# `destinations/providers/` et s'enregistrent par `enregistrer_les_fournisseurs()`.
+
+# Données **non secrètes** renvoyées par le fournisseur au moment de l'autorisation et
+# conservées avec la destination : identifiant du compte Dropbox (`account_id`) ou
+# adresse du compte Google Drive (`account_email`), par exemple. Elles évitent de
+# rappeler l'API pour savoir à quel compte une destination est rattachée, et servent à
+# détecter qu'une ré-autorisation a changé de compte. Facultatif : une destination qui
 # n'en a pas est persistée exactement comme avant.
 CONF_PROVIDER_DATA = "provider_data"

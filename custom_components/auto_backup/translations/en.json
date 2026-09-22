@@ -34,6 +34,7 @@
             "jeton_invalide": "The provider returned an unusable token: the destination was not created.",
             "fournisseur_invalide": "The chosen provider is no longer available or does not support the requested authorisation.",
             "configuration_invalide": "The destination configuration could not be saved.",
+            "autorisation_annulee": "Authorisation was refused or cancelled at the provider: no destination was created and nothing was changed. You can start “Add a destination” again whenever you like.",
             "echec_fournisseur": "The provider rejected the first request: {detail}."
         },
         "error": {

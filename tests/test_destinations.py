@@ -625,7 +625,7 @@ def test_les_evenements_du_fork_sont_prefixes_et_distincts() -> None:
         assert evenement.startswith("auto_backup")
 
 
-### Données propres au fournisseur (issue #13) ###
+### Données du compte du fournisseur (issues #10 et #13) ###
 
 
 def test_les_donnees_de_fournisseur_sont_absentes_par_defaut() -> None:
@@ -634,6 +634,36 @@ def test_les_donnees_de_fournisseur_sont_absentes_par_defaut() -> None:
 
     assert config.provider_data is None
     assert CONF_PROVIDER_DATA not in config.as_dict()
+
+
+def test_des_donnees_de_fournisseur_vides_ne_sont_pas_persistees() -> None:
+    """Un fournisseur qui ne décrit pas le compte n'ajoute aucune clé creuse."""
+    config = DestinationConfig(
+        destination_id="d1",
+        provider=PROVIDER_FACTICE,
+        name="Destination",
+        provider_data={},
+    )
+
+    assert config.provider_data is None
+    assert CONF_PROVIDER_DATA not in config.as_dict()
+
+
+def test_les_donnees_du_fournisseur_sont_validees() -> None:
+    """`provider_data` n'accepte que des scalaires JSON sous des clés textuelles."""
+    config = DestinationConfig(
+        destination_id="d1",
+        provider=PROVIDER_FACTICE,
+        name="Destination",
+        provider_data={"account_id": "dbid:factice", "verifie": True, "quota": 2},
+    )
+
+    assert config.provider_data == {
+        "account_id": "dbid:factice",
+        "verifie": True,
+        "quota": 2,
+    }
+    assert config.as_dict()[CONF_PROVIDER_DATA] == config.provider_data
 
 
 def test_les_donnees_de_fournisseur_sont_relues_et_copiees() -> None:
@@ -669,8 +699,12 @@ def test_les_donnees_de_fournisseur_sont_masquees_dans_les_journaux() -> None:
     "donnees",
     [
         pytest.param("pas un dictionnaire", id="chaine"),
+        pytest.param("dbid:factice", id="scalaire_nu"),
+        pytest.param(["dbid:factice"], id="liste"),
         pytest.param({"compte": {"email": "a@exemple.test"}}, id="valeur_imbriquee"),
+        pytest.param({"account_id": {"imbrique": "interdit"}}, id="compte_imbrique"),
         pytest.param({"compte": ["a@exemple.test"]}, id="valeur_liste"),
+        pytest.param({"": "clé vide"}, id="cle_vraiment_vide"),
         pytest.param({"  ": "vide"}, id="cle_vide"),
         pytest.param({1: "cle_non_textuelle"}, id="cle_non_textuelle"),
         pytest.param({f"cle_{i}": i for i in range(21)}, id="trop_de_cles"),

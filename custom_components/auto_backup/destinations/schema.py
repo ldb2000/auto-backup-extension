@@ -183,10 +183,11 @@ def chemin_de_dossier(valeur: Any) -> str:
 
 RETENTION_SCHEMA = vol.Any(None, entier_strictement_positif)
 
-# Bornes des données de fournisseur (`provider_data`, issue #13). Ce champ
-# accueille le peu qu'un fournisseur a besoin de retenir sur le compte autorisé
-# — l'adresse du compte Google, par exemple. Il n'a pas vocation à devenir un
-# fourre-tout : ces bornes l'empêchent de grossir sans qu'on le décide.
+# Bornes des données de fournisseur (`provider_data`, issues #10 et #13). Ce
+# champ accueille le peu qu'un fournisseur a besoin de retenir sur le compte
+# autorisé — l'identifiant du compte Dropbox ou l'adresse du compte Google, par
+# exemple. Il n'a pas vocation à devenir un fourre-tout : ces bornes l'empêchent
+# de grossir sans qu'on le décide.
 MAX_CLES_FOURNISSEUR = 20
 MAX_LONGUEUR_VALEUR_FOURNISSEUR = 500
 
@@ -266,8 +267,9 @@ DESTINATION_SCHEMA = vol.Schema(
         vol.Optional(CONF_CLIENT_ID): vol.Any(None, texte_non_vide),
         vol.Optional(CONF_CLIENT_SECRET): vol.Any(None, texte_non_vide),
         vol.Optional(CONF_TOKEN): vol.Any(None, TOKEN_SCHEMA),
-        # Données propres au fournisseur (issue #13), elles aussi sans valeur
-        # par défaut : une destination qui n'en a pas est persistée comme avant.
+        # Description du compte autorisé (issues #10 et #13), elle aussi sans
+        # valeur par défaut : une destination qui n'en a pas est persistée
+        # exactement comme avant.
         vol.Optional(CONF_PROVIDER_DATA): vol.Any(None, donnees_de_fournisseur),
     }
 )

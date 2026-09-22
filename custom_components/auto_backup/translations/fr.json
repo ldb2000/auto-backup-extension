@@ -34,6 +34,7 @@
             "jeton_invalide": "Le fournisseur a renvoyé un jeton inexploitable : la destination n'a pas été créée.",
             "fournisseur_invalide": "Le fournisseur choisi n'est plus disponible ou ne gère pas l'autorisation demandée.",
             "configuration_invalide": "La configuration des destinations n'a pas pu être enregistrée.",
+            "autorisation_annulee": "L'autorisation a été refusée ou annulée chez le fournisseur : aucune destination n'a été créée, et rien n'a été modifié. Vous pouvez relancer « Ajouter une destination » quand vous le souhaitez.",
             "echec_fournisseur": "Le fournisseur a refusé la première requête : {detail}."
         },
         "error": {

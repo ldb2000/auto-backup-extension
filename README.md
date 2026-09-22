@@ -47,16 +47,20 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
 
-**Google Drive** est le premier fournisseur livré : l'ajout d'une destination le propose
-directement, demande les identifiants de votre application Google Cloud, puis vous conduit à
-l'écran de consentement. Il ne demande que la portée `drive.file`, qui limite son accès aux
-seuls fichiers qu'il a créés. La marche à suivre complète — projet Google Cloud, activation de
-l'API Drive, écran de consentement, identifiants « Application Web » et URI de redirection — est
-décrite dans [Connecter Google Drive](docs/destinations/google-drive.md). Google exigeant une URI
-de redirection HTTPS sur un domaine public, une instance sans URL externe publique ne peut pas
-connecter ce fournisseur.
+**Dropbox** et **Google Drive** sont les deux fournisseurs livrés : l'ajout d'une destination
+les propose directement.
 
-Dropbox viendra s'enregistrer dans ce même parcours.
+- **Dropbox** : création de l'application Dropbox, type d'accès conseillé, portées à cocher et
+  URI de redirection à déclarer sont décrits dans
+  [`docs/destinations/dropbox.md`](docs/destinations/dropbox.md).
+- **Google Drive** : projet Google Cloud, activation de l'API Drive, écran de consentement,
+  identifiants « Application Web » et URI de redirection sont décrits dans
+  [Connecter Google Drive](docs/destinations/google-drive.md). Le fournisseur ne demande que la
+  portée `drive.file`, qui limite son accès aux seuls fichiers qu'il a créés. Google exigeant une
+  URI de redirection HTTPS sur un domaine public, une instance sans URL externe publique ne peut
+  pas le connecter.
+
+Le téléversement et la purge distante suivront.
 
 ## Développement
 

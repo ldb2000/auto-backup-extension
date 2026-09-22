@@ -54,14 +54,18 @@ def async_setup_destinations(
 ) -> DestinationManager:
     """Charge les destinations de l'entrée et les expose dans `hass.data`.
 
-    Les fournisseurs livrés (Google Drive, issue #13) sont enregistrés ici, au
-    démarrage de l'entrée : le registre est ainsi peuplé avant toute lecture des
-    destinations persistées et avant l'ouverture du flux d'options.
+    C'est **le point unique d'enregistrement des fournisseurs livrés** (Dropbox
+    et Google Drive, issues #10 et #13) : le registre est peuplé avant toute
+    lecture des destinations persistées, avant que la moindre destination ne
+    soit instanciée et avant que le flux d'options ne propose un choix. L'appel
+    est idempotent, l'entrée pouvant être rechargée autant de fois que
+    nécessaire.
 
     Le gestionnaire obtenu suit les options de l'entrée : il se recharge quand
     elles changent et disparaît de `hass.data` au déchargement de l'entrée.
     """
     enregistrer_les_fournisseurs()
+
     manager = DestinationManager(hass)
     manager.async_load(async_destination_configs(entry))
     hass.data[DATA_DESTINATIONS] = manager

@@ -106,11 +106,15 @@ def _valide_jeton(valeur: Any) -> dict[str, Any] | None:
         raise DestinationConfigError(f"token invalide : {err}") from err
 
 
-def _valide_donnees_de_fournisseur(valeur: Any) -> dict[str, Any] | None:
-    """Valide les données propres au fournisseur et les renvoie copiées, ou `None`.
+def _valide_donnees_du_fournisseur(valeur: Any) -> dict[str, Any] | None:
+    """Valide les données de compte renvoyées par le fournisseur, ou `None`.
 
-    Comme pour le jeton, la copie est délibérée : la configuration est immuable
-    et ne doit pas partager son dictionnaire avec les options de l'entrée.
+    Un dictionnaire vide vaut `None` : un fournisseur qui ne décrit pas le compte
+    autorisé ne doit pas faire apparaître une clé creuse dans les options. Comme
+    pour le jeton, la copie est délibérée : la configuration est immuable et ne
+    doit pas partager son dictionnaire avec les options de l'entrée. Les bornes
+    (nombre de clés, longueur des valeurs, scalaires JSON) vivent dans
+    `donnees_de_fournisseur()`, partagée avec le schéma.
     """
     if valeur is None:
         return None
@@ -118,6 +122,8 @@ def _valide_donnees_de_fournisseur(valeur: Any) -> dict[str, Any] | None:
         raise DestinationConfigError(
             "provider_data doit être un dictionnaire ou être absent"
         )
+    if not valeur:
+        return None
     try:
         return donnees_de_fournisseur(dict(valeur))
     except (vol.Invalid, TypeError, ValueError) as err:
@@ -129,12 +135,15 @@ def _masque(valeur: Any) -> str | None:
     return None if valeur is None else VALEUR_MASQUEE
 
 
-def _cles_masquees(donnees: Mapping[str, Any] | None) -> dict[str, str] | None:
+def _cles_sans_valeurs(
+    donnees: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
     """Réduit un dictionnaire à ses clés : la structure sans aucune valeur.
 
     Savoir qu'un `refresh_token` existe aide au diagnostic ; sa valeur, jamais.
-    Le même traitement s'applique aux données de fournisseur : elles ne portent
-    pas de secret, mais peuvent identifier une personne (adresse du compte).
+    La même règle s'applique aux données de compte du fournisseur : elles ne
+    portent pas de secret, mais un `account_id` Dropbox comme l'adresse d'un
+    compte Google identifie une personne, il n'a pas à figurer dans un journal.
     """
     if donnees is None:
         return None
@@ -165,12 +174,13 @@ class DestinationConfig:
     quel pour bâtir un chemin distant. La règle unique vit dans
     `chemin_de_dossier()`.
 
-    `provider_data` (issue #13) porte ce que le fournisseur a appris du compte
-    autorisé et qui n'est ni un identifiant d'application ni un jeton :
-    l'adresse du compte Google Drive, par exemple. Facultatif et borné
-    (cf. `donnees_de_fournisseur()`), il n'est pas persisté quand il est absent,
-    et ses valeurs sont masquées comme celles du jeton : ce ne sont pas des
-    secrets, mais elles peuvent identifier une personne.
+    `provider_data` (issues #10 et #13) décrit le compte autorisé tel que le
+    fournisseur l'a renvoyé — `{"account_id": "dbid:..."}` pour Dropbox,
+    `{"account_email": "..."}` pour Google Drive. Ce ne sont pas des secrets
+    d'authentification, mais des identifiants de personne : ils sont persistés
+    en clair et masqués dans les journaux, comme le jeton. Le champ est
+    facultatif et borné (cf. `donnees_de_fournisseur()`) : il n'est pas persisté
+    quand il est absent ou vide.
     """
 
     destination_id: str
@@ -201,7 +211,9 @@ class DestinationConfig:
             )
         object.__setattr__(self, "token", _valide_jeton(self.token))
         object.__setattr__(
-            self, "provider_data", _valide_donnees_de_fournisseur(self.provider_data)
+            self,
+            "provider_data",
+            _valide_donnees_du_fournisseur(self.provider_data),
         )
 
     @property
@@ -243,7 +255,7 @@ class DestinationConfig:
         sans OAuth2 est persistée exactement comme avant l'issue #7.
 
         Avec `masquer=True`, les secrets (`client_id`, `client_secret`, jeton)
-        sont remplacés par `VALEUR_MASQUEE`, et le jeton comme les données de
+        sont remplacés par `VALEUR_MASQUEE`, et le jeton comme les données du
         fournisseur sont réduits à leurs clés : c'est la seule forme qui peut
         être journalisée ou affichée.
         """
@@ -263,11 +275,11 @@ class DestinationConfig:
             )
         if self.token is not None:
             donnees[CONF_TOKEN] = (
-                _cles_masquees(self.token) if masquer else dict(self.token)
+                _cles_sans_valeurs(self.token) if masquer else dict(self.token)
             )
         if self.provider_data is not None:
             donnees[CONF_PROVIDER_DATA] = (
-                _cles_masquees(self.provider_data)
+                _cles_sans_valeurs(self.provider_data)
                 if masquer
                 else dict(self.provider_data)
             )
@@ -282,8 +294,8 @@ class DestinationConfig:
             f"retention_count={self.retention_count!r}, "
             f"client_id={_masque(self.client_id)!r}, "
             f"client_secret={_masque(self.client_secret)!r}, "
-            f"token={_cles_masquees(self.token)!r}, "
-            f"provider_data={_cles_masquees(self.provider_data)!r})"
+            f"token={_cles_sans_valeurs(self.token)!r}, "
+            f"provider_data={_cles_sans_valeurs(self.provider_data)!r})"
         )
 
 

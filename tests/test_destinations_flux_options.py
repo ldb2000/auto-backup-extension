@@ -32,6 +32,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.setup import async_setup_component
+from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 from yarl import URL
@@ -43,6 +44,7 @@ from custom_components.auto_backup.const import (
     CONF_DESTINATIONS,
     CONF_FOLDER,
     CONF_PROVIDER,
+    CONF_PROVIDER_DATA,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     DATA_DESTINATIONS,
@@ -56,13 +58,20 @@ from custom_components.auto_backup.destinations import (
     DestinationManager,
     DestinationOAuth2Implementation,
     identifiant_du_probleme,
+    list_providers,
     register_provider,
     unregister_provider,
 )
 from custom_components.auto_backup.destinations.flow import (
+    IDENTIFIANT_PROVISOIRE,
+    GestionDesDestinationsMixin,
     _identifiant_disponible,
     _libelle_du_fournisseur,
     _retention,
+)
+from custom_components.auto_backup.destinations.providers.dropbox import (
+    LIBELLE_DROPBOX,
+    PROVIDER_DROPBOX,
 )
 from custom_components.auto_backup.destinations.providers.google_drive import (
     LIBELLE_GOOGLE_DRIVE,
@@ -83,6 +92,10 @@ from destinations_factices import (
 )
 
 URL_EXTERNE = "https://auto-backup.exemple.test"
+
+# Données de compte telles qu'un fournisseur les renvoie à l'autorisation
+# (issue #10) : elles décrivent le compte rattaché à la destination, sans secret.
+DONNEES_DU_COMPTE = {"account_id": "compte-factice-0000"}
 
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
@@ -202,10 +215,10 @@ async def test_sans_fournisseur_enregistre_l_ajout_est_impossible(
 ) -> None:
     """Registre vide : le flux le dit au lieu d'afficher un formulaire vide.
 
-    Depuis l'issue #13, l'intégration livre un fournisseur réel (Google Drive) :
-    le registre n'est donc jamais vide en pratique. Le cas reste possible — un
-    fournisseur retiré, un registre nettoyé par un test — et le flux doit
-    continuer de l'annoncer proprement.
+    Le cas ne se produit plus en fonctionnement normal depuis que l'intégration
+    livre des fournisseurs réels (Dropbox #10, Google Drive #13) : le registre
+    est simulé vide pour éprouver la branche, qui reste utile à une installation
+    dont un fournisseur aurait été retiré.
     """
     with patch(
         "custom_components.auto_backup.destinations.flow.list_providers",
@@ -227,19 +240,22 @@ async def test_le_choix_du_fournisseur_liste_le_registre(
 ) -> None:
     """Critère : les fournisseurs proposés sont ceux du registre.
 
-    Les fournisseurs factices y côtoient Google Drive, enregistré par
-    l'intégration elle-même (issue #13), qui s'affiche sous son libellé.
+    Dropbox (#10) et Google Drive (#13), enregistrés par l'intégration
+    elle-même, y figurent sous leur libellé lisible ; les fournisseurs factices,
+    qui n'en déclarent pas, restent affichés sous leur identifiant technique.
     """
     resultat = await ouvrir_les_options(entree.entry_id, "ajouter_destination")
 
     selecteur = resultat["data_schema"].schema[CONF_PROVIDER]
-    proposes = {
+    libelles = {
         option["value"]: option["label"] for option in selecteur.config["options"]
     }
-    assert {PROVIDER_FACTICE, PROVIDER_OAUTH_FACTICE} <= set(proposes)
+    assert list(libelles) == list(list_providers())
+    assert {PROVIDER_FACTICE, PROVIDER_OAUTH_FACTICE} <= set(libelles)
     # Un fournisseur sans libellé garde son identifiant technique.
-    assert proposes[PROVIDER_FACTICE] == PROVIDER_FACTICE
-    assert proposes[PROVIDER_GOOGLE_DRIVE] == LIBELLE_GOOGLE_DRIVE
+    assert libelles[PROVIDER_FACTICE] == PROVIDER_FACTICE
+    assert libelles[PROVIDER_DROPBOX] == LIBELLE_DROPBOX
+    assert libelles[PROVIDER_GOOGLE_DRIVE] == LIBELLE_GOOGLE_DRIVE
 
 
 ### Parcours complet d'ajout ###
@@ -432,15 +448,33 @@ async def test_une_autorisation_refusee_interrompt_le_flux(
     entree: MockConfigEntry,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """L'utilisateur refuse l'accès : rien n'est enregistré, le motif est rendu."""
+    """L'utilisateur refuse l'accès : rien n'est enregistré, le motif est rendu.
+
+    `access_denied` reçoit un message dédié (issue #10) : montrer le code brut
+    n'apprend rien à l'utilisateur qui vient de fermer la page d'autorisation.
+    """
     resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
 
     resultat = await _retour_du_fournisseur(hass, resultat, error="access_denied")
 
     assert resultat["type"] is FlowResultType.ABORT
-    assert resultat["reason"] == "autorisation_refusee"
-    assert resultat["description_placeholders"] == {"erreur": "access_denied"}
+    assert resultat["reason"] == "autorisation_annulee"
     assert CONF_DESTINATIONS not in entree.options
+
+
+async def test_un_refus_inconnu_est_rendu_tel_quel(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Un code d'erreur non répertorié reste cité dans le message générique."""
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+
+    resultat = await _retour_du_fournisseur(hass, resultat, error="server_error")
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "autorisation_refusee"
+    assert resultat["description_placeholders"] == {"erreur": "server_error"}
 
 
 async def test_un_echec_d_echange_du_code_interrompt_le_flux(
@@ -598,7 +632,7 @@ async def test_la_vue_de_retour_transmet_un_refus(
 
     suite = await hass.config_entries.options.async_configure(resultat["flow_id"])
     assert suite["type"] is FlowResultType.ABORT
-    assert suite["reason"] == "autorisation_refusee"
+    assert suite["reason"] == "autorisation_annulee"
 
 
 ### Ré-autorisation ###
@@ -655,6 +689,55 @@ async def test_la_reautorisation_remplace_le_jeton_et_efface_le_probleme(
         )
         is None
     )
+
+
+async def test_la_reautorisation_conserve_les_donnees_du_compte(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Ré-autoriser ne remplace que les champs d'autorisation.
+
+    Les données du compte (`provider_data`, issue #10) décrivent la destination,
+    pas son autorisation : les perdre en ré-autorisant reviendrait à oublier à
+    quel compte la destination est rattachée, sans rien signaler à l'utilisateur.
+    """
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={
+            CONF_DESTINATIONS: [config_oauth_factice(provider_data=DONNEES_DU_COMPTE)]
+        },
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    resultat = await ouvrir_les_options(entree.entry_id, "reautoriser_destination")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_DESTINATION_ID: "destination_oauth"}
+    )
+    resultat = await _retour_du_fournisseur(
+        hass, resultat, code=CODE_AUTORISATION_FACTICE
+    )
+    await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_TOKEN]["access_token"] == "acces-factice-2"
+    assert persistee[CONF_PROVIDER_DATA] == DONNEES_DU_COMPTE
+    # Et le reste de la configuration est intact.
+    attendue = config_oauth_factice()
+    assert persistee[CONF_NAME] == attendue[CONF_NAME]
+    assert persistee[CONF_FOLDER] == attendue[CONF_FOLDER]
+    assert persistee[CONF_RETENTION_DAYS] == attendue[CONF_RETENTION_DAYS]
+    assert persistee[CONF_RETENTION_COUNT] == attendue[CONF_RETENTION_COUNT]
 
 
 async def test_sans_destination_oauth_la_reautorisation_est_impossible(
@@ -855,6 +938,16 @@ def test_un_fournisseur_sans_libelle_garde_son_identifiant() -> None:
     )
 
 
+def test_le_libelle_du_fournisseur_retombe_sur_l_identifiant() -> None:
+    """Sans fournisseur choisi, ou s'il a disparu, l'affichage reste correct."""
+    flux = GestionDesDestinationsMixin()
+
+    assert flux._libelle_du_fournisseur() == ""
+
+    flux._provider = "fournisseur_disparu"
+    assert flux._libelle_du_fournisseur() == "fournisseur_disparu"
+
+
 def test_un_identifiant_deja_pris_recoit_un_suffixe() -> None:
     """Deux destinations de noms voisins gardent des identifiants distincts."""
     premier = _identifiant_disponible("Mon nuage", [])
@@ -863,6 +956,22 @@ def test_un_identifiant_deja_pris_recoit_un_suffixe() -> None:
     assert premier == "mon_nuage"
     assert second.startswith("mon_nuage_")
     assert second != premier
+
+
+def test_l_identifiant_de_la_destination_provisoire_n_est_jamais_attribue() -> None:
+    """Aucune destination réelle ne peut porter l'identifiant du flux d'ajout.
+
+    « Autorisation en cours » se translittère exactement comme la destination
+    fictive portée pendant l'autorisation. Si une destination réelle recevait cet
+    identifiant, le nettoyage de fin d'ajout effacerait son signalement de
+    ré-authentification : elle resterait muette au lieu d'être réparable.
+    """
+    assert slugify("Autorisation en cours") == IDENTIFIANT_PROVISOIRE
+
+    identifiant = _identifiant_disponible("Autorisation en cours", [])
+
+    assert identifiant != IDENTIFIANT_PROVISOIRE
+    assert identifiant.startswith(f"{IDENTIFIANT_PROVISOIRE}_")
 
 
 def test_un_nom_sans_caractere_translitterable_reste_identifiable() -> None:
