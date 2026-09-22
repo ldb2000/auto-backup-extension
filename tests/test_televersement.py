@@ -16,13 +16,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -34,6 +34,7 @@ from custom_components.auto_backup.const import (
     ATTR_DESTINATION,
     ATTR_DESTINATION_NAME,
     ATTR_ERROR,
+    ATTR_EXCLUDE,
     ATTR_SIZE,
     ATTR_SLUG,
     ATTR_UPLOAD_TO,
@@ -54,6 +55,7 @@ from custom_components.auto_backup.const import (
 )
 from custom_components.auto_backup.destinations import DestinationError
 from custom_components.auto_backup.destinations.upload import (
+    DELAI_CONFIRMATION_DEMANDE,
     ErreurLectureSauvegarde,
     async_ouvrir_sauvegarde,
     async_prepare_upload,
@@ -503,7 +505,10 @@ async def test_sans_upload_to_le_comportement_reste_celui_de_l_upstream(
 
 
 async def test_un_echec_de_televersement_laisse_la_sauvegarde_locale_intacte(
-    hass: HomeAssistant, instance: _Instance, fichier_de_sauvegarde: Path
+    hass: HomeAssistant,
+    instance: _Instance,
+    fichier_de_sauvegarde: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Un échec du fournisseur est signalé sans toucher à la sauvegarde locale."""
     echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
@@ -512,19 +517,28 @@ async def test_un_echec_de_televersement_laisse_la_sauvegarde_locale_intacte(
         "réseau indisponible"
     )
 
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_BACKUP,
-        {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
-        blocking=True,
-    )
-    await hass.async_block_till_done(wait_background_tasks=True)
+    with caplog.at_level("ERROR"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_BACKUP,
+            {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
+            blocking=True,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert not succes
     assert len(echecs) == 1
     assert echecs[0].data[ATTR_SLUG] == SLUG
     assert echecs[0].data[ATTR_DESTINATION] == "destination_test"
     assert echecs[0].data[ATTR_ERROR] == "réseau indisponible"
+
+    # L'échec est aussi journalisé, avec le slug et le message d'erreur.
+    assert any(
+        record.levelname == "ERROR"
+        and SLUG in record.message
+        and "réseau indisponible" in record.message
+        for record in caplog.records
+    )
 
     assert fichier_de_sauvegarde.read_bytes() == CONTENU_SAUVEGARDE
     instance.creation.assert_awaited_once()
@@ -563,6 +577,32 @@ async def test_l_echec_d_une_destination_n_empeche_pas_les_autres(
         "fonctionnelle"
     ]
     assert instance.destination("fonctionnelle").octets_recus == CONTENU_SAUVEGARDE
+
+
+async def test_le_televersement_ne_bloque_pas_l_appel_de_service(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Le téléversement tourne en tâche de fond : l'appel de service revient
+    sans attendre sa fin, même invoqué en mode bloquant.
+    """
+    instance = await _demarrer(hass, fichier_de_sauvegarde)
+    instance.destination("destination_test").attente_secondes = 0.2
+
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+
+    # L'appel bloquant est revenu : la sauvegarde est créée, mais le
+    # téléversement, lui, tourne encore en tâche de fond.
+    assert not succes
+
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert len(succes) == 1
 
 
 async def test_un_televersement_trop_long_est_interrompu(
@@ -769,6 +809,72 @@ async def test_une_demande_non_confirmee_n_est_jamais_televersee(
 
     assert len(debuts) == 1
     assert not coordinateur.demandes_en_attente
+
+
+async def test_une_demande_orpheline_expire_apres_30_secondes(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Passé `DELAI_CONFIRMATION_DEMANDE`, une demande jamais confirmée est
+    oubliée : aucune sauvegarde, même homonyme, ne peut plus la réclamer.
+    """
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    coordinateur = hass.data[DATA_UPLOADS]
+
+    with patch(
+        "custom_components.auto_backup.destinations.upload.monotonic",
+        return_value=1_000.0,
+    ):
+        demande = coordinateur.async_enregistrer(
+            "Sauvegarde orpheline", ("destination_test",)
+        )
+    assert coordinateur.demandes_en_attente == [demande]
+
+    with patch(
+        "custom_components.auto_backup.destinations.upload.monotonic",
+        return_value=1_000.0 + DELAI_CONFIRMATION_DEMANDE + 1,
+    ):
+        hass.bus.async_fire(EVENT_BACKUP_START, {ATTR_NAME: "Sauvegarde orpheline"})
+        hass.bus.async_fire(
+            EVENT_BACKUP_SUCCESSFUL,
+            {ATTR_NAME: "Sauvegarde orpheline", ATTR_SLUG: SLUG},
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts
+    assert not coordinateur.demandes_en_attente
+
+
+async def test_une_sauvegarde_homonyme_sans_upload_to_n_est_pas_televersee(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Une demande orpheline ne doit jamais être récupérée par une sauvegarde
+    homonyme distincte, créée sans `upload_to`.
+
+    L'orphelinage est produit ici par un chemin de production réel : sur Core,
+    `validate_backup_config()` refuse `exclude` (fonctionnalité réservée à
+    Supervisor) *après* que `async_prepare_upload()` a déjà enregistré la
+    demande, mais *avant* que `auto_backup.backup_start` ne soit émis — la
+    demande reste donc enregistrée sans jamais être confirmée. Comme Core nomme
+    toutes les sauvegardes sans nom explicite de façon identique
+    (`generate_backup_name()`), un appel parfaitement normal, sans
+    `upload_to`, obtient ensuite le même nom de corrélation.
+    """
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_BACKUP_FULL,
+            {ATTR_UPLOAD_TO: "destination_test", ATTR_EXCLUDE: {}},
+            blocking=True,
+        )
+
+    await hass.services.async_call(DOMAIN, SERVICE_BACKUP, {}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts
+    assert not succes
 
 
 async def test_une_chaine_unique_vaut_une_destination(
