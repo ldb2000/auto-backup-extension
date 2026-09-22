@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -867,6 +867,26 @@ async def test_les_operations_de_sauvegarde_viennent_ensuite(
         await appel(*arguments, **nommes)
 
     assert issue in str(erreur.value)
+
+
+async def test_le_televersement_accepte_la_forme_du_coordinateur(
+    hass: HomeAssistant, entree_google: MockConfigEntry
+) -> None:
+    """Le stub suit la signature du socle depuis l'issue #8 (flux, taille, nom).
+
+    Le coordinateur (`destinations/upload.py`) appelle sans `source` et avec
+    `stream`, `size` et `filename` : cet appel doit atteindre le corps de la
+    méthode — et donc échouer sur `NotImplementedError`, pas sur `TypeError`.
+    """
+    destination = _destination(hass)
+
+    async def flux() -> AsyncIterator[bytes]:
+        yield b""
+
+    with pytest.raises(NotImplementedError, match="#14"):
+        await destination.async_upload(
+            None, name="ha", slug="abc", stream=flux(), size=0, filename="ha.tar"
+        )
 
 
 ### Journaux ###

@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
@@ -372,13 +372,22 @@ class GoogleDriveDestination(RemoteDestination):
 
     async def async_upload(
         self,
-        source: Path | str,
+        source: Path | str | None = None,
         *,
         name: str,
         slug: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        stream: AsyncIterator[bytes] | None = None,
+        size: int | None = None,
+        filename: str | None = None,
     ) -> RemoteBackup:
-        """Téléversement : implémenté par l'issue #14."""
+        """Téléversement : implémenté par l'issue #14.
+
+        La signature suit celle du socle depuis l'issue #8 : le coordinateur
+        (`destinations/upload.py`) appelle toujours avec `stream`, `size` et
+        `filename`, et ne fournit `source` que sur Home Assistant Core. Elle est
+        déclarée ici pour que #14 n'ait que le corps à écrire.
+        """
         raise NotImplementedError(
             "le téléversement vers Google Drive est implémenté par l'issue #14"
         )
