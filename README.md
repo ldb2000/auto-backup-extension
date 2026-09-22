@@ -1,5 +1,7 @@
 # auto-backup-extension
 
+[![CI](https://github.com/ldb2000/auto-backup-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/ldb2000/auto-backup-extension/actions/workflows/ci.yml)
+
 Objectif : reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter la possibilité de sauvegarder directement sur Dropbox et Google Drive. 
 
 ## Fork et licence
@@ -56,6 +58,13 @@ identique à l'upstream (voir [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
 couverture de `custom_components/auto_backup`. Les fixtures disponibles, la structure des
 tests et les tests réseau (`--tests-reseau`) sont décrits dans
 [`docs/tests.md`](docs/tests.md).
+
+### Intégration continue
+
+Chaque pull request vers `main` déclenche le workflow [`ci.yml`](.github/workflows/ci.yml) :
+lint (`ruff`), tests (`pytest`) et validation Home Assistant (`hassfest`) / HACS. Les jobs,
+les versions d'actions épinglées et la façon de rejouer la CI en local sont décrits dans
+[`docs/ci.md`](docs/ci.md). Les tests marqués `network` n'y sont pas exécutés.
 
 ## Travailler avec l'équipe d'agents
 
