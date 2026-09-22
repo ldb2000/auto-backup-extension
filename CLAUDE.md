@@ -1,19 +1,19 @@
-# Projet {{PROJECT_NAME}}
+# Projet auto-backup-extension
 
 ## Contexte métier
-{{PROJECT_CONTEXT}}
+Reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter la possibilité de sauvegarder directement sur dropbox et google drive
 
 ## Stack
-- Backend : {{STACK_BACKEND}}
-- Frontend : {{STACK_FRONTEND}}
-- BDD : {{STACK_DB}}
+- Backend : à définir
+- Frontend : à définir
+- BDD : à définir
 
 ## Commandes
-- Installer : `{{CMD_INSTALL}}`
-- Tests unitaires : `{{CMD_TEST}}`
-- Tests e2e : `{{CMD_TEST_E2E}}`
-- Lint : `{{CMD_LINT}}`
-- Build : `{{CMD_BUILD}}`
+- Installer : `npm ci`
+- Tests unitaires : `npm test`
+- Tests e2e : `npm run test:e2e`
+- Lint : `npm run lint`
+- Build : `npm run build`
 
 ## Conventions
 - Branches : `issue-<num>-<slug>`

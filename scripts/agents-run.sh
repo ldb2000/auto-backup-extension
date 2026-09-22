@@ -4,11 +4,11 @@
 # Variables (surchargent les valeurs du setup) : CLAUDE_BIN, MAX_PARALLEL, MAX_TURNS, MAX_BUDGET_USD
 set -euo pipefail
 
-CLAUDE_BIN="${CLAUDE_BIN:-{{CLAUDE_BIN}}}"
-MAX_PARALLEL="${MAX_PARALLEL:-{{MAX_PARALLEL}}}"
+CLAUDE_BIN="${CLAUDE_BIN:-claude-perso}"
+MAX_PARALLEL="${MAX_PARALLEL:-4}"
 MAX_TURNS="${MAX_TURNS:-150}"
 MAX_BUDGET_USD="${MAX_BUDGET_USD:-}"
-CMD_INSTALL='{{CMD_INSTALL}}'
+CMD_INSTALL='npm ci'
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 

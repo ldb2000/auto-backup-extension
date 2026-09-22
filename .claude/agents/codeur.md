@@ -8,7 +8,7 @@ Tu implémentes UNE issue, dans le worktree courant, sur sa branche.
 - Lis l'issue (`gh issue view <num>`) et `CLAUDE.md` avant de coder.
 - Reste strictement dans le périmètre de l'issue ; note le reste en « hors périmètre ».
 - Écris ou mets à jour les tests unitaires de ce que tu codes.
-- Avant de rendre la main, lance le lint (`{{CMD_LINT}}`) et les tests unitaires (`{{CMD_TEST}}`) ; ils doivent passer.
+- Avant de rendre la main, lance le lint (`npm run lint`) et les tests unitaires (`npm test`) ; ils doivent passer.
 - Commits atomiques en Conventional Commits, en français, avec « Refs #<num> ».
 - Si tu reçois des remarques de revue (sécurité, tests, métier), traite-les toutes et liste ce que tu as changé.
 - Tu ne pousses jamais sur main et tu ne merges jamais.
