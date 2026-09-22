@@ -5,8 +5,9 @@
 - **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle),
   [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et
   interface), [#10](https://github.com/ldb2000/auto-backup-extension/issues/10) (fournisseur
-  Dropbox) et [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement
-  après création) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+  Dropbox), [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement
+  après création) et [#9](https://github.com/ldb2000/auto-backup-extension/issues/9) (rétention
+  et purge distantes) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -580,6 +581,106 @@ attendant l'unicité des noms promise par l'issue #7.
 Sans `upload_to`, rien de tout cela ne se déclenche : la clé est absente, aucune demande n'est
 enregistrée, aucun événement n'est émis, et le déroulement est exactement celui de l'upstream.
 
+## Rétention distante (issue #9)
+
+La rétention distante supprime, chez le fournisseur, les sauvegardes qui dépassent la rétention
+configurée pour la destination (`retention_days`, `retention_count`). Tout vit dans
+`destinations/retention.py` ; `manager.py`, qui porte la rétention **locale** de l'upstream
+(`keep_days` et son registre d'expiration `snapshots_expiry`), n'est pas modifié.
+
+### Reconnaître ses propres sauvegardes : registre *ou* marqueur
+
+C'est la décision structurante de cette issue. Le dossier distant appartient à l'utilisateur : il
+peut y avoir déposé ses propres fichiers, ou y faire écrire un autre outil. Supprimer un fichier
+qui n'est pas de nous serait une perte de données irréparable, et aucune rétention ne le
+justifierait. Trois pistes ont été étudiées.
+
+**A. Une convention de nommage** (préfixe `auto_backup_`, extension `.tar`). Rejetée : elle
+repose sur ce que l'utilisateur peut renommer, et elle condamnerait par erreur tout fichier
+homonyme. Un nom n'est pas une preuve de provenance.
+
+**B. Un registre persistant du fork.** Un `Store` Home Assistant, `auto_backup.remote_backups`,
+tenu à jour à chaque `auto_backup.upload_successful` : destination -> liste d'entrées
+`{remote_id, name, slug, created_at, size}`. C'est une preuve exacte — nous n'y inscrivons que ce
+que nous avons nous-mêmes déposé — et elle ne coûte aucun appel réseau. Elle a deux angles
+morts : un `.storage` perdu (réinstallation, restauration partielle) rend nos propres sauvegardes
+non purgeables, et un dossier distant partagé par deux instances Home Assistant ne voit chacune
+purger que les siennes.
+
+**C. Un marqueur dans les métadonnées du fournisseur.** Dropbox et Google Drive savent attacher
+des propriétés à un fichier (`property groups`, `appProperties`). Un fournisseur les pose au
+téléversement, la purge les relit au listage. La preuve voyage alors **avec le fichier** : elle
+survit à la perte du registre. Mais elle dépend de ce que chaque API sait stocker — souvent des
+chaînes seulement, parfois rien — et les fournisseurs réels ne posent ce marqueur qu'à partir
+des issues #12 et #15.
+
+**Décision : B *et* C, en « ou » logique.** Une sauvegarde distante n'est candidate à la purge
+que si elle est **inscrite au registre** *ou* si elle **porte le marqueur** `auto_backup`. Les
+deux voies couvrent les angles morts l'une de l'autre, et aucune ne peut désigner un fichier
+étranger : un fichier que l'utilisateur a déposé n'est ni dans notre registre, ni porteur de nos
+métadonnées. Le marqueur est reconnu en booléen comme en chaîne (`"true"`, `"1"`,
+`"auto_backup"`), les API de métadonnées ne conservant souvent que du texte.
+
+La règle s'énonce alors en **deux conditions cumulées** : une sauvegarde n'est supprimée que si
+(1) sa provenance est établie — registre ou marqueur — **et** (2) elle dépasse la rétention. La
+première est une condition de sûreté, la seconde une condition de politique ; l'ordre compte, la
+provenance est vérifiée avant même de regarder les dates.
+
+### Combiner les deux rétentions
+
+`retention_days` s'applique d'abord : toute sauvegarde de provenance établie plus ancienne que la
+durée configurée est condamnée. `retention_count` s'applique ensuite à ce qui **reste**, de la
+plus ancienne à la plus récente, jusqu'à revenir sous la limite. Compter avant de dater aurait
+conservé des sauvegardes expirées au prétexte qu'elles tiennent dans le quota.
+
+Deux garde-fous sur les dates :
+
+- la date retenue est celle annoncée par le fournisseur (`RemoteBackup.created_at`), à défaut
+  celle du téléversement notée par le registre ;
+- une sauvegarde dont **aucune** date n'est connue n'est jamais réputée expirée : on ne supprime
+  pas sur une présomption d'ancienneté. Elle reste en revanche la première candidate quand la
+  rétention en nombre est dépassée, faute de quoi une sauvegarde sans date survivrait
+  indéfiniment à sa propre limite de quota.
+
+### Brancher la purge sur le service `auto_backup.purge`
+
+Le critère d'acceptation exige que le service upstream purge le local **et** le distant. Trois
+branchements étaient possibles.
+
+**A. Modifier `AutoBackup.purge_backups()`** dans `manager.py`. Rejeté : le fork s'interdit de
+modifier une ligne upstream (cf. `docs/UPSTREAM.md`), et `manager.py` n'a jamais été touché.
+
+**B. Écouter `auto_backup.purged_backups`.** Rejeté : l'upstream n'émet cet événement **que si
+une sauvegarde locale a réellement été supprimée**. Appeler le service sans rien à purger
+localement — le cas le plus courant sur une installation qui n'utilise pas `keep_days` —
+n'aurait alors purgé aucune destination.
+
+**C. Envelopper le service.** Retenu. `async_setup_remote_purge()` ré-inscrit
+`auto_backup.purge` avec un gestionnaire qui appelle d'abord le gestionnaire upstream — la purge
+locale s'exécute donc à l'identique, aux mêmes conditions et avec les mêmes journaux — puis
+purge chaque destination. Home Assistant remplace silencieusement une inscription de service par
+la dernière reçue ; l'inscription du fork suit immédiatement la boucle upstream dans
+`async_setup_entry()`, et `async_unload_entry()`, inchangé, retire le service par son nom. Le
+coût est un couplage au **nom** de la fonction upstream `async_service_handler`, passée en
+paramètre : si l'upstream la renomme, la ligne d'appel ajoutée par le fork ne compile plus, ce
+qui est visible immédiatement.
+
+Le second déclenchement, après un téléversement réussi, suit la même logique que l'upstream :
+c'est l'option `auto_purge` — celle qui commande déjà la purge locale après une création — qui
+l'autorise. Un utilisateur qui la désactive ne veut aucune suppression automatique, ni locale ni
+distante ; le registre, lui, continue d'être tenu à jour, de sorte qu'une purge manuelle
+ultérieure sache quoi supprimer.
+
+### Ce que la purge ne fait jamais échouer
+
+Une destination en attente de ré-autorisation est sautée **avant tout appel réseau** (voir la
+décision 4) ; un listage impossible abandonne cette destination sans toucher aux suivantes ; une
+suppression en échec est journalisée et laisse son entrée au registre — le fichier est toujours
+là — pour être retentée à la purge suivante. Une sauvegarde déjà absente
+(`DestinationNotFoundError`) est au contraire traitée comme purgée : le but est atteint, et son
+entrée quitte le registre pour ne pas être retentée indéfiniment. L'événement
+`auto_backup.remote_purge` n'est émis que si quelque chose a réellement disparu.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -606,8 +707,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 - **Événements** : quatre événements sont définis dans `const.py` (`auto_backup.upload_start`,
   `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`).
   Les trois premiers sont **émis depuis #8** (voir la section « Téléversement après création »
-  ci-dessus) ; `auto_backup.remote_purge` attend **#9** (rétention distante). Ils sont définis
-  ici pour laisser le schéma de constantes stable et lisible, et pour que les issues suivantes
+  ci-dessus) ; `auto_backup.remote_purge` l'est **depuis #9** (voir « Rétention distante »),
+  avec les champs `destination`, `destination_name` et `remote_ids`. Ils étaient définis dès #6
+  pour laisser le schéma de constantes stable et lisible, et pour que les issues suivantes
   n'aient qu'à les émettre sans les déclarer.
 
 - **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
@@ -675,10 +777,23 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 
 - **Destination à ré-autoriser lors d'une purge (issue #9)** : une destination en attente de
   ré-authentification (décision 4 de cet ADR) ne doit pas être contactée lors d'une opération de
-  purge distante (issue #9). Le gestionnaire expose `reauthentification_requise(destination_id)`
-  pour le vérifier ; l'issue #9 l'appelera avant d'appeler `async_list_backups()` et
-  `async_delete_backup()`, exactement comme #8 le fait pour le téléversement (voir la section
-  « Téléversement après création » ci-dessus).
+  purge distante. Le gestionnaire expose `reauthentification_requise(destination_id)` pour le
+  vérifier. **Traité en #9** : `CoordinateurPurgeDistante` le consulte avant tout appel, donc
+  avant `async_list_backups()` comme avant `async_delete_backup()`, exactement comme #8 le fait
+  pour le téléversement (voir la section « Téléversement après création » ci-dessus).
+
+- **Entrées de registre orphelines (issue #9)** : le registre des sauvegardes distantes garde
+  les entrées d'une destination supprimée de la configuration — quelques centaines d'octets par
+  sauvegarde, jamais relues. Les purger à la suppression d'une destination supposerait de
+  décider ce qu'il advient des fichiers distants correspondants, ce qui n'est pas du ressort de
+  #9 ; à reprendre avec la restauration depuis une sauvegarde distante (#16) ou le ménage des
+  options.
+
+- **Marqueur de provenance chez les fournisseurs réels (issues #12 et #15)** : `#9` reconnaît le
+  marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`, mais
+  aucun fournisseur livré ne le pose encore : Dropbox (#10) téléverse sans métadonnées. Les
+  issues #12 et #15 devront passer ce marqueur à `async_upload()` **et** le relire dans
+  `async_list_backups()`, sans quoi seule la voie du registre protège les sauvegardes du fork.
 
 ## Conséquences
 
@@ -697,7 +812,7 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 - Les destinations sont exposées dans `hass.data[DATA_DESTINATIONS]` via un `DestinationManager`
   qui suit les options de l'entrée et disparaît à son déchargement.
 - Le téléversement lui-même est branché par `#8` (section « Téléversement après création »
-  ci-dessus) ; `#9` y ajoutera la rétention distante.
+  ci-dessus) ; `#9` y ajoute la rétention distante (section « Rétention distante »).
 
 Ajouts de l'issue #7 :
 
@@ -714,5 +829,17 @@ Ajouts de l'issue #7 :
 - Le flux d'options upstream devient une étape d'un menu, sans qu'aucune de ses lignes change.
 - `#8` (téléversement) consulte `DestinationManager.reauthentification_requise()` avant
   d'appeler une destination : une destination en attente de ré-autorisation échouerait de toute
-  façon, et l'échec est signalé sans aucun appel réseau. `#9` (purge distante) devra faire de
-  même.
+  façon, et l'échec est signalé sans aucun appel réseau. `#9` (purge distante) fait de même, à
+  ceci près qu'une purge sautée n'a pas d'événement d'échec à émettre : elle se contente d'un
+  avertissement dans le journal.
+
+Ajouts de l'issue #9 :
+
+- Le fork tient un **second** registre persistant, `auto_backup.remote_backups`, à côté du
+  registre d'expiration de l'upstream (`auto_backup.snapshots_expiry`), qu'il ne remplace pas :
+  l'un suit les sauvegardes locales, l'autre les copies distantes. Il ne contient aucun secret.
+- Le service `auto_backup.purge` est **enveloppé**, pas remplacé : la purge locale upstream
+  s'exécute d'abord, sans changement, puis chaque destination distante est purgée.
+- Une sauvegarde distante n'est supprimable que si sa provenance est établie (registre ou
+  marqueur) **et** qu'elle dépasse la rétention de sa destination ; un fichier étranger au fork
+  est invisible pour la purge.

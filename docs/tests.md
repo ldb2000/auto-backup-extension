@@ -49,6 +49,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
+| `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs, déclenchements (téléversement et service `purge`), registre persistant. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
@@ -234,6 +235,43 @@ Cinq points méritent l'attention en écrivant un nouveau test :
 
    `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
 
+## Tester la purge distante
+
+`tests/test_purge_distante.py` couvre l'issue #9. Le montage est plus léger que celui du
+téléversement : les sauvegardes distantes sont **déposées directement** chez le fournisseur
+factice par `destination.ajouter_sauvegarde()`, sans créer ni téléverser quoi que ce soit.
+
+```python
+# Déposée chez le fournisseur *et* inscrite au registre : purgeable.
+await _deposer(hass, destination, "vieille", jours=10)
+# Déposée par l'utilisateur, inconnue du registre : intouchable.
+await _deposer(hass, destination, "photos", jours=99, inscrire=False)
+
+supprimes = await _coordinateur(hass).async_purger_toutes()
+```
+
+Quatre points à connaître :
+
+1. **Le registre décide de ce qui est purgeable.** `_deposer(..., inscrire=False)` simule un
+   fichier que l'utilisateur aurait déposé lui-même : il ne figure pas au registre du fork
+   (`hass.data[DATA_REMOTE_BACKUPS]`) et ne doit **jamais** être supprimé. La seconde voie, le
+   marqueur `auto_backup` posé dans `RemoteBackup.metadata`, se teste avec
+   `metadata=marqueur_auto_backup()`.
+2. **Le fournisseur factice note les tentatives.** `destination.suppressions` liste les
+   identifiants dont la suppression a été *tentée*, dans l'ordre, y compris celles qui ont
+   échoué ; `destination.listages` compte les appels à `async_list_backups()`, et un zéro prouve
+   qu'une destination n'a jamais été jointe (ré-authentification requise, aucune rétention
+   configurée). `destination.erreurs_de_suppression[remote_id] = ...` programme l'échec d'une
+   suppression précise, `destination.erreur_a_lever` celui de toutes les opérations.
+3. **Le stockage est celui de `hass_storage`.** Le registre est un `Store` Home Assistant
+   (`auto_backup.remote_backups`) : son contenu est lisible dans la fixture `hass_storage`, et
+   un rechargement de l'entrée (`async_reload`) prouve qu'il survit à un redémarrage.
+4. **Le service `purge` fait les deux purges.** Pour prouver que la purge locale upstream n'a pas
+   été perdue en route, le test garnit `gestionnaire._snapshots` d'une sauvegarde expirée et
+   remplace `gestionnaire._handler.remove_backup` par un `AsyncMock` : l'appel du service doit
+   déclencher la suppression locale (et l'événement `auto_backup.purged_backups`) **et** la
+   suppression distante.
+
 ## Tester un fournisseur réel
 
 Depuis l'issue #10, un fournisseur est livré : Dropbox
@@ -289,6 +327,7 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
 entités), le socle des destinations distantes (contrat, registre, persistance), leur
 autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression) et le
-téléversement après création (lecture en flux, événements, échecs, délai maximum). Les
+téléversement après création (lecture en flux, événements, échecs, délai maximum) et la
+rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant). Les
 fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

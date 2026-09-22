@@ -48,8 +48,8 @@ destination et invitant à la ré-autoriser ; les autres destinations continuent
 **Dropbox** est le premier fournisseur livré : la connexion d'un compte est opérationnelle, le
 téléversement après création de sauvegarde est implémenté, et la marche à suivre — création de
 l'application Dropbox, type d'accès conseillé, portées à cocher, URI de redirection à déclarer —
-est décrite dans [`docs/destinations/dropbox.md`](docs/destinations/dropbox.md). La purge
-distante suivra ; Google Drive viendra s'enregistrer dans ce même parcours.
+est décrite dans [`docs/destinations/dropbox.md`](docs/destinations/dropbox.md). Google Drive
+viendra s'enregistrer dans ce même parcours.
 
 ### Téléversement des sauvegardes
 
@@ -80,6 +80,50 @@ téléversement » du menu d'options de l'intégration (délai par défaut : 180
   `destination`, `destination_name`, `size`, `remote_id`) ;
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`).
+
+### Rétention distante
+
+Chaque destination a **sa propre rétention**, réglée à son ajout : une durée de conservation en
+jours, un nombre maximum de sauvegardes, ou les deux. Les deux se combinent : les sauvegardes
+trop anciennes partent d'abord, puis, s'il en reste plus que le nombre autorisé, les plus
+anciennes du lot restant sont supprimées jusqu'à revenir sous la limite. Une destination sans
+aucune rétention n'est jamais purgée.
+
+**Rien de ce que vous avez déposé vous-même n'est supprimé.** Auto Backup tient un registre
+persistant des sauvegardes qu'il a lui-même téléversées (dans le stockage de Home Assistant,
+`auto_backup.remote_backups`) et ne purge que celles-là — ou celles qui portent son marqueur
+dans les métadonnées du fournisseur. Tout autre fichier présent dans le dossier distant est
+ignoré par la purge, quels que soient son âge et son nom.
+
+La purge distante se déclenche :
+
+- **après chaque téléversement réussi**, si l'option **purge automatique** (`auto_purge`) est
+  active dans les réglages des sauvegardes — c'est la même option qui commande la purge locale ;
+  désactivée, aucune suppression distante automatique n'a lieu ;
+- **à chaque appel du service `auto_backup.purge`**, qui purge d'abord les sauvegardes locales
+  expirées, comme auparavant, puis chaque destination distante configurée.
+
+Une destination en attente de ré-autorisation n'est pas contactée : elle est sautée, avec un
+avertissement dans le journal, et les autres destinations sont purgées normalement. Un fichier
+déjà disparu chez le fournisseur est traité comme purgé (avertissement, entrée retirée du
+registre) et une suppression en échec n'interrompt jamais la purge des suivantes.
+
+**Événement** : `auto_backup.remote_purge` est émis après chaque série de suppressions, avec les
+champs `destination` (identifiant), `destination_name` (nom lisible) et `remote_ids` (liste des
+identifiants distants supprimés).
+
+```yaml
+automation:
+  triggers:
+    - trigger: event
+      event_type: auto_backup.remote_purge
+  actions:
+    - action: persistent_notification.create
+      data:
+        message: >-
+          {{ trigger.event.data.remote_ids | length }} sauvegarde(s) supprimée(s)
+          de {{ trigger.event.data.destination_name }}.
+```
 
 ## Développement
 
