@@ -50,6 +50,7 @@ from .const import (
 from .handlers import SupervisorHandler, BackupHandler
 from .helpers import is_backup
 from .manager import AutoBackup
+from .destinations import async_setup_destinations
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     auto_backup = AutoBackup(hass, options, handler)
     hass.data[DATA_AUTO_BACKUP] = auto_backup
+    async_setup_destinations(hass, entry)  # destinations distantes (fork)
     entry.async_on_unload(entry.add_update_listener(auto_backup.update_listener))
 
     await auto_backup.load_snapshots_expiry()

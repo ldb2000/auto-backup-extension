@@ -6,6 +6,7 @@ from homeassistant.util.hass_dict import HassKey
 
 if TYPE_CHECKING:
     from .manager import AutoBackup
+    from .destinations import DestinationManager
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -58,3 +59,23 @@ SERVICE_PURGE = "purge"
 SERVICE_BACKUP = "backup"
 SERVICE_BACKUP_FULL = "backup_full"
 SERVICE_BACKUP_PARTIAL = "backup_partial"
+
+### DESTINATIONS DISTANTES ###
+# Ajouts du fork (cf. docs/UPSTREAM.md) : constantes du sous-paquet `destinations`.
+DATA_DESTINATIONS: HassKey[DestinationManager] = HassKey(f"{DOMAIN}_destinations")
+
+CONF_DESTINATIONS = "destinations"
+CONF_DESTINATION_ID = "destination_id"
+CONF_PROVIDER = "provider"
+CONF_FOLDER = "folder"
+CONF_RETENTION_DAYS = "retention_days"
+CONF_RETENTION_COUNT = "retention_count"
+
+DEFAULT_DESTINATION_FOLDER = "Home Assistant"
+
+# Les noms d'événements suivent la convention upstream `<domaine>.<événement>`
+# (cf. EVENT_BACKUP_* ci-dessus) pour rester homogènes dans les automatisations.
+EVENT_UPLOAD_START = f"{DOMAIN}.upload_start"
+EVENT_UPLOAD_SUCCESSFUL = f"{DOMAIN}.upload_successful"
+EVENT_UPLOAD_FAILED = f"{DOMAIN}.upload_failed"
+EVENT_REMOTE_PURGE = f"{DOMAIN}.remote_purge"
