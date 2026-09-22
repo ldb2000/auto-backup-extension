@@ -1,0 +1,826 @@
+"""Téléversement d'une sauvegarde après sa création (issue #8).
+
+Deux niveaux sont éprouvés :
+
+- la **lecture en flux** d'une sauvegarde locale, pour les deux handlers
+  upstream : `SupervisorHandler` (téléchargement HTTP simulé par
+  `aioclient_mock`) et `BackupHandler` (fichier temporaire lu par `aiofiles`) ;
+- l'**orchestration** complète, depuis l'appel de service jusqu'aux événements
+  `auto_backup.upload_*`, avec le fournisseur factice de
+  `tests/destinations_factices.py`.
+
+Aucun test ne touche un fournisseur réel ni le réseau.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import aiohttp
+import pytest
+from homeassistant.const import ATTR_NAME
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
+from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
+
+from custom_components.auto_backup.const import (
+    ATTR_DESTINATION,
+    ATTR_DESTINATION_NAME,
+    ATTR_ERROR,
+    ATTR_SIZE,
+    ATTR_SLUG,
+    ATTR_UPLOAD_TO,
+    CONF_DESTINATIONS,
+    CONF_UPLOAD_TIMEOUT,
+    DATA_AUTO_BACKUP,
+    DATA_DESTINATIONS,
+    DATA_UPLOADS,
+    DOMAIN,
+    EVENT_BACKUP_START,
+    EVENT_BACKUP_SUCCESSFUL,
+    EVENT_UPLOAD_FAILED,
+    EVENT_UPLOAD_START,
+    EVENT_UPLOAD_SUCCESSFUL,
+    SERVICE_BACKUP,
+    SERVICE_BACKUP_FULL,
+    SERVICE_BACKUP_PARTIAL,
+)
+from custom_components.auto_backup.destinations import DestinationError
+from custom_components.auto_backup.destinations.upload import (
+    ErreurLectureSauvegarde,
+    async_ouvrir_sauvegarde,
+    async_prepare_upload,
+    async_release_upload,
+    async_resoudre_destinations,
+    nom_de_fichier_sauvegarde,
+)
+from custom_components.auto_backup.handlers import (
+    BackupHandler,
+    HandlerBase,
+    HassioAPIError,
+    SupervisorHandler,
+)
+from destinations_factices import DestinationEnMemoire, config_factice
+
+# Plus grand qu'un morceau de lecture (64 Kio) : la lecture doit rendre
+# plusieurs morceaux, preuve qu'elle n'avale pas le fichier d'un bloc.
+CONTENU_SAUVEGARDE = b"auto-backup" * 20_000
+
+SLUG = "abc123"
+ADRESSE_SUPERVISOR = "supervisor"
+URL_TELECHARGEMENT = f"http://{ADRESSE_SUPERVISOR}/backups/{SLUG}/download"
+
+
+def _faux_backup_manager(chemin: Path | None) -> MagicMock:
+    """`BackupManager` minimal : une sauvegarde locale et son agent."""
+    manager = MagicMock()
+    if chemin is None:
+        manager.async_get_backup = AsyncMock(return_value=(None, {}))
+        manager.local_backup_agents = {}
+        return manager
+
+    sauvegarde = MagicMock()
+    sauvegarde.backup_id = SLUG
+    agent = MagicMock()
+    agent.get_backup_path = MagicMock(return_value=chemin)
+    manager.async_get_backup = AsyncMock(return_value=(sauvegarde, {}))
+    manager.local_backup_agents = {"backup.local": agent}
+    return manager
+
+
+@pytest.fixture
+def fichier_de_sauvegarde(tmp_path: Path) -> Path:
+    """Fichier `.tar` local tenant lieu de sauvegarde Home Assistant."""
+    chemin = tmp_path / f"{SLUG}.tar"
+    chemin.write_bytes(CONTENU_SAUVEGARDE)
+    return chemin
+
+
+class _Instance:
+    """Intégration démarrée, prête à créer puis téléverser une sauvegarde."""
+
+    def __init__(
+        self, hass: HomeAssistant, entree: MockConfigEntry, creation: AsyncMock
+    ) -> None:
+        self.hass = hass
+        self.entree = entree
+        self.creation = creation
+
+    def destination(self, destination_id: str) -> DestinationEnMemoire:
+        """Instance factice chargée pour cet identifiant."""
+        return self.hass.data[DATA_DESTINATIONS].async_get(destination_id)
+
+    @property
+    def donnees_de_creation(self) -> dict[str, Any]:
+        """Données transmises au handler de création de sauvegarde."""
+        return self.creation.await_args.args[0]
+
+
+async def _demarrer(
+    hass: HomeAssistant,
+    fichier: Path | None,
+    *,
+    destinations: list[dict[str, Any]] | None = None,
+    options: dict[str, Any] | None = None,
+) -> _Instance:
+    """Initialise l'intégration avec des destinations et un handler simulé."""
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={
+            CONF_DESTINATIONS: (
+                [config_factice()] if destinations is None else destinations
+            ),
+            **(options or {}),
+        },
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+
+    handler = hass.data[DATA_AUTO_BACKUP]._handler
+    handler._manager = _faux_backup_manager(fichier)
+    creation = AsyncMock(return_value={"slug": SLUG})
+    handler.create_backup = creation
+    return _Instance(hass, entree, creation)
+
+
+@pytest.fixture
+async def instance(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> _Instance:
+    """Intégration démarrée avec une destination factice unique."""
+    return await _demarrer(hass, fichier_de_sauvegarde)
+
+
+### LECTURE EN FLUX D'UNE SAUVEGARDE ###
+
+
+@pytest.mark.parametrize(
+    ("nom", "slug", "attendu"),
+    [
+        ("Sauvegarde du 22", SLUG, "Sauvegarde_du_22.tar"),
+        # `slugify` remplace le point, exactement comme pour `download_path` :
+        # le suffixe `.tar` est donc bien ajouté une fois et une seule.
+        ("deja.tar", SLUG, "deja_tar.tar"),
+        (None, SLUG, f"{SLUG}.tar"),
+        ("", SLUG, f"{SLUG}.tar"),
+    ],
+)
+def test_le_nom_de_fichier_suit_la_convention_upstream(
+    nom: str | None, slug: str, attendu: str
+) -> None:
+    """Le nom d'archive est celui qu'utiliserait `download_path`."""
+    assert nom_de_fichier_sauvegarde(nom, slug) == attendu
+
+
+async def test_le_handler_supervisor_fournit_un_flux_et_une_taille(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Sous Supervisor, la sauvegarde est lue en streaming HTTP."""
+    aioclient_mock.get(
+        URL_TELECHARGEMENT,
+        content=CONTENU_SAUVEGARDE,
+        headers={"Content-Length": str(len(CONTENU_SAUVEGARDE))},
+    )
+    handler = SupervisorHandler(ADRESSE_SUPERVISOR, async_get_clientsession(hass))
+
+    async with async_ouvrir_sauvegarde(
+        hass, handler, SLUG, nom="Sauvegarde du 22"
+    ) as contenu:
+        assert contenu.taille == len(CONTENU_SAUVEGARDE)
+        assert contenu.nom_fichier == "Sauvegarde_du_22.tar"
+        assert contenu.chemin is None
+        morceaux = [morceau async for morceau in contenu.flux]
+
+    assert b"".join(morceaux) == CONTENU_SAUVEGARDE
+    assert len(morceaux) > 1, "la sauvegarde doit arriver en plusieurs morceaux"
+
+
+async def test_le_handler_supervisor_tolere_une_taille_non_annoncee(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Sans en-tête `Content-Length`, la taille est inconnue mais le flux passe."""
+    aioclient_mock.get(URL_TELECHARGEMENT, content=CONTENU_SAUVEGARDE)
+    handler = SupervisorHandler(ADRESSE_SUPERVISOR, async_get_clientsession(hass))
+
+    async with async_ouvrir_sauvegarde(hass, handler, SLUG) as contenu:
+        assert contenu.taille is None
+        morceaux = [morceau async for morceau in contenu.flux]
+
+    assert b"".join(morceaux) == CONTENU_SAUVEGARDE
+
+
+async def test_le_handler_supervisor_signale_un_code_d_erreur(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Un code HTTP inattendu lève `ErreurLectureSauvegarde`."""
+    aioclient_mock.get(URL_TELECHARGEMENT, status=404)
+    handler = SupervisorHandler(ADRESSE_SUPERVISOR, async_get_clientsession(hass))
+
+    with pytest.raises(ErreurLectureSauvegarde, match="404"):
+        async with async_ouvrir_sauvegarde(hass, handler, SLUG):
+            pass
+
+
+async def test_le_handler_supervisor_signale_une_erreur_reseau(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Une erreur de transport lève `ErreurLectureSauvegarde`."""
+    aioclient_mock.get(URL_TELECHARGEMENT, exc=aiohttp.ClientError("connexion perdue"))
+    handler = SupervisorHandler(ADRESSE_SUPERVISOR, async_get_clientsession(hass))
+
+    with pytest.raises(ErreurLectureSauvegarde, match="connexion perdue"):
+        async with async_ouvrir_sauvegarde(hass, handler, SLUG):
+            pass
+
+
+async def test_le_handler_core_fournit_un_flux_et_une_taille(
+    hass: HomeAssistant, fichier_de_sauvegarde: Path
+) -> None:
+    """Sur Home Assistant Core, le fichier de l'agent local est lu par morceaux."""
+    handler = BackupHandler(hass, _faux_backup_manager(fichier_de_sauvegarde))
+
+    async with async_ouvrir_sauvegarde(hass, handler, SLUG, nom="Core 2026") as contenu:
+        assert contenu.taille == len(CONTENU_SAUVEGARDE)
+        assert contenu.nom_fichier == "Core_2026.tar"
+        assert contenu.chemin == fichier_de_sauvegarde
+        morceaux = [morceau async for morceau in contenu.flux]
+
+    assert b"".join(morceaux) == CONTENU_SAUVEGARDE
+    assert len(morceaux) > 1, "la sauvegarde doit arriver en plusieurs morceaux"
+
+
+async def test_le_handler_core_signale_une_sauvegarde_absente(
+    hass: HomeAssistant,
+) -> None:
+    """Une sauvegarde inconnue du `BackupManager` lève une erreur explicite."""
+    handler = BackupHandler(hass, _faux_backup_manager(None))
+
+    with pytest.raises(ErreurLectureSauvegarde, match="introuvable"):
+        async with async_ouvrir_sauvegarde(hass, handler, SLUG):
+            pass
+
+
+async def test_le_handler_core_signale_un_fichier_illisible(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Un fichier de sauvegarde disparu lève `ErreurLectureSauvegarde`."""
+    handler = BackupHandler(hass, _faux_backup_manager(tmp_path / "absent.tar"))
+
+    with pytest.raises(ErreurLectureSauvegarde, match="impossible"):
+        async with async_ouvrir_sauvegarde(hass, handler, SLUG):
+            pass
+
+
+async def test_un_handler_inconnu_est_refuse(hass: HomeAssistant) -> None:
+    """Un handler hors des deux handlers upstream n'est pas exploitable."""
+    with pytest.raises(ErreurLectureSauvegarde, match="handler"):
+        async with async_ouvrir_sauvegarde(hass, HandlerBase(), SLUG):
+            pass
+
+
+### RÉSOLUTION DES DESTINATIONS DEMANDÉES ###
+
+
+async def test_une_destination_se_designe_par_identifiant_ou_par_nom(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """`upload_to` accepte l'identifiant comme le nom de la destination."""
+    assert async_resoudre_destinations(hass, ["destination_test"]) == (
+        "destination_test",
+    )
+    assert async_resoudre_destinations(hass, ["Destination de test"]) == (
+        "destination_test",
+    )
+    # Le nom est comparé sans tenir compte de la casse ni des espaces de bordure.
+    assert async_resoudre_destinations(hass, ["  destination DE TEST "]) == (
+        "destination_test",
+    )
+
+
+async def test_les_destinations_demandees_sont_dedoublonnees(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Demander deux fois la même destination ne la téléverse qu'une fois."""
+    assert async_resoudre_destinations(
+        hass, ["destination_test", "Destination de test"]
+    ) == ("destination_test",)
+
+
+async def test_un_nom_porte_par_plusieurs_destinations_est_refuse(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Un nom ambigu lève une erreur qui invite à préciser l'identifiant."""
+    await _demarrer(
+        hass,
+        fichier_de_sauvegarde,
+        destinations=[
+            config_factice(),
+            config_factice(destination_id="destination_bis"),
+        ],
+    )
+
+    with pytest.raises(ServiceValidationError, match="Plusieurs destinations"):
+        async_resoudre_destinations(hass, ["Destination de test"])
+
+
+### APPEL DE SERVICE ###
+
+
+async def test_le_televersement_emet_le_debut_puis_le_succes(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Le cas nominal téléverse la sauvegarde et émet les deux événements."""
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not echecs
+    assert len(debuts) == 1
+    assert debuts[0].data == {
+        ATTR_NAME: "Sauvegarde du 22",
+        ATTR_SLUG: SLUG,
+        ATTR_DESTINATION: "destination_test",
+        ATTR_DESTINATION_NAME: "Destination de test",
+    }
+
+    assert len(succes) == 1
+    assert succes[0].data[ATTR_NAME] == "Sauvegarde du 22"
+    assert succes[0].data[ATTR_SLUG] == SLUG
+    assert succes[0].data[ATTR_DESTINATION] == "destination_test"
+    assert succes[0].data[ATTR_SIZE] == len(CONTENU_SAUVEGARDE)
+
+    destination = instance.destination("destination_test")
+    assert destination.octets_recus == CONTENU_SAUVEGARDE
+    assert destination.taille_annoncee == len(CONTENU_SAUVEGARDE)
+    sauvegarde = next(iter(destination.sauvegardes.values()))
+    assert sauvegarde.slug == SLUG
+    assert sauvegarde.path == "Sauvegardes/Sauvegarde_du_22.tar"
+
+
+async def test_l_option_upload_to_ne_part_jamais_vers_le_handler(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """`upload_to` est retiré des données avant la création de la sauvegarde."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_UPLOAD_TO: ["destination_test"]},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert ATTR_UPLOAD_TO not in instance.donnees_de_creation
+
+
+async def test_une_sauvegarde_sans_nom_est_correlee_par_le_nom_genere(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Sans nom explicite, celui que l'upstream aurait généré est utilisé."""
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    attendu = hass.data[DATA_AUTO_BACKUP].generate_backup_name()
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: ["destination_test"]}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert instance.donnees_de_creation[ATTR_NAME] == attendu
+    assert len(succes) == 1
+    assert succes[0].data[ATTR_NAME] == attendu
+
+
+@pytest.mark.parametrize(
+    ("service", "donnees"),
+    [
+        (SERVICE_BACKUP, {}),
+        (SERVICE_BACKUP_FULL, {}),
+        (SERVICE_BACKUP_PARTIAL, {"folders": ["config"]}),
+    ],
+)
+async def test_les_trois_services_de_sauvegarde_acceptent_upload_to(
+    hass: HomeAssistant,
+    instance: _Instance,
+    service: str,
+    donnees: dict[str, Any],
+) -> None:
+    """`upload_to` est accepté par `backup`, `backup_full` et `backup_partial`."""
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+
+    await hass.services.async_call(
+        DOMAIN,
+        service,
+        {**donnees, ATTR_UPLOAD_TO: "destination_test"},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(succes) == 1
+
+
+async def test_une_destination_inconnue_bloque_avant_la_creation(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Une destination inconnue lève une erreur française, sans rien créer."""
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+
+    with pytest.raises(ServiceValidationError) as erreur:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_BACKUP,
+            {ATTR_UPLOAD_TO: ["dropbox_perso"]},
+            blocking=True,
+        )
+
+    assert "Destination inconnue" in str(erreur.value)
+    assert "dropbox_perso" in str(erreur.value)
+    # Le message oriente l'utilisateur vers ce qui est réellement configuré.
+    assert "Destination de test" in str(erreur.value)
+
+    instance.creation.assert_not_awaited()
+    assert not debuts
+
+
+async def test_sans_destination_configuree_le_message_le_dit(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Sans aucune destination, l'erreur le signale explicitement."""
+    instance = await _demarrer(hass, fichier_de_sauvegarde, destinations=[])
+
+    with pytest.raises(ServiceValidationError, match="Aucune destination"):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "dropbox"}, blocking=True
+        )
+
+    instance.creation.assert_not_awaited()
+
+
+async def test_sans_upload_to_le_comportement_reste_celui_de_l_upstream(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Sans `upload_to`, aucun événement de téléversement n'est émis."""
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_NAME: "Sans destination"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    instance.creation.assert_awaited_once()
+    assert instance.donnees_de_creation[ATTR_NAME] == "Sans destination"
+    assert ATTR_UPLOAD_TO not in instance.donnees_de_creation
+    assert not debuts and not succes and not echecs
+    assert instance.destination("destination_test").sauvegardes == {}
+    assert not hass.data[DATA_UPLOADS].demandes_en_attente
+
+
+async def test_un_echec_de_televersement_laisse_la_sauvegarde_locale_intacte(
+    hass: HomeAssistant, instance: _Instance, fichier_de_sauvegarde: Path
+) -> None:
+    """Un échec du fournisseur est signalé sans toucher à la sauvegarde locale."""
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    instance.destination("destination_test").erreur_a_lever = DestinationError(
+        "réseau indisponible"
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not succes
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_SLUG] == SLUG
+    assert echecs[0].data[ATTR_DESTINATION] == "destination_test"
+    assert echecs[0].data[ATTR_ERROR] == "réseau indisponible"
+
+    assert fichier_de_sauvegarde.read_bytes() == CONTENU_SAUVEGARDE
+    instance.creation.assert_awaited_once()
+
+
+async def test_l_echec_d_une_destination_n_empeche_pas_les_autres(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Les destinations demandées sont toutes traitées, même après un échec."""
+    instance = await _demarrer(
+        hass,
+        fichier_de_sauvegarde,
+        destinations=[
+            config_factice(destination_id="en_panne", name="En panne"),
+            config_factice(destination_id="fonctionnelle", name="Fonctionnelle"),
+        ],
+    )
+    instance.destination("en_panne").erreur_a_lever = DestinationError("quota atteint")
+
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_UPLOAD_TO: ["en_panne", "fonctionnelle"]},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert [evenement.data[ATTR_DESTINATION] for evenement in echecs] == ["en_panne"]
+    assert [evenement.data[ATTR_DESTINATION] for evenement in succes] == [
+        "fonctionnelle"
+    ]
+    assert instance.destination("fonctionnelle").octets_recus == CONTENU_SAUVEGARDE
+
+
+async def test_un_televersement_trop_long_est_interrompu(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Le délai maximum des options coupe un téléversement qui s'éternise."""
+    instance = await _demarrer(
+        hass, fichier_de_sauvegarde, options={CONF_UPLOAD_TIMEOUT: 0.01}
+    )
+    instance.destination("destination_test").attente_secondes = 30
+
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not succes
+    assert len(echecs) == 1
+    assert "délai" in echecs[0].data[ATTR_ERROR]
+    assert fichier_de_sauvegarde.read_bytes() == CONTENU_SAUVEGARDE
+
+
+async def test_une_sauvegarde_illisible_est_signalee_sans_televersement(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    tmp_path: Path,
+) -> None:
+    """Si la sauvegarde ne peut pas être lue, l'échec est émis proprement."""
+    instance = await _demarrer(hass, tmp_path / "jamais_ecrit.tar")
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    assert "impossible" in echecs[0].data[ATTR_ERROR]
+    assert instance.destination("destination_test").sauvegardes == {}
+
+
+async def test_une_creation_en_echec_ne_laisse_pas_de_demande_en_attente(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Quand la sauvegarde échoue, la demande de téléversement est oubliée."""
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    instance.creation.side_effect = HassioAPIError("sauvegarde déjà en cours")
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts
+    assert not hass.data[DATA_UPLOADS].demandes_en_attente
+
+
+async def test_une_destination_supprimee_entre_temps_est_signalee(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Une destination retirée pendant la création provoque un échec explicite."""
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    coordinateur = hass.data[DATA_UPLOADS]
+    demande = coordinateur.async_enregistrer("Sauvegarde du 22", ("disparue",))
+    assert demande in coordinateur.demandes_en_attente
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_NAME: "Sauvegarde du 22"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_DESTINATION] == "disparue"
+    assert "introuvable" in echecs[0].data[ATTR_ERROR]
+
+
+async def test_une_erreur_inattendue_du_fournisseur_est_capturee(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Une erreur non typée ne remonte pas jusqu'à Home Assistant."""
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    instance.destination("destination_test").erreur_a_lever = RuntimeError(
+        "panne interne du fournisseur"
+    )
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_ERROR] == "panne interne du fournisseur"
+
+
+async def test_un_delai_illisible_retombe_sur_la_valeur_par_defaut(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Une option `upload_timeout` inexploitable n'empêche pas le téléversement."""
+    await _demarrer(
+        hass, fichier_de_sauvegarde, options={CONF_UPLOAD_TIMEOUT: "jamais"}
+    )
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(succes) == 1
+
+
+async def test_sans_agent_local_la_sauvegarde_est_inaccessible(
+    hass: HomeAssistant, fichier_de_sauvegarde: Path
+) -> None:
+    """Sans agent de sauvegarde local, le fichier ne peut pas être atteint."""
+    manager = _faux_backup_manager(fichier_de_sauvegarde)
+    manager.local_backup_agents = {}
+    handler = BackupHandler(hass, manager)
+
+    with pytest.raises(ErreurLectureSauvegarde, match="agent de sauvegarde local"):
+        async with async_ouvrir_sauvegarde(hass, handler, SLUG):
+            pass
+
+
+async def test_une_taille_annoncee_illisible_est_ignoree(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Un `Content-Length` non numérique n'empêche pas la lecture du flux."""
+    aioclient_mock.get(
+        URL_TELECHARGEMENT,
+        content=CONTENU_SAUVEGARDE,
+        headers={"Content-Length": "inconnu"},
+    )
+    handler = SupervisorHandler(ADRESSE_SUPERVISOR, async_get_clientsession(hass))
+
+    async with async_ouvrir_sauvegarde(hass, handler, SLUG) as contenu:
+        assert contenu.taille is None
+        morceaux = [morceau async for morceau in contenu.flux]
+
+    assert b"".join(morceaux) == CONTENU_SAUVEGARDE
+
+
+async def test_un_evenement_de_sauvegarde_sans_slug_est_ignore(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Sans slug, la sauvegarde n'est pas téléversable : l'échec est journalisé."""
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    coordinateur = hass.data[DATA_UPLOADS]
+    coordinateur.async_enregistrer("Sauvegarde sans slug", ("destination_test",))
+    hass.bus.async_fire(EVENT_BACKUP_START, {ATTR_NAME: "Sauvegarde sans slug"})
+
+    # Un événement sans nom ne réclame aucune demande ; un événement nommé mais
+    # dépourvu de slug en réclame une, sans pouvoir la mener à bien.
+    hass.bus.async_fire(EVENT_BACKUP_SUCCESSFUL, {ATTR_SLUG: SLUG})
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert len(coordinateur.demandes_en_attente) == 1
+
+    hass.bus.async_fire(EVENT_BACKUP_SUCCESSFUL, {ATTR_NAME: "Sauvegarde sans slug"})
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not coordinateur.demandes_en_attente
+    assert not debuts
+
+
+async def test_une_demande_non_confirmee_n_est_jamais_televersee(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Sans `backup_start`, une demande ne peut être réclamée par aucune sauvegarde.
+
+    C'est ce qui protège une sauvegarde homonyme, créée plus tard sans
+    `upload_to`, d'être téléversée à l'insu de l'utilisateur.
+    """
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    coordinateur = hass.data[DATA_UPLOADS]
+    demande = coordinateur.async_enregistrer(
+        "Sauvegarde orpheline", ("destination_test",)
+    )
+    assert not demande.confirmee
+
+    hass.bus.async_fire(
+        EVENT_BACKUP_SUCCESSFUL, {ATTR_NAME: "Sauvegarde orpheline", ATTR_SLUG: SLUG}
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts
+    assert coordinateur.demandes_en_attente == [demande]
+
+    # Une fois confirmée par le démarrage d'une sauvegarde, elle est honorée.
+    hass.bus.async_fire(EVENT_BACKUP_START, {ATTR_NAME: "Sauvegarde orpheline"})
+    hass.bus.async_fire(
+        EVENT_BACKUP_SUCCESSFUL, {ATTR_NAME: "Sauvegarde orpheline", ATTR_SLUG: SLUG}
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(debuts) == 1
+    assert not coordinateur.demandes_en_attente
+
+
+async def test_une_chaine_unique_vaut_une_destination(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """`upload_to` donné en chaîne n'est pas itéré caractère par caractère."""
+    donnees = {ATTR_NAME: "Sauvegarde", ATTR_UPLOAD_TO: "destination_test"}
+
+    demande = async_prepare_upload(hass, donnees)
+
+    assert demande is not None
+    assert demande.destinations == ("destination_test",)
+    async_release_upload(hass, demande)
+
+
+async def test_sans_entree_chargee_le_televersement_est_refuse(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """`upload_to` est refusé, en français, si l'entrée n'est plus chargée."""
+    coordinateur = hass.data.pop(DATA_UPLOADS)
+
+    with pytest.raises(ServiceValidationError, match="n'est pas chargée"):
+        async_prepare_upload(hass, {ATTR_UPLOAD_TO: ["destination_test"]})
+
+    hass.data[DATA_UPLOADS] = coordinateur
+    hass.data.pop(DATA_AUTO_BACKUP)
+
+    with pytest.raises(ServiceValidationError, match="n'est pas chargée"):
+        async_prepare_upload(hass, {ATTR_UPLOAD_TO: ["destination_test"]})
+
+
+async def test_une_demande_sans_destination_ne_change_rien(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """`upload_to` vide n'enregistre aucune demande et ne laisse aucune trace."""
+    donnees = {ATTR_NAME: "Sauvegarde", ATTR_UPLOAD_TO: []}
+
+    assert async_prepare_upload(hass, donnees) is None
+
+    assert donnees == {ATTR_NAME: "Sauvegarde"}
+    assert not hass.data[DATA_UPLOADS].demandes_en_attente
+    # Oublier une demande inexistante est sans effet.
+    async_release_upload(hass, None)
+
+
+async def test_le_coordinateur_disparait_au_dechargement(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Le coordinateur est retiré de `hass.data` quand l'entrée est déchargée."""
+    assert DATA_UPLOADS in hass.data
+
+    assert await hass.config_entries.async_unload(instance.entree.entry_id)
+    await hass.async_block_till_done()
+
+    assert DATA_UPLOADS not in hass.data

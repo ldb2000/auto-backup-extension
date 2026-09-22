@@ -50,7 +50,12 @@ FICHIERS_UPSTREAM_REQUIS = (
 #   upstream supprimée ni modifiée, ce qui garde les resynchronisations simples.
 # - `REPERTOIRES_DU_FORK` : code propre au fork, absent de l'upstream.
 FICHIERS_UPSTREAM_REECRITS = ("manifest.json",)
-FICHIERS_UPSTREAM_ETENDUS = ("__init__.py", "const.py", "config_flow.py")
+FICHIERS_UPSTREAM_ETENDUS = (
+    "__init__.py",
+    "const.py",
+    "config_flow.py",
+    "services.yaml",
+)
 REPERTOIRES_DU_FORK = ("destinations",)
 
 

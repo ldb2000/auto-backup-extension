@@ -8,7 +8,8 @@ des erreurs typées.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,6 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.auto_backup.destinations import (
     DestinationConfig,
-    DestinationError,
     DestinationNotFoundError,
     RemoteBackup,
     RemoteDestination,
@@ -48,15 +48,28 @@ class DestinationEnMemoire(RemoteDestination):
     - `sauvegardes` : les sauvegardes distantes, par identifiant ;
     - `erreur_a_lever` : erreur levée par toutes les opérations quand elle est
       définie, pour simuler un échec du fournisseur ;
-    - `connexions_verifiees` : nombre d'appels réussis à `async_check_connection`.
+    - `connexions_verifiees` : nombre d'appels réussis à `async_check_connection` ;
+    - `attente_secondes` : durée d'attente simulée pendant un téléversement,
+      pour éprouver le délai maximum (issue #8) ;
+    - `octets_recus` : contenu du dernier flux consommé, `None` si le
+      téléversement n'a reçu qu'un chemin ;
+    - `taille_recue` : nombre d'octets réellement lus dans le flux ;
+    - `taille_annoncee` : valeur du paramètre `size` du dernier téléversement.
     """
 
     def __init__(self, hass: HomeAssistant, config: DestinationConfig) -> None:
         """Prépare une destination vide."""
         super().__init__(hass, config)
         self.sauvegardes: dict[str, RemoteBackup] = {}
-        self.erreur_a_lever: DestinationError | None = None
+        # Une erreur quelconque est acceptée, pas seulement une `DestinationError` :
+        # un fournisseur réel peut aussi laisser filer une erreur inattendue,
+        # que l'orchestrateur doit traiter sans compromettre les autres destinations.
+        self.erreur_a_lever: Exception | None = None
         self.connexions_verifiees = 0
+        self.attente_secondes = 0.0
+        self.octets_recus: bytes | None = None
+        self.taille_recue: int | None = None
+        self.taille_annoncee: int | None = None
         self._compteur = 0
 
     def _verifier_erreur(self) -> None:
@@ -71,22 +84,46 @@ class DestinationEnMemoire(RemoteDestination):
 
     async def async_upload(
         self,
-        source: Path | str,
+        source: Path | str | None = None,
         *,
         name: str,
         slug: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        stream: AsyncIterator[bytes] | None = None,
+        size: int | None = None,
+        filename: str | None = None,
     ) -> RemoteBackup:
-        """Mémorise une sauvegarde distante et la renvoie."""
+        """Mémorise une sauvegarde distante et la renvoie.
+
+        Quand un flux est fourni, il est consommé morceau par morceau — comme
+        le ferait un vrai fournisseur — et la taille réellement reçue est
+        enregistrée. Sans flux, l'ancien comportement (chemin seul) est
+        conservé, ce qui garde les tests du socle (#6) valides.
+        """
         self._verifier_erreur()
+        if self.attente_secondes:
+            await asyncio.sleep(self.attente_secondes)
+
+        self.taille_annoncee = size
+        if stream is None:
+            self.octets_recus = None
+            self.taille_recue = None
+            taille = len(str(source))
+        else:
+            morceaux = [morceau async for morceau in stream]
+            self.octets_recus = b"".join(morceaux)
+            self.taille_recue = len(self.octets_recus)
+            taille = self.taille_recue
+
+        nom_fichier = filename or (Path(source).name if source is not None else name)
         self._compteur += 1
         sauvegarde = RemoteBackup(
             remote_id=f"{self.destination_id}-{self._compteur}",
             name=name,
             slug=slug,
-            size=len(str(source)),
+            size=taille,
             created_at=DATE_FACTICE,
-            path=f"{self.folder}/{Path(source).name}",
+            path=f"{self.folder}/{nom_fichier}",
             metadata=dict(metadata or {}),
         )
         self.sauvegardes[sauvegarde.remote_id] = sauvegarde
