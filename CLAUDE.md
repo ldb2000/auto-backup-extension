@@ -26,7 +26,7 @@ Reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter la 
 
 ## Workflow agents
 - Une issue = une branche = un worktree = une PR
-- Ne jamais pousser sur main, ne jamais merger
+- Ne jamais pousser directement sur main. Le merge d'une PR par l'orchestrateur est autorisé uniquement après CI verte et validation métier OK ; main reste protégée par les checks CI obligatoires
 - Critères d'acceptation de l'issue = définition de « fini »
 - Doute sur le besoin : commenter l'issue et passer le label `needs-human`
 - Labels : `ready` → `in-progress` → `review` (PR ouverte) ; `needs-human` si bloqué ; `epic` pour l'objectif parent
