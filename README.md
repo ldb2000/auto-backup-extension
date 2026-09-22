@@ -2,6 +2,29 @@
 
  Objectif reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter un backup dans dropbox et google drive. 
 
+## Fork et licence
+
+Ce projet est un **fork de [jcwillox/hass-auto-backup](https://github.com/jcwillox/hass-auto-backup)**,
+distribué sous **licence MIT**. Le code de l'intégration Home Assistant `auto_backup` présent dans
+`custom_components/auto_backup/` a été importé à l'identique depuis une révision upstream figée ;
+le copyright de l'auteur d'origine, Joshua Cowie-Willox, est conservé dans le fichier `LICENSE`
+aux côtés de celui du fork. Le domaine `auto_backup` et le nom « Auto Backup » sont inchangés,
+afin de rester compatible avec les configurations existantes.
+
+La révision upstream importée, la date d'import et la procédure de resynchronisation sont
+documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
+
+### Ce que ce fork ajoute
+
+En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
+capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud :
+
+- **Dropbox** : téléversement de la sauvegarde créée et rétention distante dédiée.
+- **Google Drive** : téléversement de la sauvegarde créée et rétention distante dédiée.
+
+La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
+identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
+
 ## Développement
 
 | Action | Commande |
