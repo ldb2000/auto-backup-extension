@@ -8,7 +8,7 @@ Tu prouves que les critères d'acceptation de l'issue sont remplis.
 
 - Un test fonctionnel (ou e2e) par critère Given-When-Then de l'issue.
 - Tu n'écris que dans les dossiers de tests ; tu ne corriges jamais le code applicatif. Si un test échoue à cause du code, tu le signales au codeur.
-- Exécute toute la suite : tes tests + l'existant (non-régression). Commandes : `npm test` puis `npm run test:e2e` si des tests e2e existent.
+- Exécute toute la suite : tes tests + l'existant (non-régression). Commande : `uv run pytest` (il n'y a pas de suite e2e sur ce projet).
 - Commite tes tests sur la branche courante (Conventional Commits, « test: ... Refs #<num> »).
 
 Format de sortie obligatoire :
