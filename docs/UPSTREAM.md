@@ -45,7 +45,9 @@ justement éviter. C'est le point de couplage à revérifier lors d'une resynchr
 l'upstream renomme ces attributs, `tests/test_televersement.py` échoue immédiatement.
 
 Les modules upstream ne sont, eux, **que complétés** : aucune ligne upstream n'est supprimée ni
-modifiée, ce qui garde la resynchronisation en simple report de diff.
+modifiée, ce qui garde la resynchronisation en simple report de diff. Une seule exception, décrite
+ci-dessous : une ligne d'`__init__.py` est **ré-indentée**, son contenu restant identique au
+caractère près.
 
 - `custom_components/auto_backup/const.py` : ajout de l'import de type `DestinationManager` et
   d'un bloc de constantes du fork — `DATA_DESTINATIONS`, `CONF_DESTINATIONS`,
@@ -64,10 +66,9 @@ modifiée, ce qui garde la resynchronisation en simple report de diff.
   L'issue #8 y ajoute : l'import d'`ATTR_UPLOAD_TO` et celui des trois fonctions de
   `destinations/upload.py` ; la clé `upload_to` de `SCHEMA_BACKUP_BASE`, donc des trois
   services de sauvegarde à la fois ; l'appel `async_setup_upload(hass, entry)` ; et, dans le
-  gestionnaire de service, `async_prepare_upload()` **avant**
-  `auto_backup.async_create_backup(data)` puis `async_release_upload()` après. Ce sont des
-  ajouts : la ligne d'appel upstream `await auto_backup.async_create_backup(data)` n'est ni
-  déplacée ni modifiée.
+  gestionnaire de service, `async_prepare_upload()` **avant** la création de la sauvegarde puis
+  `async_release_upload()` dans un `finally`. Tout cela est ajouté, à une ré-indentation près,
+  décrite juste en dessous.
 - `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées — l'import de
   `preserve_destinations` et son appel dans `OptionsFlowHandler.async_step_init`. Le flux
   d'options upstream remplace l'intégralité des options par le contenu de son formulaire, qui
@@ -85,6 +86,44 @@ Le choix de persister les destinations dans `entry.options` plutôt qu'en sous-e
 configuration est justifié dans
 [`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md), tout comme la
 corrélation par événement retenue pour le téléversement.
+
+#### Seule ligne upstream ré-indentée : l'appel de création dans `__init__.py`
+
+Dans `async_service_handler`, la ligne upstream
+
+```python
+            await auto_backup.async_create_backup(data)
+```
+
+est **décalée de quatre espaces** pour entrer dans le `try` du fork :
+
+```python
+            demande_televersement = async_prepare_upload(hass, data)
+            try:
+                await auto_backup.async_create_backup(data)
+            finally:
+                async_release_upload(hass, demande_televersement)
+```
+
+Son contenu est inchangé ; seule son indentation l'est. C'est le seul endroit du fork où une
+ligne upstream n'est pas reprise telle quelle, et c'est assumé :
+
+- **pourquoi c'est nécessaire** : une demande de téléversement enregistrée avant la création ne
+  doit jamais survivre à l'appel de service qui l'a créée. Or `async_create_backup()` lève avant
+  d'émettre `auto_backup.backup_start` quand `validate_backup_config()` refuse la configuration
+  (une sauvegarde partielle sur une installation Core, par exemple). Sans `finally`,
+  `async_release_upload()` était sauté, la demande restait en attente, et la sauvegarde suivante
+  portant le même nom — sur Core, `generate_backup_name()` renvoie toujours `Core <version>`,
+  donc *n'importe quelle* sauvegarde sans nom explicite — la réclamait : un téléversement non
+  demandé. Le détail du mécanisme est dans
+  [`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md) ;
+- **pourquoi pas autrement** : déplacer l'appel dans une fonction du fork appelée à sa place
+  aurait **supprimé** la ligne upstream, ce qui est pire qu'un décalage d'indentation ; laisser
+  la libération au seul filet de l'expiration (30 s) aurait gardé une fenêtre de récupération
+  bien réelle ;
+- **coût en resynchronisation** : si l'upstream modifie cette ligne, le report doit être refait à
+  la main dans le `try`. Le diff reste lisible (`diff -w` l'ignore même complètement) et
+  `tests/test_conformite_upstream.py` en fait un cas nommé, pas une exemption silencieuse.
 
 #### Option `upload_timeout` : pas de champ dans le formulaire d'options
 
@@ -104,6 +143,10 @@ restauration de configuration), et la valeur par défaut couvre les sauvegardes 
 - les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `services.yaml`)
   sont comparés à l'upstream : le test échoue si une ligne upstream y a été supprimée ou
   modifiée ;
+- les seules divergences tolérées dans ces fichiers sont les ré-indentations énumérées dans
+  `REINDENTATIONS_TOLEREES` (aujourd'hui la seule ligne ci-dessus) : la ligne doit se retrouver
+  telle quelle dans le fichier du fork, au décalage d'indentation près, et être citée mot pour
+  mot dans cette page — `test_les_reindentations_tolerees_sont_justifiees` le vérifie ;
 - le reste du répertoire doit rester identique à la révision importée ;
 - aucun module du fork ne doit apparaître à la racine de `custom_components/auto_backup/` ;
 - chaque écart doit être listé dans cette page.

@@ -154,7 +154,7 @@ await hass.services.async_call(
 await hass.async_block_till_done(wait_background_tasks=True)
 ```
 
-Trois points méritent l'attention en écrivant un nouveau test :
+Quatre points méritent l'attention en écrivant un nouveau test :
 
 1. **`wait_background_tasks=True` est obligatoire.** Le téléversement s'exécute dans une tâche
    de fond (`entry.async_create_background_task`) ; sans cet argument, `async_block_till_done()`
@@ -166,6 +166,13 @@ Trois points méritent l'attention en écrivant un nouveau test :
    `taille_annoncee` permettent de vérifier que ce qui est arrivé chez la destination est bien
    le contenu du fichier. `attente_secondes` simule un transfert lent, ce qui éprouve le délai
    maximum `upload_timeout` sans faire patienter la suite de tests.
+4. **La corrélation a une fenêtre.** Une demande de téléversement n'est confirmable par
+   `auto_backup.backup_start` que tant que l'appel de service qui l'a enregistrée n'est pas
+   terminé. Un test qui pilote le coordinateur à la main (`async_enregistrer()`) travaille donc
+   sur une demande déjà armée ; dès qu'il appelle `async_release_upload()`, une demande non
+   confirmée disparaît sur-le-champ et plus aucun événement ne peut la réclamer. C'est voulu :
+   c'est ce qui empêche une sauvegarde homonyme, créée sans `upload_to`, d'être téléversée (voir
+   [`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md)).
 
 ## Modifier l'intégration importée
 
@@ -175,7 +182,10 @@ modifiée**, sauf lors d'une resynchronisation intentionnelle avec l'upstream. L
 cette règle (voir la section « Tests réseau » et
 [`tests/test_conformite_upstream.py`](../tests/test_conformite_upstream.py)) : les modules
 upstream que le fork complète sont comparés à la révision importée, et le test échoue si une
-ligne y a disparu ou changé.
+ligne y a disparu ou changé. La seule exception tolérée est la **ré-indentation** d'une ligne
+upstream, déclarée dans `REINDENTATIONS_TOLEREES` et citée mot pour mot dans
+[`docs/UPSTREAM.md`](UPSTREAM.md) : le contenu de la ligne doit rester identique au caractère
+près. Il n'y en a qu'une aujourd'hui.
 
 Le code propre au fork se range dans un sous-paquet dédié de l'intégration — aujourd'hui
 `custom_components/auto_backup/destinations/` — et non dans les modules upstream ni hors de

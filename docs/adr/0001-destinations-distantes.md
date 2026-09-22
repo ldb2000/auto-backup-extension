@@ -208,32 +208,69 @@ s'interdit (cf. [`../UPSTREAM.md`](../UPSTREAM.md)). L'upstream émet en revanch
 Le gestionnaire de service enregistre donc, **avant** la création, une « demande de
 téléversement » ; `CoordinateurTeleversement` écoute l'événement et retrouve la demande.
 
-La clé de corrélation est le **nom de la sauvegarde**. Quand l'appel de service n'en fournit
-pas, `async_prepare_upload()` calcule celui que l'upstream aurait généré — en appelant sa
-propre méthode `AutoBackup.generate_backup_name()` — et le pose dans les données de l'appel.
-`validate_backup_config()` ne le remplace alors plus, puisqu'il ne nomme que les sauvegardes
-sans nom : le résultat est identique, mais le nom est connu des deux côtés.
+#### Le nom seul ne suffit pas : la fenêtre d'armement
 
-Trois garde-fous complètent la corrélation :
+Le premier jet corrélait la demande **au seul nom de la sauvegarde**. C'était insuffisant, et
+dangereux : sur une installation Core, `AutoBackup.generate_backup_name()` renvoie toujours
+`Core <version>`. Toutes les sauvegardes sans nom explicite sont donc homonymes, et une demande
+restée en attente pouvait être consommée par une sauvegarde **sans aucun rapport**, créée sans
+`upload_to` — un téléversement non demandé, à l'insu de l'utilisateur. Le chemin était réel :
+`validate_backup_config()` refuse `exclude` hors Supervisor **après** l'enregistrement de la
+demande et **avant** `auto_backup.backup_start`.
 
-- une demande n'est **honorée qu'après confirmation** : le coordinateur écoute aussi
-  `auto_backup.backup_start`, émis par l'upstream juste avant l'appel au Supervisor ou au
-  `BackupManager`, et marque la demande homonyme comme confirmée. Seule une demande confirmée
-  peut donner lieu à un téléversement ;
-- une demande **non confirmée** expire au bout de 30 secondes. C'est le seul cas de fuite
-  possible : `validate_backup_config()` peut refuser la configuration avant même d'émettre
-  `backup_start` (sauvegarde partielle sur une installation Core, par exemple). Sans cette
-  expiration, la demande resterait à attendre indéfiniment, et une sauvegarde **homonyme mais
-  sans rapport** créée plus tard l'aurait consommée — donc téléversée à l'insu de
-  l'utilisateur. Trente secondes couvrent largement l'écart réel entre l'enregistrement et
-  `backup_start` : un aller-retour `get_addons()` au plus, dans le même appel de service ;
-- `async_release_upload()`, appelé après la création, oublie une demande que la création n'a
-  pas honorée (échec du Supervisor, par exemple).
+La corrélation retenue tient donc à **deux conditions cumulées**.
 
-Limite connue et assumée : deux sauvegardes créées **en parallèle** avec le **même nom
-explicite** ne sont pas distinguables ; la première demande enregistrée est consommée par la
-première sauvegarde terminée. Le cas suppose deux automatisations simultanées imposant le même
-nom, et reste sans incidence sur les sauvegardes locales.
+1. **Une fenêtre d'armement bornée par l'appel de service.** `async_prepare_upload()` enregistre
+   la demande « en cours » (`DemandeTeleversement.en_cours`), et `async_release_upload()` la
+   désarme. Le gestionnaire de service l'appelle dans un `finally`, donc y compris quand la
+   création lève : une demande jamais confirmée est alors **supprimée sur-le-champ**. Une demande
+   ne survit ainsi jamais à l'appel de service qui l'a produite. Ce `finally` est la seule
+   entorse du fork au code upstream — une ligne ré-indentée, détaillée dans
+   [`../UPSTREAM.md`](../UPSTREAM.md).
+2. **Le nom de la sauvegarde**, qui identifie la demande *à l'intérieur* de cette fenêtre. Quand
+   l'appel de service n'en fournit pas, `async_prepare_upload()` calcule celui que l'upstream
+   aurait généré — en appelant sa propre méthode `AutoBackup.generate_backup_name()` — et le pose
+   dans les données de l'appel. `validate_backup_config()` ne le remplace alors plus, puisqu'il
+   ne nomme que les sauvegardes sans nom : le résultat est identique, mais le nom est connu des
+   deux côtés.
+
+Chaque demande porte en plus un **identifiant unique** (`uuid4`). Il ne sert pas à la
+corrélation — aucun événement upstream ne le porte — mais à suivre une demande dans les
+journaux, de son enregistrement à son téléversement ou à son abandon, y compris entre demandes
+homonymes.
+
+#### Cycle de vie d'une demande
+
+| Étape | Effet sur la demande |
+| --- | --- |
+| `async_prepare_upload()` | enregistrée, `en_cours`, non confirmée |
+| `auto_backup.backup_start` | **confirmée** — seulement si elle est `en_cours` et homonyme |
+| `auto_backup.backup_successful` | réclamée si confirmée : le téléversement démarre |
+| `auto_backup.backup_failed` | réclamée si confirmée : la création a échoué, la demande est abandonnée |
+| `async_release_upload()` (dans le `finally`) | désarmée ; supprimée immédiatement si non confirmée |
+| expiration (30 s) | filet : purge une demande non confirmée oubliée là |
+
+Deux conséquences importantes :
+
+- `backup_start` **ne confirme qu'une demande armée**. Une demande déjà désarmée n'est plus
+  confirmable : une sauvegarde homonyme lancée après coup ne peut plus la réclamer ;
+- `backup_failed` est écouté au même titre que `backup_successful`. Sans lui, une demande
+  **confirmée** dont la création échoue resterait en attente indéfiniment — l'expiration ne purge
+  pas les demandes confirmées, puisqu'une création légitime peut durer plus longtemps qu'elle —
+  et la sauvegarde homonyme suivante l'aurait consommée.
+
+L'expiration de 30 secondes est conservée comme **dernier filet** (coordinateur rechargé, appelant
+qui oublierait le `finally`). Elle couvre largement l'écart réel entre l'enregistrement et
+`backup_start` : un aller-retour `get_addons()` au plus, dans le même appel de service.
+
+Limite connue et assumée : deux appels **concurrents** portant le **même nom explicite** et
+`upload_to` ne sont pas distinguables à l'intérieur de leurs fenêtres d'armement, qui se
+chevauchent ; la première demande enregistrée est confirmée par la première sauvegarde démarrée.
+Le cas suppose deux automatisations simultanées imposant le même nom, les deux avec `upload_to` ;
+le pire effet est une inversion des destinations entre deux sauvegardes, et les sauvegardes
+locales ne sont pas touchées. Le nom explicite reste donc le seul mode où la corrélation peut se
+tromper — lever cette limite exigerait un identifiant porté par les événements upstream, donc une
+modification du code importé.
 
 ### Téléversement en tâche de fond, avec un délai maximum
 
@@ -264,6 +301,11 @@ quand elle est connue, et le nom d'archive — valable le temps d'un contexte :
 | --- | --- | --- |
 | `SupervisorHandler` | `GET /backups/<slug>/download`, `content.iter_chunked()` | en-tête `Content-Length`, `None` s'il manque |
 | `BackupHandler` | fichier de l'agent de sauvegarde local, ouvert par `aiofiles` | `stat().st_size` |
+
+Le slug est **encodé** (`urllib.parse.quote(slug, safe="")`) avant d'entrer dans l'URL du
+Supervisor : il vient d'un événement, donc d'une réponse du Supervisor ou du `BackupManager`, et
+aucune valeur inattendue (`/`, `?`, `..`) ne doit pouvoir changer le chemin appelé sur une API
+non authentifiée par l'utilisateur.
 
 La sélection se fait par `isinstance`, dans le sous-paquet du fork : `handlers.py` reste
 identique à l'upstream. Sa méthode `download_backup()` n'était pas réutilisable, puisqu'elle
