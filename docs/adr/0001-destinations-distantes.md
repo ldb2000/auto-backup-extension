@@ -2,7 +2,11 @@
 
 - **Statut** : accepté
 - **Date** : 2026-09-22
-- **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle), [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et interface), [#10](https://github.com/ldb2000/auto-backup-extension/issues/10) (fournisseur Dropbox) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+- **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle),
+  [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et
+  interface), [#10](https://github.com/ldb2000/auto-backup-extension/issues/10) (fournisseur
+  Dropbox) et [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement
+  après création) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -75,8 +79,9 @@ Conséquences pratiques :
   upstream existantes et **complète** celles qui manquent par leurs valeurs par défaut :
   l'écouteur de mise à jour upstream lit `entry.options["auto_purge"]` sans valeur de repli et
   échouerait sur une entrée n'ayant jamais visité le flux d'options ;
-- `preserve_destinations()` est appelé par le flux d'options upstream pour reporter les
-  destinations que son formulaire ignore ;
+- `preserve_fork_options()` est appelé par le flux d'options upstream pour reporter les clés
+  que son formulaire ignore — les destinations, et depuis l'issue #8 toute option du fork
+  inscrite dans `CLES_DU_FORK` ;
 - les secrets d'autorisation vivent dans cette même liste depuis l'issue #7 : le support de
   persistance retenu étant `entry.options`, il n'existe pas d'autre endroit propre où mettre le
   jeton d'une destination (voir la décision 4 ci-dessous).
@@ -300,7 +305,7 @@ de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relat
 
 Premier fournisseur réel. Il ne change rien au socle : il se range dans
 `destinations/providers/dropbox.py`, déclare une `OAUTH2_SPEC` et une fabrique, et
-n'est connu du reste du code que par le registre. Quatre points méritent d'être tracés.
+n'est connu du reste du code que par le registre. Six points méritent d'être tracés.
 
 ### Pas de SDK Dropbox
 
@@ -383,6 +388,198 @@ ferme la page d'autorisation — reçoit son propre message (`options.abort.auto
 au lieu d'être affiché brut. La table `MOTIFS_DE_REFUS` du flux est ouverte : tout autre
 code reste rendu par le message générique, qui le cite.
 
+## Téléversement après création (issue #8)
+
+Le socle ci-dessus ne déclenche rien : l'issue #8 branche le téléversement sur la création de
+sauvegarde upstream. Trois décisions y sont prises, dans `destinations/upload.py`.
+
+### Corrélation par événement, pas par crochet dans le code upstream
+
+`AutoBackup._async_create_backup()` ne renvoie rien et n'offre aucun point d'extension : y
+brancher un appel exigerait de **modifier** des lignes du code importé, ce que le fork
+s'interdit (cf. [`../UPSTREAM.md`](../UPSTREAM.md)). L'upstream émet en revanche
+`auto_backup.backup_successful` avec le **nom** et le **slug** de la sauvegarde créée.
+
+| Option étudiée | Pourquoi elle n'a pas été retenue |
+| --- | --- |
+| Appeler le téléversement depuis `_async_create_backup()` | modifie le code upstream, à reporter à chaque resynchronisation |
+| Sous-classer `AutoBackup` et surcharger la méthode | dépend d'un détail d'implémentation privé, et l'upstream instancie la classe lui-même |
+| Écouter `auto_backup.backup_successful` | **retenue** : n'ajoute rien à l'upstream, et l'événement porte déjà le nom et le slug |
+
+Le gestionnaire de service enregistre donc, **avant** la création, une « demande de
+téléversement » ; `CoordinateurTeleversement` écoute l'événement et retrouve la demande.
+
+#### Le nom seul ne suffit pas : la fenêtre d'armement
+
+Le premier jet corrélait la demande **au seul nom de la sauvegarde**. C'était insuffisant, et
+dangereux : sur une installation Core, `AutoBackup.generate_backup_name()` renvoie toujours
+`Core <version>`. Toutes les sauvegardes sans nom explicite sont donc homonymes, et une demande
+restée en attente pouvait être consommée par une sauvegarde **sans aucun rapport**, créée sans
+`upload_to` — un téléversement non demandé, à l'insu de l'utilisateur. Le chemin était réel :
+`validate_backup_config()` refuse `exclude` hors Supervisor **après** l'enregistrement de la
+demande et **avant** `auto_backup.backup_start`.
+
+La corrélation retenue tient donc à **deux conditions cumulées**.
+
+1. **Une fenêtre d'armement bornée par l'appel de service.** `async_prepare_upload()` enregistre
+   la demande « en cours » (`DemandeTeleversement.en_cours`), et `async_release_upload()` la
+   désarme. Le gestionnaire de service l'appelle dans un `finally`, donc y compris quand la
+   création lève : une demande jamais confirmée est alors **supprimée sur-le-champ**. Une demande
+   ne survit ainsi jamais à l'appel de service qui l'a produite. Ce `finally` est la seule
+   entorse du fork au code upstream — une ligne ré-indentée, détaillée dans
+   [`../UPSTREAM.md`](../UPSTREAM.md).
+2. **Le nom de la sauvegarde**, qui identifie la demande *à l'intérieur* de cette fenêtre. Quand
+   l'appel de service n'en fournit pas, `async_prepare_upload()` calcule celui que l'upstream
+   aurait généré — en appelant sa propre méthode `AutoBackup.generate_backup_name()` — et le pose
+   dans les données de l'appel. `validate_backup_config()` ne le remplace alors plus, puisqu'il
+   ne nomme que les sauvegardes sans nom : le résultat est identique, mais le nom est connu des
+   deux côtés.
+
+Chaque demande porte en plus un **identifiant unique** (`uuid4`). Il ne sert pas à la
+corrélation — aucun événement upstream ne le porte — mais à suivre une demande dans les
+journaux, de son enregistrement à son téléversement ou à son abandon, y compris entre demandes
+homonymes.
+
+#### Cycle de vie d'une demande
+
+| Étape | Effet sur la demande |
+| --- | --- |
+| `async_prepare_upload()` | enregistrée, `en_cours`, non confirmée |
+| `auto_backup.backup_start` | **confirmée** — seulement si elle est `en_cours` et homonyme |
+| `auto_backup.backup_successful` | réclamée si confirmée : le téléversement démarre |
+| `auto_backup.backup_failed` | réclamée si confirmée : la création a échoué, la demande est abandonnée |
+| `async_release_upload()` (dans le `finally`) | désarmée ; supprimée immédiatement si non confirmée |
+| expiration (30 s) | filet : purge une demande non confirmée oubliée là |
+
+Deux conséquences importantes :
+
+- `backup_start` **ne confirme qu'une demande armée**. Une demande déjà désarmée n'est plus
+  confirmable : une sauvegarde homonyme lancée après coup ne peut plus la réclamer ;
+- `backup_failed` est écouté au même titre que `backup_successful`. Sans lui, une demande
+  **confirmée** dont la création échoue resterait en attente indéfiniment — l'expiration ne purge
+  pas les demandes confirmées, puisqu'une création légitime peut durer plus longtemps qu'elle —
+  et la sauvegarde homonyme suivante l'aurait consommée.
+
+L'expiration de 30 secondes est conservée comme **dernier filet** (coordinateur rechargé, appelant
+qui oublierait le `finally`). Elle couvre largement l'écart réel entre l'enregistrement et
+`backup_start` : un aller-retour `get_addons()` au plus, dans le même appel de service.
+
+Limite connue et assumée : deux appels **concurrents** portant le **même nom explicite** et
+`upload_to` ne sont pas distinguables à l'intérieur de leurs fenêtres d'armement, qui se
+chevauchent ; la première demande enregistrée est confirmée par la première sauvegarde démarrée.
+Le cas suppose deux automatisations simultanées imposant le même nom, les deux avec `upload_to` ;
+le pire effet est une inversion des destinations entre deux sauvegardes, et les sauvegardes
+locales ne sont pas touchées. Le nom explicite reste donc le seul mode où la corrélation peut se
+tromper — lever cette limite exigerait un identifiant porté par les événements upstream, donc une
+modification du code importé.
+
+#### Vigilance de resynchronisation : le nom doit rester celui qui a été demandé
+
+La corrélation suppose que `auto_backup.backup_successful` porte **exactement** le `name` inscrit
+dans les données de l'appel de service. C'est vrai de la révision importée : l'upstream reprend le
+nom du résultat de la création ou, à défaut, des données de l'appel, et `validate_backup_config()`
+ne nomme que les sauvegardes qui n'ont pas de nom — d'où le nom calculé à l'avance par
+`async_prepare_upload()`.
+
+Si une version ultérieure de l'upstream **normalisait** ce nom (passage par `slugify()`, troncature,
+horodatage ajouté, remplacement par le nom renvoyé par le Supervisor), l'événement ne
+correspondrait plus à la demande : celle-ci, déjà confirmée par `backup_start`, ne serait réclamée
+ni par `backup_successful` ni par `backup_failed`. Elle resterait en attente — l'expiration ne
+purge pas les demandes confirmées — et la sauvegarde ne partirait pas, en silence. Il faut donc,
+à chaque resynchronisation, vérifier que les trois événements portent toujours le nom demandé ;
+`tests/test_televersement.py` l'éprouve, en particulier pour une sauvegarde sans nom explicite.
+
+### Téléversement en tâche de fond, avec un délai maximum
+
+Le téléversement est lancé par `entry.async_create_background_task()` : l'appel de service rend
+la main dès la sauvegarde créée, et la tâche est annulée si l'entrée est déchargée. Un
+téléversement de plusieurs gigaoctets ne bloque donc ni le service, ni Home Assistant.
+
+Les destinations d'une même demande sont traitées **l'une après l'autre** : un flux ne se
+consomme qu'une fois, la sauvegarde est donc relue pour chacune. Les traiter en parallèle aurait
+imposé soit de garder le contenu en mémoire, soit d'ouvrir autant de lectures simultanées — deux
+façons de peser sur une machine qui vient déjà de produire une archive. L'échec de l'une
+n'interrompt jamais les suivantes : chaque destination a son propre `auto_backup.upload_failed`,
+et la sauvegarde locale n'est jamais touchée.
+
+Le délai maximum est `entry.options["upload_timeout"]`, en secondes, avec **1800 s** par défaut.
+Il est relu à chaque téléversement, donc modifiable sans redémarrage.
+
+Il se règle depuis l'interface, par l'entrée « Réglages du téléversement » du menu d'options, et
+non par un champ ajouté au formulaire upstream (`OPTIONS_SCHEMA`) : ce formulaire reste
+l'étape `init`, inchangée, et le réglage du fork vit dans une étape à lui
+(`destinations/flow.py`). Le schéma upstream n'est donc pas modifié, conformément à la règle du
+fork (cf. [`../UPSTREAM.md`](../UPSTREAM.md)).
+
+| Option étudiée | Pourquoi elle n'a pas été retenue |
+| --- | --- |
+| Ajouter le champ à `OPTIONS_SCHEMA` | modifie une ligne upstream, à reporter à chaque resynchronisation |
+| Laisser l'option non exposée | le critère d'acceptation exige un délai **configurable dans les options** ; l'éditer à la main n'est pas une configuration |
+| Une étape propre au fork dans le menu d'options | **retenue** : le formulaire upstream reste intact, et le réglage est accessible sans quitter l'interface |
+
+Une option du fork vivant dans `entry.options`, elle disparaîtrait au premier enregistrement du
+formulaire upstream, qui remplace l'intégralité des options par son contenu. `CLES_DU_FORK`
+(`const.py`) énumère donc ces clés — `destinations`, `upload_timeout` — et
+`preserve_fork_options()` les reporte toutes : inscrire une option future dans cette liste suffit
+à la protéger. La saisie est validée en un seul endroit (`_delai_de_televersement()`) : seul un
+nombre entier de secondes strictement positif est accepté, un délai nul ou négatif coupant tout
+téléversement avant même qu'il commence.
+
+### Lecture en flux, jamais en mémoire
+
+Une sauvegarde pèse couramment plusieurs centaines de mégaoctets : elle ne doit être ni chargée
+en mémoire, ni recopiée sur le disque avant d'être envoyée. `async_ouvrir_sauvegarde()` renvoie
+donc un `ContenuSauvegarde` — un itérateur asynchrone de morceaux de 64 Kio, la taille totale
+quand elle est connue, et le nom d'archive — valable le temps d'un contexte :
+
+| Handler upstream | Source lue | Taille |
+| --- | --- | --- |
+| `SupervisorHandler` | `GET /backups/<slug>/download`, `content.iter_chunked()` | en-tête `Content-Length`, `None` s'il manque |
+| `BackupHandler` | fichier de l'agent de sauvegarde local, ouvert par `aiofiles` | `stat().st_size` |
+
+Le slug est **encodé** (`urllib.parse.quote(slug, safe="")`) avant d'entrer dans l'URL du
+Supervisor : il vient d'un événement, donc d'une réponse du Supervisor ou du `BackupManager`, et
+aucune valeur inattendue (`/`, `?`, `..`) ne doit pouvoir changer le chemin appelé sur une API
+non authentifiée par l'utilisateur.
+
+La sélection se fait par `isinstance`, dans le sous-paquet du fork : `handlers.py` reste
+identique à l'upstream. Sa méthode `download_backup()` n'était pas réutilisable, puisqu'elle
+écrit obligatoirement dans un fichier de destination.
+
+`RemoteDestination.async_upload()` est étendue en conséquence, de façon **rétrocompatible** :
+`source` devient facultatif et trois paramètres nommés apparaissent — `stream`, `size` et
+`filename`. Un appel de la forme `async_upload(chemin, name=...)` reste valide, mais un
+fournisseur doit savoir consommer `stream` : sous Supervisor, la sauvegarde n'existe nulle part
+sur le disque de Home Assistant.
+
+Un échec de lecture (Supervisor injoignable, fichier disparu) lève `ErreurLectureSauvegarde`,
+distincte de `DestinationError` : l'échec vient d'ici, pas du fournisseur distant.
+
+### Événements émis et validation de `upload_to`
+
+| Événement | Champs |
+| --- | --- |
+| `auto_backup.upload_start` | `name`, `slug`, `destination`, `destination_name` |
+| `auto_backup.upload_successful` | les précédents, plus `size` et `remote_id` |
+| `auto_backup.upload_failed` | les champs de `upload_start`, plus `error` |
+
+**`size` peut valoir `null`.** Sous Supervisor, la taille vient de l'en-tête `Content-Length` de
+`GET /backups/<slug>/download` ; s'il manque, la sauvegarde est téléversée quand même, mais sa
+taille reste inconnue, et le fournisseur n'en renvoie pas toujours une non plus. Une automatisation
+qui affiche ou additionne `size` doit donc tolérer l'absence de valeur (`{{ trigger.event.data.size
+| default(0) }}`, par exemple), et les entités d'état de l'issue #16 ne doivent pas se mettre en
+`unavailable` pour autant : « taille inconnue » n'est pas un échec de téléversement.
+
+Une destination inconnue est refusée **avant** la création de la sauvegarde, par une
+`ServiceValidationError` en français qui liste les destinations configurées : mieux vaut ne rien
+créer que créer une sauvegarde dont l'utilisateur croira, à tort, qu'elle est partie.
+`upload_to` accepte un identifiant ou un nom (comparé sans tenir compte de la casse ni des
+espaces de bordure) ; un nom porté par plusieurs destinations est refusé plutôt qu'arbitré, en
+attendant l'unicité des noms promise par l'issue #7.
+
+Sans `upload_to`, rien de tout cela ne se déclenche : la clé est absente, aucune demande n'est
+enregistrée, aucun événement n'est émis, et le déroulement est exactement celui de l'upstream.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -407,10 +604,11 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   doit pas être documentée auprès des utilisateurs ni du fork** ; seuls les tests l'utiliseront.
 
 - **Événements** : quatre événements sont définis dans `const.py` (`auto_backup.upload_start`,
-  `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`),
-  mais leur **émission ne commence qu'à partir de #8** (téléversement) et **#9** (rétention
-  distante). Ils sont définis ici pour laisser le schéma de constantes stable et lisible, et
-  pour que les issues suivantes n'aient qu'à les émettre sans les déclarer.
+  `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`).
+  Les trois premiers sont **émis depuis #8** (voir la section « Téléversement après création »
+  ci-dessus) ; `auto_backup.remote_purge` attend **#9** (rétention distante). Ils sont définis
+  ici pour laisser le schéma de constantes stable et lisible, et pour que les issues suivantes
+  n'aient qu'à les émettre sans les déclarer.
 
 - **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
   doit être déclarée chez le fournisseur. **Traité pour Dropbox en #10**
@@ -459,6 +657,29 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   mécanismes robustes vers le flux d'options. Le plancher sera aligné sur **2026.3** par
   l'issue #28 pour lever cette limitation et migrer vers le modèle standard de Home Assistant.
 
+- **Limitation d'une corrélation par nom en présence d'appels concurrents (FAQ, issue #19)** :
+  deux appels **concurrents** portant le **même nom explicite** et `upload_to` ne sont pas
+  distinguables à l'intérieur de leurs fenêtres d'armement, qui se chevauchent ; la première
+  demande enregistrée est confirmée par la première sauvegarde démarrée. Le cas suppose deux
+  automatisations simultanées imposant le même nom, les deux avec `upload_to` ; le pire effet
+  est une inversion des destinations entre deux sauvegardes, et les sauvegardes locales ne sont
+  pas touchées. La FAQ #19 documenta la marche à suivre pour éviter ce scénario (noms explicites
+  différents, ou une seule automation avec `upload_to`).
+
+- **Traduction des champs de `services.yaml` (issue #18)** : le champ `upload_to` ajouté aux
+  trois services de sauvegarde reste libellé en anglais dans `services.yaml`, comme tout le reste
+  du fichier upstream (source de vérité des libellés par défaut). Les traductions françaises
+  vivent dans `translations/fr.json`, qui n'a pas encore de section `services` au moment de #8 ;
+  la traduction du champ y sera ajoutée en #18 pour que la formulation côté utilisateur soit
+  cohérente.
+
+- **Destination à ré-autoriser lors d'une purge (issue #9)** : une destination en attente de
+  ré-authentification (décision 4 de cet ADR) ne doit pas être contactée lors d'une opération de
+  purge distante (issue #9). Le gestionnaire expose `reauthentification_requise(destination_id)`
+  pour le vérifier ; l'issue #9 l'appelera avant d'appeler `async_list_backups()` et
+  `async_delete_backup()`, exactement comme #8 le fait pour le téléversement (voir la section
+  « Téléversement après création » ci-dessus).
+
 ## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
@@ -475,8 +696,8 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   refusées et acceptées de `folder` par le schéma, par `from_dict()` et par construction directe.
 - Les destinations sont exposées dans `hass.data[DATA_DESTINATIONS]` via un `DestinationManager`
   qui suit les options de l'entrée et disparaît à son déchargement.
-- Rien n'est téléversé à ce stade : `#8` branchera le téléversement sur la création de
-  sauvegarde, `#9` la rétention distante.
+- Le téléversement lui-même est branché par `#8` (section « Téléversement après création »
+  ci-dessus) ; `#9` y ajoutera la rétention distante.
 
 Ajouts de l'issue #7 :
 
@@ -491,6 +712,7 @@ Ajouts de l'issue #7 :
   seulement lorsqu'une autorisation démarre : une installation sans destination OAuth2 n'ouvre
   aucune route nouvelle.
 - Le flux d'options upstream devient une étape d'un menu, sans qu'aucune de ses lignes change.
-- `#8` (téléversement) et `#9` (purge distante) devront consulter
-  `DestinationManager.reauthentification_requise()` avant d'appeler une destination : une
-  destination en attente de ré-autorisation échouerait de toute façon.
+- `#8` (téléversement) consulte `DestinationManager.reauthentification_requise()` avant
+  d'appeler une destination : une destination en attente de ré-autorisation échouerait de toute
+  façon, et l'échec est signalé sans aucun appel réseau. `#9` (purge distante) devra faire de
+  même.

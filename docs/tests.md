@@ -48,6 +48,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_persistance.py` | Persistance des destinations dans l'entrée et rechargement après redémarrage. |
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
+| `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
@@ -174,6 +175,65 @@ Les cas Unicode sont écrits en séquences d'échappement (`\uff0e`) et non avec
 littéral : `ruff` refuse les caractères ambigus dans le code (RUF001/RUF002), et un confusable
 copié tel quel serait de toute façon illisible en revue.
 
+## Tester le téléversement d'une sauvegarde
+
+`tests/test_televersement.py` couvre l'issue #8 à deux niveaux.
+
+**La lecture en flux d'une sauvegarde locale**, pour les deux handlers upstream :
+
+- `SupervisorHandler` : la fixture `aioclient_mock` de
+  `pytest-homeassistant-custom-component` simule `GET /backups/<slug>/download`. Elle renvoie un
+  vrai `StreamReader`, ce qui permet de vérifier que la sauvegarde arrive en **plusieurs
+  morceaux** (le contenu de test dépasse les 64 Kio d'un morceau de lecture) et que la taille
+  vient de l'en-tête `Content-Length` ;
+- `BackupHandler` : un `BackupManager` en `MagicMock` renvoie une sauvegarde et un agent local
+  dont `get_backup_path()` pointe vers un fichier écrit dans `tmp_path`.
+
+**L'orchestration complète**, de l'appel de service aux événements `auto_backup.upload_*`. Le
+montage tient dans la fonction `_demarrer()` :
+
+```python
+instance = await _demarrer(hass, fichier_de_sauvegarde)  # destination factice chargée
+await hass.services.async_call(
+    DOMAIN, SERVICE_BACKUP, {"upload_to": "destination_test"}, blocking=True
+)
+await hass.async_block_till_done(wait_background_tasks=True)
+```
+
+Cinq points méritent l'attention en écrivant un nouveau test :
+
+1. **`wait_background_tasks=True` est obligatoire.** Le téléversement s'exécute dans une tâche
+   de fond (`entry.async_create_background_task`) ; sans cet argument, `async_block_till_done()`
+   rend la main avant la fin du transfert et le test constate un état vide.
+2. **La création de sauvegarde est simulée**, en remplaçant `handler.create_backup` par un
+   `AsyncMock` qui renvoie `{"slug": ...}`. Le reste du chemin upstream (événements, expiration,
+   `download_path`) n'est pas court-circuité pour autant.
+3. **Le fournisseur factice consomme réellement le flux** : `octets_recus`, `taille_recue` et
+   `taille_annoncee` permettent de vérifier que ce qui est arrivé chez la destination est bien
+   le contenu du fichier. `attente_secondes` simule un transfert lent, ce qui éprouve le délai
+   maximum `upload_timeout` sans faire patienter la suite de tests.
+4. **La corrélation a une fenêtre.** Une demande de téléversement n'est confirmable par
+   `auto_backup.backup_start` que tant que l'appel de service qui l'a enregistrée n'est pas
+   terminé. Un test qui pilote le coordinateur à la main (`async_enregistrer()`) travaille donc
+   sur une demande déjà armée ; dès qu'il appelle `async_release_upload()`, une demande non
+   confirmée disparaît sur-le-champ et plus aucun événement ne peut la réclamer. C'est voulu :
+   c'est ce qui empêche une sauvegarde homonyme, créée sans `upload_to`, d'être téléversée (voir
+   [`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md)).
+5. **Le délai maximum se règle par l'interface**, à l'étape `reglages_televersement` du flux
+   d'options (fixture `ouvrir_les_options`). Pour prouver que la valeur saisie est bien celle
+   qui borne l'envoi, sans attendre la fin d'un délai réel, `asyncio.timeout` est observé le
+   temps du téléversement :
+
+   ```python
+   with patch(
+       "custom_components.auto_backup.destinations.upload.asyncio.timeout",
+       wraps=asyncio.timeout,
+   ) as chronometre:
+       ...
+   ```
+
+   `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
+
 ## Tester un fournisseur réel
 
 Depuis l'issue #10, un fournisseur est livré : Dropbox
@@ -212,7 +272,10 @@ modifiée**, sauf lors d'une resynchronisation intentionnelle avec l'upstream. L
 cette règle (voir la section « Tests réseau » et
 [`tests/test_conformite_upstream.py`](../tests/test_conformite_upstream.py)) : les modules
 upstream que le fork complète sont comparés à la révision importée, et le test échoue si une
-ligne y a disparu ou changé.
+ligne y a disparu ou changé. La seule exception tolérée est la **ré-indentation** d'une ligne
+upstream, déclarée dans `REINDENTATIONS_TOLEREES` et citée mot pour mot dans
+[`docs/UPSTREAM.md`](UPSTREAM.md) : le contenu de la ligne doit rester identique au caractère
+près. Il n'y en a qu'une aujourd'hui.
 
 Le code propre au fork se range dans un sous-paquet dédié de l'intégration — aujourd'hui
 `custom_components/auto_backup/destinations/` — et non dans les modules upstream ni hors de
@@ -224,7 +287,8 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 ## Périmètre
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
-entités), le socle des destinations distantes (contrat, registre, persistance) et leur
-autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression). Les
+entités), le socle des destinations distantes (contrat, registre, persistance), leur
+autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression) et le
+téléversement après création (lecture en flux, événements, échecs, délai maximum). Les
 fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

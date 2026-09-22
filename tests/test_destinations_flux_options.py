@@ -198,8 +198,53 @@ async def test_le_menu_s_adapte_aux_destinations_existantes(
         "ajouter_destination",
         "reautoriser_destination",
         "supprimer_destination",
+        "reglages_televersement",
         "init",
     ]
+
+
+async def test_le_formulaire_upstream_conserve_une_destination_oauth(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Enregistrer le formulaire upstream ne perd pas une destination OAuth2.
+
+    `test_le_flux_d_options_conserve_les_destinations` (issue #6, module
+    `test_destinations_persistance.py`) le prouve déjà pour une destination
+    sans authentification. Celle-ci porte en plus `client_secret` et `token` :
+    exactement ce que `preserve_fork_options()` (issue #8, critère 6) doit
+    reporter sans y toucher, pas seulement l'identifiant et le nom.
+    """
+    destination = config_oauth_factice()
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={CONF_DESTINATIONS: [destination]},
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+
+    resultat = await ouvrir_les_options(entree.entry_id, "init")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"],
+        user_input={CONF_AUTO_PURGE: False, CONF_BACKUP_TIMEOUT: 45},
+    )
+    await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    assert entree.options[CONF_AUTO_PURGE] is False
+    # La destination — et ses secrets — sont reportés à l'identique.
+    assert entree.options[CONF_DESTINATIONS] == [destination]
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_CLIENT_SECRET] == CLIENT_SECRET_FACTICE
+    assert (
+        persistee[CONF_TOKEN]["access_token"] == destination[CONF_TOKEN]["access_token"]
+    )
 
 
 async def test_sans_fournisseur_enregistre_l_ajout_est_impossible(

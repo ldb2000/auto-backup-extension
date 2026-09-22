@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Collection
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -54,10 +55,25 @@ FICHIERS_UPSTREAM_ETENDUS = (
     "__init__.py",
     "const.py",
     "config_flow.py",
+    "services.yaml",
     "translations/fr.json",
     "translations/en.json",
 )
 REPERTOIRES_DU_FORK = ("destinations",)
+
+# Seule entorse tolérée à la règle « que des ajouts » : une ligne upstream
+# **ré-indentée**, inchangée par ailleurs, parce que le fork l'a placée dans un
+# bloc (`try`/`finally`). La tolérance reste étroite — le contenu de la ligne
+# doit se retrouver tel quel dans le fichier du fork, au seul décalage
+# d'indentation près — et chaque ligne est citée mot pour mot dans
+# `docs/UPSTREAM.md`. Toute autre divergence (mot changé, ligne déplacée ou
+# supprimée) échoue toujours.
+REINDENTATIONS_TOLEREES: dict[str, tuple[str, ...]] = {
+    # #8 : `async_release_upload()` doit être garanti même quand la création
+    # lève, sans quoi une demande de téléversement survivrait à son appel de
+    # service et serait réclamée par une sauvegarde homonyme.
+    "__init__.py": ("await auto_backup.async_create_backup(data)",),
+}
 
 
 def _sha_upstream() -> str:
@@ -75,17 +91,35 @@ def _section_des_ecarts() -> str:
     return texte.split("Écarts volontaires", 1)[1].split("\n## ", 1)[0]
 
 
-def _suppressions_upstream(upstream: Path, fork: Path) -> list[str]:
-    """Décrit les lignes upstream supprimées ou modifiées par le fork."""
+def _suppressions_upstream(
+    upstream: Path, fork: Path, reindentations: Collection[str] = ()
+) -> list[str]:
+    """Décrit les lignes upstream supprimées ou modifiées par le fork.
+
+    Les seules divergences passées sous silence sont les ré-indentations
+    déclarées dans `reindentations` : le bloc du fork doit alors contenir,
+    à l'identique une fois désindentée, chacune des lignes upstream concernées.
+    """
     lignes_upstream = upstream.read_text(encoding="utf-8").splitlines()
     lignes_fork = fork.read_text(encoding="utf-8").splitlines()
     comparaison = SequenceMatcher(None, lignes_upstream, lignes_fork, autojunk=False)
-    return [
-        f"lignes upstream {debut + 1}-{fin} ({operation}) : "
-        + " / ".join(lignes_upstream[debut:fin])
-        for operation, debut, fin, _, _ in comparaison.get_opcodes()
-        if operation in {"delete", "replace"}
-    ]
+
+    suppressions = []
+    for operation, debut, fin, debut_fork, fin_fork in comparaison.get_opcodes():
+        if operation not in {"delete", "replace"}:
+            continue
+        bloc_upstream = lignes_upstream[debut:fin]
+        bloc_fork = {ligne.strip() for ligne in lignes_fork[debut_fork:fin_fork]}
+        if all(
+            ligne.strip() in reindentations and ligne.strip() in bloc_fork
+            for ligne in bloc_upstream
+        ):
+            continue
+        suppressions.append(
+            f"lignes upstream {debut + 1}-{fin} ({operation}) : "
+            + " / ".join(bloc_upstream)
+        )
+    return suppressions
 
 
 def _lignes_de_copyright(texte: str) -> list[str]:
@@ -248,13 +282,18 @@ def test_les_fichiers_upstream_etendus_ne_sont_que_completes(
 ) -> None:
     """Les modules upstream étendus par le fork ne subissent que des ajouts.
 
-    Aucune ligne upstream ne doit être supprimée ni modifiée : la
+    Aucune ligne upstream ne doit être supprimée ni modifiée, hors les
+    ré-indentations déclarées dans `REINDENTATIONS_TOLEREES` : la
     resynchronisation reste ainsi un report de diff, jamais un arbitrage.
     """
     for nom in FICHIERS_UPSTREAM_ETENDUS:
         upstream = arborescence_upstream / nom
         assert upstream.is_file(), f"{nom} absent de l'upstream"
-        suppressions = _suppressions_upstream(upstream, REPERTOIRE_INTEGRATION / nom)
+        suppressions = _suppressions_upstream(
+            upstream,
+            REPERTOIRE_INTEGRATION / nom,
+            REINDENTATIONS_TOLEREES.get(nom, ()),
+        )
         assert not suppressions, (
             f"{nom} modifie ou supprime du code upstream :\n" + "\n".join(suppressions)
         )
@@ -313,6 +352,25 @@ def test_les_ecarts_volontaires_sont_documentes() -> None:
     assert not non_documentes, (
         f"écarts non documentés dans docs/UPSTREAM.md : {non_documentes}"
     )
+
+
+def test_les_reindentations_tolerees_sont_justifiees() -> None:
+    """Chaque ligne upstream ré-indentée est citée et justifiée dans UPSTREAM.md.
+
+    Ré-indenter une ligne upstream complique la resynchronisation : la
+    tolérance ne vaut que si la ligne concernée est nommée noir sur blanc dans
+    la page des écarts, avec sa raison d'être.
+    """
+    ecarts = _section_des_ecarts()
+    for nom, lignes in REINDENTATIONS_TOLEREES.items():
+        assert nom in FICHIERS_UPSTREAM_ETENDUS, (
+            f"{nom} porte une ré-indentation tolérée sans être un module étendu"
+        )
+        non_citees = [ligne for ligne in lignes if ligne not in ecarts]
+        assert not non_citees, (
+            f"lignes upstream ré-indentées dans {nom} et absentes de "
+            f"docs/UPSTREAM.md : {non_citees}"
+        )
 
 
 def test_le_code_du_fork_est_range_dans_ses_propres_sous_paquets() -> None:

@@ -100,6 +100,7 @@ ETAPES_D_OPTIONS_DU_FORK = (
     "destination",
     "reautoriser_destination",
     "supprimer_destination",
+    "reglages_televersement",
 )
 LANGUES_ETENDUES = ("fr", "en")
 
@@ -140,6 +141,7 @@ def test_les_traductions_couvrent_les_etapes_du_fork(langue: str) -> None:
         "ajouter_destination",
         "reautoriser_destination",
         "supprimer_destination",
+        "reglages_televersement",
         "init",
     }
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -313,11 +313,14 @@ class DropboxDestination(RemoteDestination):
 
     async def async_upload(
         self,
-        source: Path | str,
+        source: Path | str | None = None,
         *,
         name: str,
         slug: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        stream: AsyncIterator[bytes] | None = None,
+        size: int | None = None,
+        filename: str | None = None,
     ) -> RemoteBackup:
         """Hors périmètre de l'issue #10 : implémenté par l'issue #11."""
         raise NotImplementedError(MESSAGE_TELEVERSEMENT)
