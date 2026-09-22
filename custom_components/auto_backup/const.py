@@ -7,6 +7,7 @@ from homeassistant.util.hass_dict import HassKey
 if TYPE_CHECKING:
     from .manager import AutoBackup
     from .destinations import DestinationManager
+    from .destinations.oauth import EtatOAuth
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -79,3 +80,31 @@ EVENT_UPLOAD_START = f"{DOMAIN}.upload_start"
 EVENT_UPLOAD_SUCCESSFUL = f"{DOMAIN}.upload_successful"
 EVENT_UPLOAD_FAILED = f"{DOMAIN}.upload_failed"
 EVENT_REMOTE_PURGE = f"{DOMAIN}.remote_purge"
+
+### AUTORISATION OAUTH2 DES DESTINATIONS (issue #7) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md) : flux d'autorisation OAuth2 conduit depuis
+# le flux d'options. Les identifiants d'application (`client_id`, `client_secret`) et
+# le jeton (`token`) sont portés par chaque destination ; leurs clés viennent de
+# `homeassistant.const` (CONF_CLIENT_ID, CONF_CLIENT_SECRET, CONF_TOKEN).
+
+# Chemin de la vue qui reçoit le retour d'autorisation du fournisseur. Il est propre
+# au fork : la vue standard de Home Assistant (`/auth/external/callback`) ne sait
+# reprendre qu'un *config flow*, pas un flux d'options.
+OAUTH_CALLBACK_PATH = f"/auth/{DOMAIN}/callback"
+
+# États d'autorisation en attente : jeton aléatoire -> flux d'options à reprendre.
+DATA_OAUTH_STATES: HassKey[dict[str, EtatOAuth]] = HassKey(f"{DOMAIN}_oauth_states")
+# Vrai une fois la vue de retour enregistrée auprès du serveur HTTP.
+DATA_OAUTH_VIEW: HassKey[bool] = HassKey(f"{DOMAIN}_oauth_view")
+
+# Durée de vie d'un état d'autorisation, en secondes : au-delà, le retour du
+# fournisseur est refusé et l'utilisateur doit relancer le flux.
+OAUTH_STATE_TTL = 900
+
+# Délais des deux appels sortants du flux, en secondes.
+OAUTH_AUTHORIZE_URL_TIMEOUT = 30
+OAUTH_TOKEN_TIMEOUT = 30
+
+# Préfixe de l'identifiant du problème (« repair issue ») signalant qu'une
+# destination doit être ré-autorisée.
+ISSUE_REAUTH_PREFIX = "reauthentification_requise_"
