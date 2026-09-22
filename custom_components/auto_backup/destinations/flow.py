@@ -65,6 +65,7 @@ from ..const import (
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     DEFAULT_DESTINATION_FOLDER,
+    IDENTIFIANT_PROVISOIRE,
     OAUTH_AUTHORIZE_URL_TIMEOUT,
     OAUTH_TOKEN_TIMEOUT,
 )
@@ -94,10 +95,6 @@ RETENTION_NOMBRE_MAX = 1000
 
 # Longueur du suffixe aléatoire ajouté à un identifiant de destination déjà pris.
 LONGUEUR_SUFFIXE_IDENTIFIANT = 4
-
-# Identifiant de la destination fictive utilisée pendant l'ajout : l'autorisation
-# précède la création, et l'implémentation OAuth2 a besoin d'un identifiant.
-IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
 
 # Codes d'erreur OAuth2 (RFC 6749 §4.1.2.1) auxquels le fork sait répondre par un
 # message compréhensible plutôt que par le code brut. `access_denied` est celui
@@ -129,8 +126,14 @@ def _identifiant_disponible(nom: str, pris: Iterable[str]) -> str:
     reconnaissable dans les journaux et dans les options. En cas de collision —
     ou de nom sans aucun caractère translittérable — un suffixe aléatoire est
     ajouté, car l'identifiant ne doit jamais changer par la suite.
+
+    `IDENTIFIANT_PROVISOIRE` est traité comme déjà pris : une destination nommée
+    « Autorisation en cours » se translittérerait sinon exactement comme la
+    destination fictive du flux d'ajout, et le nettoyage de celle-ci
+    (`_async_decrire_le_compte()`) effacerait alors le signalement de
+    ré-authentification d'une destination bien réelle.
     """
-    deja_pris = set(pris)
+    deja_pris = {*pris, IDENTIFIANT_PROVISOIRE}
     base = slugify(nom) or "destination"
     if base not in deja_pris:
         return base

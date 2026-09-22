@@ -32,6 +32,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.setup import async_setup_component
+from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 from yarl import URL
@@ -62,6 +63,7 @@ from custom_components.auto_backup.destinations import (
     unregister_provider,
 )
 from custom_components.auto_backup.destinations.flow import (
+    IDENTIFIANT_PROVISOIRE,
     GestionDesDestinationsMixin,
     _identifiant_disponible,
     _retention,
@@ -932,6 +934,22 @@ def test_un_identifiant_deja_pris_recoit_un_suffixe() -> None:
     assert premier == "mon_nuage"
     assert second.startswith("mon_nuage_")
     assert second != premier
+
+
+def test_l_identifiant_de_la_destination_provisoire_n_est_jamais_attribue() -> None:
+    """Aucune destination réelle ne peut porter l'identifiant du flux d'ajout.
+
+    « Autorisation en cours » se translittère exactement comme la destination
+    fictive portée pendant l'autorisation. Si une destination réelle recevait cet
+    identifiant, le nettoyage de fin d'ajout effacerait son signalement de
+    ré-authentification : elle resterait muette au lieu d'être réparable.
+    """
+    assert slugify("Autorisation en cours") == IDENTIFIANT_PROVISOIRE
+
+    identifiant = _identifiant_disponible("Autorisation en cours", [])
+
+    assert identifiant != IDENTIFIANT_PROVISOIRE
+    assert identifiant.startswith(f"{IDENTIFIANT_PROVISOIRE}_")
 
 
 def test_un_nom_sans_caractere_translitterable_reste_identifiable() -> None:

@@ -109,6 +109,14 @@ OAUTH_TOKEN_TIMEOUT = 30
 # destination doit être ré-autorisée.
 ISSUE_REAUTH_PREFIX = "reauthentification_requise_"
 
+# Identifiant de la destination fictive portée par le flux d'ajout : l'autorisation
+# précède la création de la destination, et l'implémentation OAuth2 a besoin d'un
+# identifiant. Il est partagé par le flux (`destinations/flow.py`), qui le produit,
+# et par le signalement de ré-authentification (`destinations/reauth.py`), qui doit
+# le reconnaître pour ne pas alerter sur une destination qui n'existe pas. Aucune
+# destination réelle ne peut le porter : `_identifiant_disponible()` l'exclut.
+IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
+
 ### FOURNISSEURS DE DESTINATION RÉELS (issues #10 et #13) ###
 # Ajouts du fork (cf. docs/UPSTREAM.md). Les fournisseurs livrés vivent dans
 # `destinations/providers/` et s'enregistrent par `enregistrer_les_fournisseurs()`.

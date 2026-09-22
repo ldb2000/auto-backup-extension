@@ -475,6 +475,61 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
     assert resultat["type"] is FlowResultType.CREATE_ENTRY
 
 
+async def test_un_acces_refuse_pendant_l_ajout_n_alerte_pas_sur_la_destination_fictive(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Le refus pendant l'ajout ne s'annonce pas comme une ré-autorisation à faire.
+
+    Signaler « la destination "Autorisation en cours" doit être ré-autorisée »
+    enverrait l'utilisateur chercher dans ses options une destination qui n'existe
+    pas : le flux vient justement de la créer pour le temps de l'autorisation, et
+    l'efface aussitôt. Le refus reste tracé en `debug`, où il aide à diagnostiquer
+    une portée oubliée.
+    """
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.post(
+        URL_COMPTE, status=403, json={"error_summary": "missing_scope/..."}
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+        resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
+        await hass.async_block_till_done()
+
+    assert resultat["step_id"] == "destination"
+
+    # Le signalement de ré-authentification a bien eu lieu, mais en `debug`.
+    signalements = [
+        enregistrement
+        for enregistrement in caplog.records
+        if enregistrement.name.endswith("destinations.reauth")
+    ]
+    assert signalements, "le refus n'a pas été signalé du tout"
+    assert all(
+        enregistrement.levelno == logging.DEBUG for enregistrement in signalements
+    )
+    assert any(
+        "refusé l'accès pendant l'autorisation" in enregistrement.getMessage()
+        for enregistrement in signalements
+    )
+
+    avertissements = [
+        enregistrement.getMessage()
+        for enregistrement in caplog.records
+        if enregistrement.levelno >= logging.WARNING
+    ]
+    # Aucun avertissement n'invite à ré-autoriser quoi que ce soit : le seul qui
+    # subsiste dit ce qui s'est réellement passé, et nomme le fournisseur.
+    assert not [message for message in avertissements if "ré-autorisée" in message]
+    assert [
+        message for message in avertissements if "n'a pas pu être identifié" in message
+    ]
+
+
 ### Échecs d'autorisation, et relance du flux ###
 
 

@@ -48,7 +48,9 @@ modifiée, ce qui garde la resynchronisation en simple report de diff.
   `CONF_DESTINATION_ID`, `CONF_PROVIDER`, `CONF_FOLDER`, `CONF_RETENTION_DAYS`,
   `CONF_RETENTION_COUNT`, `DEFAULT_DESTINATION_FOLDER`, `EVENT_UPLOAD_START`,
   `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`, puis les constantes
-  d'autorisation OAuth2 de l'issue #7 et, à la fin du bloc, `CONF_PROVIDER_DATA` (issue #10).
+  d'autorisation OAuth2 de l'issue #7 — dont `IDENTIFIANT_PROVISOIRE`, partagé par le flux
+  d'ajout et le signalement de ré-authentification — et, à la fin du bloc, `CONF_PROVIDER_DATA`
+  (issue #10).
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées — l'import de
