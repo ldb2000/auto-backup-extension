@@ -687,6 +687,133 @@ async def test_une_destination_supprimee_entre_temps_est_signalee(
     assert "introuvable" in echecs[0].data[ATTR_ERROR]
 
 
+async def test_une_destination_a_reautoriser_n_est_pas_jointe(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Une destination en attente de ré-autorisation échoue sans appel réseau.
+
+    Point d'intégration entre les issues #7 et #8 : le marquage porté par le
+    gestionnaire est consulté **avant** d'ouvrir la sauvegarde. L'accès étant
+    révoqué, joindre le fournisseur ne ferait qu'échouer plus tard, après avoir
+    relu toute l'archive pour rien.
+    """
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    hass.data[DATA_DESTINATIONS].async_marquer_la_reauthentification("destination_test")
+    destination = instance.destination("destination_test")
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts, "aucun téléversement ne démarre vers une destination révoquée"
+    assert not succes
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_NAME] == "Sauvegarde du 22"
+    assert echecs[0].data[ATTR_SLUG] == SLUG
+    assert echecs[0].data[ATTR_DESTINATION] == "destination_test"
+    assert echecs[0].data[ATTR_DESTINATION_NAME] == "Destination de test"
+    assert "ré-authentification requise" in echecs[0].data[ATTR_ERROR]
+
+    # Ni le fournisseur ni la sauvegarde locale n'ont été sollicités.
+    assert not destination.sauvegardes
+    assert destination.octets_recus is None
+    hass.data[DATA_AUTO_BACKUP]._handler._manager.async_get_backup.assert_not_called()
+
+
+async def test_une_destination_revoquee_n_empeche_pas_les_autres(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Le marquage ne vaut que pour la destination concernée."""
+    instance = await _demarrer(
+        hass,
+        fichier_de_sauvegarde,
+        destinations=[
+            config_factice(),
+            config_factice(destination_id="secondaire", name="Destination secondaire"),
+        ],
+    )
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    hass.data[DATA_DESTINATIONS].async_marquer_la_reauthentification("destination_test")
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_UPLOAD_TO: ["destination_test", "secondaire"]},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_DESTINATION] == "destination_test"
+    assert len(succes) == 1
+    assert succes[0].data[ATTR_DESTINATION] == "secondaire"
+    assert instance.destination("secondaire").octets_recus == CONTENU_SAUVEGARDE
+
+
+async def test_la_destination_resolue_au_depart_sert_jusqu_au_bout(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Un rechargement en cours d'opération ne fait pas changer d'instance.
+
+    Point d'intégration entre les issues #7 et #8 : un rafraîchissement de jeton
+    réécrit les options de l'entrée, ce qui recrée **toutes** les destinations.
+    Le téléversement doit continuer sur la référence obtenue au début de
+    l'opération ; la retrouver en route s'adresserait à un autre objet, dont
+    la session OAuth2 n'est pas celle qui a ouvert le flux.
+
+    Le rechargement est ici déclenché par l'ouverture de la sauvegarde, c'est-à-dire
+    après la résolution de la destination et avant que le flux ne lui soit confié :
+    exactement la fenêtre où une seconde résolution changerait d'objet.
+    """
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    gestionnaire = hass.data[DATA_DESTINATIONS]
+    initiale = instance.destination("destination_test")
+
+    backup_manager = hass.data[DATA_AUTO_BACKUP]._handler._manager
+    sauvegarde_locale = backup_manager.async_get_backup.return_value
+
+    async def recharger_puis_repondre(*_args: Any, **_kwargs: Any) -> Any:
+        """Recrée les destinations au moment d'ouvrir la sauvegarde."""
+        gestionnaire.async_load(instance.entree.options[CONF_DESTINATIONS])
+        return sauvegarde_locale
+
+    backup_manager.async_get_backup = AsyncMock(side_effect=recharger_puis_repondre)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    remplacante = gestionnaire.async_get("destination_test")
+    assert remplacante is not initiale, "le rechargement doit avoir recréé l'instance"
+
+    assert not echecs
+    assert len(succes) == 1
+    assert succes[0].data[ATTR_DESTINATION] == "destination_test"
+    assert succes[0].data[ATTR_SIZE] == len(CONTENU_SAUVEGARDE)
+
+    # Le flux est arrivé en entier sur la destination du départ ; la nouvelle
+    # instance, elle, n'a rien reçu.
+    assert initiale.octets_recus == CONTENU_SAUVEGARDE
+    assert len(initiale.sauvegardes) == 1
+    assert not remplacante.sauvegardes
+    assert remplacante.octets_recus is None
+
+
 async def test_une_erreur_inattendue_du_fournisseur_est_capturee(
     hass: HomeAssistant, instance: _Instance
 ) -> None:

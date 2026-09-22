@@ -530,7 +530,15 @@ class CoordinateurTeleversement:
     async def _async_televerser_vers(
         self, destination_id: str, nom: str, slug: str
     ) -> None:
-        """Téléverse la sauvegarde vers une destination et émet ses événements."""
+        """Téléverse la sauvegarde vers une destination et émet ses événements.
+
+        La destination est résolue **une seule fois**, au tout début de
+        l'opération, et c'est cette référence qui sert jusqu'au bout. Un
+        rafraîchissement de jeton (issue #7) réécrit les options de l'entrée,
+        ce qui recharge le gestionnaire et recrée les instances : re-résoudre
+        l'identifiant en cours de route changerait d'objet au milieu d'un
+        téléversement déjà engagé.
+        """
         destination = self._destination(destination_id)
         if destination is None:
             self._async_signaler_echec(
@@ -540,6 +548,20 @@ class CoordinateurTeleversement:
                 slug,
                 f"destination « {destination_id} » introuvable, elle a pu être "
                 "supprimée depuis l'appel du service",
+            )
+            return
+
+        # Une destination dont l'accès a été révoqué (issue #7) échouerait de
+        # toute façon : l'échec est signalé sans ouvrir la sauvegarde ni joindre
+        # le fournisseur, et les autres destinations restent traitées.
+        if self._reauthentification_requise(destination_id):
+            self._async_signaler_echec(
+                destination_id,
+                destination.name,
+                nom,
+                slug,
+                "ré-authentification requise : autorisez de nouveau la destination "
+                "depuis les options de l'intégration",
             )
             return
 
@@ -633,6 +655,17 @@ class CoordinateurTeleversement:
             return gestionnaire.async_get(destination_id)
         except DestinationError:
             return None
+
+    def _reauthentification_requise(self, destination_id: str) -> bool:
+        """Indique si cette destination attend une nouvelle autorisation (#7).
+
+        Le marquage vit dans le gestionnaire, pas dans la destination : il
+        survit au rechargement qui recrée les instances.
+        """
+        gestionnaire = self._hass.data.get(DATA_DESTINATIONS)
+        return gestionnaire is not None and gestionnaire.reauthentification_requise(
+            destination_id
+        )
 
     @callback
     def _async_signaler_echec(
