@@ -65,7 +65,7 @@ from ..oauth import (
     OAuth2ProviderSpec,
     async_session_de_la_destination,
 )
-from ..registry import provider
+from ..reauth import async_signaler_la_reauthentification
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -252,6 +252,16 @@ async def async_appel_drive(
         raise DestinationError(f"Google Drive est injoignable : {err}") from err
 
     if statut >= 400:
+        if statut == 401:
+            # Le jeton porté par la requête était valide du point de vue de la
+            # session (non expiré, rafraîchi si besoin) : si Drive le refuse
+            # quand même, c'est que l'autorisation a été révoquée côté Google ou
+            # que le projet Cloud a changé. Seule une nouvelle autorisation en
+            # sort, comme pour Dropbox (401/403) : la destination est signalée à
+            # ré-autoriser, elle seule. Pendant le flux d'ajout, le signalement
+            # porte sur la destination provisoire et le flux l'efface aussitôt
+            # (`destinations/flow.py`).
+            async_signaler_la_reauthentification(session.hass, session.config)
         erreur = _erreur_de_la_reponse(statut, charge)
         _LOGGER.debug(
             "Appel Drive %s %s en échec : HTTP %s (%s)",
@@ -280,7 +290,6 @@ async def async_lire_le_compte(
     )
 
 
-@provider(PROVIDER_GOOGLE_DRIVE)
 class GoogleDriveDestination(RemoteDestination):
     """Destination « Google Drive » d'une entrée Auto Backup.
 
@@ -292,14 +301,15 @@ class GoogleDriveDestination(RemoteDestination):
 
     OAUTH2_SPEC: ClassVar[OAuth2ProviderSpec] = SPEC_OAUTH_GOOGLE_DRIVE
 
-    # Libellé affiché dans le sélecteur de fournisseur du flux d'options, à la
-    # place de l'identifiant technique.
-    label: ClassVar[str] = LIBELLE_GOOGLE_DRIVE
+    # Libellé affiché dans le sélecteur de fournisseur du flux d'options et dans
+    # ses formulaires, à la place de l'identifiant technique `google_drive`.
+    LABEL: ClassVar[str] = LIBELLE_GOOGLE_DRIVE
 
     def __init__(self, hass: HomeAssistant, config: DestinationConfig) -> None:
         """Prépare la destination et la session qui porte son jeton."""
         super().__init__(hass, config)
         self._session = async_session_de_la_destination(hass, config)
+        self._compte: CompteGoogle | None = None
 
     @property
     def session(self) -> DestinationOAuth2Session:
@@ -313,33 +323,40 @@ class GoogleDriveDestination(RemoteDestination):
 
     ### Crochets du flux d'ajout ###
 
-    @classmethod
-    async def async_nom_par_defaut(
-        cls, session: DestinationOAuth2Session
-    ) -> str | None:
+    async def async_nom_par_defaut(self) -> str | None:
         """Nom proposé à l'utilisateur juste après l'autorisation.
 
         Nommer la destination d'après le compte autorisé évite la confusion
         quand plusieurs comptes Google sont connectés.
         """
-        compte = await async_lire_le_compte(session)
+        compte = await self._async_compte()
         if compte.nom is None:
             return LIBELLE_GOOGLE_DRIVE
         return f"{LIBELLE_GOOGLE_DRIVE} {SEPARATEUR_DU_NOM} {compte.nom}"
 
-    @classmethod
-    async def async_donnees_du_fournisseur(
-        cls, session: DestinationOAuth2Session
-    ) -> dict[str, Any]:
+    async def async_donnees_du_fournisseur(self) -> Mapping[str, Any] | None:
         """Données propres au fournisseur à persister avec la destination.
 
         Seule l'adresse du compte autorisé y figure : elle permet de savoir,
         plus tard, quel compte une destination utilise sans redemander Google.
         """
-        compte = await async_lire_le_compte(session)
+        compte = await self._async_compte()
         if compte.email is None:
-            return {}
+            return None
         return {CLE_EMAIL_DU_COMPTE: compte.email}
+
+    async def _async_compte(self, *, forcer: bool = False) -> CompteGoogle:
+        """Compte autorisé, interrogé une fois puis mémorisé.
+
+        Le flux d'ajout appelle les deux crochets sur la **même** instance : la
+        mémorisation leur fait partager un unique aller-retour vers `about`, le
+        nom affiché et l'adresse sortant de la même réponse.
+        """
+        if self._compte is not None and not forcer:
+            return self._compte
+        compte = await async_lire_le_compte(self._session)
+        self._compte = compte
+        return compte
 
     ### Cycle de vie d'une sauvegarde distante ###
 

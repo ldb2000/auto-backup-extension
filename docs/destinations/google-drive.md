@@ -133,7 +133,7 @@ tard quel compte Google elle utilise.
 | « Home Assistant n'a pas d'URL externe configurée » | aucune URL externe, ou elle n'est pas publique | Paramètres > Système > Réseau, puis recommencez |
 | `redirect_uri_mismatch` (affiché par Google) | l'URI déclarée ne correspond pas exactement | recopiez l'adresse affichée par le formulaire, sans barre oblique finale |
 | « Le fournisseur a refusé le code d'autorisation » | ID client ou secret erroné (`invalid_client`), ou URI de redirection différente | vérifiez les identifiants dans la console Google, puis relancez l'ajout |
-| « Autorisation refusée par le fournisseur : access_denied » | consentement annulé, ou compte absent des utilisateurs test | autorisez avec un compte autorisé, ou publiez l'application |
+| « L'autorisation a été refusée ou annulée chez le fournisseur » | consentement annulé, ou compte absent des utilisateurs test | autorisez avec un compte autorisé, ou publiez l'application |
 | « l'API Google Drive n'est pas activée… » | étape 2 oubliée | activez l'API Drive, puis relancez l'ajout |
 
 Toutes ces erreurs interrompent l'ajout **sans rien enregistrer** : il suffit de corriger la
@@ -151,8 +151,9 @@ L'accès peut malgré tout être révoqué :
 - l'application est restée en mode « Test » et les 7 jours sont écoulés ;
 - le secret client a été régénéré, ou l'application supprimée du projet.
 
-Home Assistant crée alors un **problème** nommant la destination concernée ; les autres
-destinations continuent de fonctionner. Pour la remettre en service : options d'Auto Backup,
+Home Assistant crée alors un **problème** nommant la destination concernée — qu'il ait
+constaté le refus en renouvelant le jeton ou que Drive ait rejeté un jeton pourtant valide
+(HTTP 401) ; les autres destinations continuent de fonctionner. Pour la remettre en service : options d'Auto Backup,
 **Ré-autoriser une destination**, puis la destination en question. Ses réglages (nom, dossier,
 rétention) sont conservés, seul l'accès est renouvelé.
 

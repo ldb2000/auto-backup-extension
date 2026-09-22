@@ -45,6 +45,7 @@ from custom_components.auto_backup.const import (
     CONF_PROVIDER_DATA,
     DATA_DESTINATIONS,
     DOMAIN,
+    IDENTIFIANT_PROVISOIRE,
     OAUTH_CALLBACK_PATH,
 )
 from custom_components.auto_backup.destinations import (
@@ -57,6 +58,7 @@ from custom_components.auto_backup.destinations import (
     get_provider,
     identifiant_du_probleme,
     list_providers,
+    provider_label,
     spec_oauth_du_fournisseur,
 )
 from custom_components.auto_backup.destinations.oauth import (
@@ -292,7 +294,10 @@ async def test_le_fournisseur_est_livre_avec_l_integration(
     """Critère : « Google Drive » est proposé sans rien installer de plus."""
     assert PROVIDER_GOOGLE_DRIVE in list_providers()
     assert get_provider(PROVIDER_GOOGLE_DRIVE) is GoogleDriveDestination
-    assert GoogleDriveDestination.label == LIBELLE_GOOGLE_DRIVE
+    # Le libellé est déclaré par la classe et lu par le registre (issue #10) :
+    # l'utilisateur ne voit jamais l'identifiant technique `google_drive`.
+    assert GoogleDriveDestination.LABEL == LIBELLE_GOOGLE_DRIVE
+    assert provider_label(PROVIDER_GOOGLE_DRIVE) == LIBELLE_GOOGLE_DRIVE
 
 
 def test_la_declaration_oauth_ne_demande_que_la_portee_drive_file() -> None:
@@ -375,6 +380,9 @@ async def test_le_parcours_complet_connecte_un_compte_google(
     assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
     appels_about = _appels(aioclient_mock, URL_ABOUT)
     assert appels_about, "l'ajout doit interroger `about` pour identifier le compte"
+    # Les deux crochets sont joués sur la **même** destination provisoire : le
+    # compte est lu une fois, et le nom proposé comme l'adresse en sortent.
+    assert len(appels_about) == 1
     for _, url_about, _, entetes in appels_about:
         assert url_about.query["fields"] == "user(displayName,emailAddress)"
         assert entetes["Authorization"] == "Bearer acces-google-factice-2"
@@ -479,8 +487,9 @@ async def test_un_consentement_refuse_est_explique_et_le_flux_relancable(
     resultat = await _retour_de_google(hass, resultat, error="access_denied")
 
     assert resultat["type"] is FlowResultType.ABORT
-    assert resultat["reason"] == "autorisation_refusee"
-    assert resultat["description_placeholders"] == {"erreur": "access_denied"}
+    # `access_denied` est traduit en un abandon dédié (issue #10) : montrer le
+    # code brut à l'utilisateur ne lui apprendrait rien.
+    assert resultat["reason"] == "autorisation_annulee"
     assert not entree.options.get(CONF_DESTINATIONS)
 
     resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
@@ -671,6 +680,107 @@ async def test_les_echecs_de_drive_sont_qualifies(
         await _destination(hass).async_check_connection()
 
     assert extrait in str(erreur.value)
+
+
+async def test_un_401_sur_un_jeton_valide_demande_une_reautorisation(
+    hass: HomeAssistant,
+    entree_google: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Un jeton non expiré refusé par Drive : l'autorisation a été révoquée.
+
+    La session ne tente aucun rafraîchissement — le jeton n'a pas expiré — donc
+    rien ne signalerait la ré-authentification si le fournisseur ne le faisait
+    pas lui-même, comme Dropbox le fait pour 401 et 403. Sans cela, la
+    destination resterait muette au lieu d'être réparable depuis les options.
+    """
+    aioclient_mock.get(
+        URL_ABOUT,
+        status=401,
+        json=erreur_google(401, "authError", "Invalid Credentials"),
+    )
+
+    with pytest.raises(DestinationAuthError):
+        await _destination(hass).async_check_connection()
+    await hass.async_block_till_done()
+
+    # Aucun rafraîchissement n'a été tenté : le jeton persisté était valide.
+    assert not _appels(aioclient_mock, URL_JETON)
+
+    assert _gestionnaire(hass).reauthentification_requise(IDENTIFIANT_DESTINATION)
+    probleme = ir.async_get(hass).async_get_issue(
+        DOMAIN, identifiant_du_probleme(IDENTIFIANT_DESTINATION)
+    )
+    assert probleme is not None
+    assert probleme.translation_placeholders == {
+        "nom": "Mon Drive",
+        "fournisseur": PROVIDER_GOOGLE_DRIVE,
+    }
+
+
+async def test_un_403_ne_demande_pas_de_reautorisation(
+    hass: HomeAssistant,
+    entree_google: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Un 403 se corrige dans la console Google, pas en ré-autorisant.
+
+    API non activée, quota épuisé : le jeton est valide, ré-autoriser n'y
+    changerait rien. Seul le 401 déclenche le signalement.
+    """
+    aioclient_mock.get(
+        URL_ABOUT,
+        status=403,
+        json=erreur_google(403, "accessNotConfigured", "Drive API has not been used"),
+    )
+
+    with pytest.raises(DestinationError):
+        await _destination(hass).async_check_connection()
+    await hass.async_block_till_done()
+
+    assert not _gestionnaire(hass).reauthentification_requise(IDENTIFIANT_DESTINATION)
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, identifiant_du_probleme(IDENTIFIANT_DESTINATION)
+        )
+        is None
+    )
+
+
+async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orphelin(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Le signalement porterait sur une destination qui n'existe pas.
+
+    Pendant l'ajout, le 401 signale la destination **provisoire** : le flux
+    efface ce signalement dans tous les cas, échec compris, faute de quoi
+    l'utilisateur hériterait d'un problème « Autorisation en cours »
+    impossible à faire disparaître.
+    """
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.get(
+        URL_ABOUT,
+        status=401,
+        json=erreur_google(401, "authError", "Invalid Credentials"),
+    )
+
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    resultat = await _retour_de_google(hass, resultat, code=CODE_AUTORISATION_FACTICE)
+    await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
+    assert not entree.options.get(CONF_DESTINATIONS)
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, identifiant_du_probleme(IDENTIFIANT_PROVISOIRE)
+        )
+        is None
+    )
+    assert not _gestionnaire(hass).reauthentification_requise(IDENTIFIANT_PROVISOIRE)
 
 
 @pytest.mark.parametrize(
