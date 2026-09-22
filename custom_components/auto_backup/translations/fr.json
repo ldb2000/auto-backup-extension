@@ -1,4 +1,10 @@
 {
+    "issues": {
+        "reauthentification_requise": {
+            "title": "Auto Backup : la destination « {nom} » doit être ré-autorisée",
+            "description": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {nom} » : l'autorisation a expiré ou a été révoquée. Les autres destinations continuent de fonctionner.\n\nPour la remettre en service, ouvrez les options de l'intégration Auto Backup, choisissez « Ré-autoriser une destination » puis « {nom} »."
+        }
+    },
     "title": "Auto Backup",
     "config": {
         "step": {
@@ -13,8 +19,86 @@
         }
     },
     "options": {
+        "abort": {
+            "aucun_fournisseur": "Aucun fournisseur de destination distante n'est disponible dans cette version de l'intégration.",
+            "aucune_destination": "Aucune destination distante n'est configurée.",
+            "aucune_destination_oauth": "Aucune destination configurée n'utilise une autorisation à ré-accorder.",
+            "destination_inconnue": "Cette destination n'existe plus : elle a été supprimée entre-temps.",
+            "url_indisponible": "Home Assistant n'a pas d'URL externe configurée : le fournisseur ne pourrait pas vous ramener jusqu'ici. Renseignez l'URL externe dans Paramètres > Système > Réseau, puis recommencez.",
+            "vue_indisponible": "Le serveur HTTP de Home Assistant n'est pas disponible : le retour d'autorisation ne pourrait pas être reçu.",
+            "delai_url_autorisation": "L'URL d'autorisation n'a pas pu être préparée dans le temps imparti.",
+            "delai_jeton": "Le fournisseur n'a pas renvoyé de jeton dans le temps imparti.",
+            "echec_jeton": "Impossible d'obtenir un jeton auprès du fournisseur. Vérifiez votre connexion, puis recommencez.",
+            "autorisation_non_accordee": "Le fournisseur a refusé le code d'autorisation. Vérifiez l'identifiant et le secret de votre application, ainsi que l'URL de redirection qu'elle déclare.",
+            "autorisation_refusee": "Autorisation refusée par le fournisseur : {erreur}.",
+            "jeton_invalide": "Le fournisseur a renvoyé un jeton inexploitable : la destination n'a pas été créée.",
+            "fournisseur_invalide": "Le fournisseur choisi n'est plus disponible ou ne gère pas l'autorisation demandée.",
+            "configuration_invalide": "La configuration des destinations n'a pas pu être enregistrée."
+        },
+        "error": {
+            "identifiants_invalides": "Renseignez l'identifiant et le secret de votre application.",
+            "nom_invalide": "Le nom de la destination ne peut pas être vide.",
+            "nom_deja_utilise": "Une destination porte déjà ce nom.",
+            "dossier_invalide": "Le dossier doit être un chemin relatif composé de lettres, de chiffres, d'espaces et de « - _ . ( ) », dont les niveaux sont séparés par « / » — par exemple « Sauvegardes/Home Assistant ».",
+            "destination_invalide": "La destination n'a pas pu être créée avec ces valeurs.",
+            "aucune_selection": "Sélectionnez au moins une destination."
+        },
         "step": {
+            "menu": {
+                "title": "Auto Backup",
+                "description": "Que souhaitez-vous configurer ?",
+                "menu_options": {
+                    "ajouter_destination": "Ajouter une destination",
+                    "reautoriser_destination": "Ré-autoriser une destination",
+                    "supprimer_destination": "Supprimer une destination",
+                    "init": "Réglages des sauvegardes"
+                }
+            },
+            "ajouter_destination": {
+                "title": "Ajouter une destination",
+                "description": "Choisissez le service vers lequel envoyer une copie de vos sauvegardes.",
+                "data": {
+                    "provider": "Fournisseur"
+                }
+            },
+            "identifiants": {
+                "title": "Identifiants de votre application",
+                "description": "Créez une application auprès de « {fournisseur} », puis déclarez-y cette URL de redirection :\n\n`{url_de_retour}`\n\nReportez ensuite ci-dessous l'identifiant et le secret de cette application. Ils restent dans votre instance Home Assistant et ne sont jamais journalisés.",
+                "data": {
+                    "client_id": "Identifiant client",
+                    "client_secret": "Secret client"
+                }
+            },
+            "autorisation": {
+                "title": "Autorisation",
+                "description": "Autorisez Auto Backup dans la fenêtre qui vient de s'ouvrir, puis revenez ici."
+            },
+            "destination": {
+                "title": "Nouvelle destination",
+                "description": "Fournisseur « {fournisseur} ». Nommez cette destination, choisissez le dossier distant où déposer les sauvegardes, et, si vous le souhaitez, une rétention propre à cette destination.",
+                "data": {
+                    "name": "Nom de la destination",
+                    "folder": "Dossier distant",
+                    "retention_days": "Conserver pendant (jours)",
+                    "retention_count": "Nombre maximum de sauvegardes conservées"
+                }
+            },
+            "reautoriser_destination": {
+                "title": "Ré-autoriser une destination",
+                "description": "Choisissez la destination dont l'accès doit être renouvelé. Les autres destinations ne sont pas touchées.",
+                "data": {
+                    "destination_id": "Destination"
+                }
+            },
+            "supprimer_destination": {
+                "title": "Supprimer une destination",
+                "description": "La configuration et l'autorisation des destinations choisies seront effacées. Les sauvegardes déjà déposées chez le fournisseur ne sont pas supprimées.",
+                "data": {
+                    "destinations": "Destinations à supprimer"
+                }
+            },
             "init": {
+                "title": "Réglages des sauvegardes",
                 "data": {
                     "auto_purge": "Suppression automatique des sauvegardes expirées.",
                     "backup_timeout": "Délai d'attente pour la sauvegarde (minutes)"

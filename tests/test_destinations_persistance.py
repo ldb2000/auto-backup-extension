@@ -9,6 +9,7 @@ Home Assistant, simulé par le déchargement puis le rechargement de l'entrée.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -177,12 +178,12 @@ async def test_la_persistance_refuse_deux_destinations_de_meme_identifiant(
 
 
 async def test_le_flux_d_options_conserve_les_destinations(
-    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+    hass: HomeAssistant,
+    entree_avec_destination: MockConfigEntry,
+    ouvrir_les_options: Callable[[str, str], Awaitable[dict]],
 ) -> None:
     """Enregistrer le formulaire d'options ne perd pas les destinations."""
-    resultat = await hass.config_entries.options.async_init(
-        entree_avec_destination.entry_id
-    )
+    resultat = await ouvrir_les_options(entree_avec_destination.entry_id, "init")
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"],
         user_input={CONF_AUTO_PURGE: False, CONF_BACKUP_TIMEOUT: 45},

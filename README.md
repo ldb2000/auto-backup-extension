@@ -27,6 +27,26 @@ capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le clou
 La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
 
+Les options de l'intégration s'ouvrent sur un menu : **Ajouter une destination**,
+**Ré-autoriser une destination**, **Supprimer une destination**, et les **réglages des
+sauvegardes** d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
+d'une application OAuth2 créée par vos soins chez le fournisseur, dans laquelle vous déclarez
+l'URL de redirection affichée par le formulaire — de la forme
+`https://votre-instance/auth/auto_backup/callback`. 
+
+Votre instance doit donc avoir une **URL externe configurée** (Paramètres > Système > Réseau)
+pour que le fournisseur puisse vous y ramener. Cette URL doit être :
+- **HTTPS** (pas HTTP) : requis par les fournisseurs pour des raisons de sécurité ;
+- **publiquement accessible** : elle ne peut pas être locale (`.local`) ou basée sur une adresse
+  IP nue (par exemple, `192.168.1.10`). Certains fournisseurs comme Google Drive refusent les
+  URI locales ou privées.
+
+Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
+destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
+
+Aucun fournisseur cloud n'est encore livré : Dropbox et Google Drive viendront s'enregistrer
+dans ce même parcours.
+
 ## Développement
 
 Le projet utilise [`uv`](https://docs.astral.sh/uv/) et Python 3.14 (version épinglée dans

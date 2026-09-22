@@ -8,7 +8,10 @@ instance Home Assistant de test en quelques lignes :
 - `entree_auto_backup` initialise l'intégration depuis une `MockConfigEntry` ;
 - `gestionnaire_auto_backup` donne accès au gestionnaire stocké dans `hass.data` ;
 - `fournisseur_factice` enregistre le fournisseur de destination en mémoire
-  (`tests/destinations_factices.py`) le temps d'un test.
+  (`tests/destinations_factices.py`) le temps d'un test ;
+- `fournisseur_oauth_factice` fait de même pour sa variante qui déclare une
+  autorisation OAuth2 ;
+- `ouvrir_les_options` ouvre le flux d'options et choisit une étape de son menu.
 
 Les tests marqués `network` (comparaison avec le dépôt upstream) ne sont pas
 exécutés par défaut : ajouter `--tests-reseau` à la ligne de commande.
@@ -17,11 +20,13 @@ exécutés par défaut : ajouter `--tests-reseau` à la ligne de commande.
 from __future__ import annotations
 
 import sys
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from pathlib import Path
 
 import pytest
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -48,7 +53,9 @@ from custom_components.auto_backup.destinations import (  # noqa: E402
 from custom_components.auto_backup.manager import AutoBackup  # noqa: E402
 from destinations_factices import (  # noqa: E402
     PROVIDER_FACTICE,
+    PROVIDER_OAUTH_FACTICE,
     DestinationEnMemoire,
+    DestinationOAuthEnMemoire,
 )
 
 _CHEMIN_PAQUET = Path(next(iter(custom_components.__path__))).resolve()
@@ -133,3 +140,37 @@ def fournisseur_factice() -> Iterator[str]:
     register_provider(PROVIDER_FACTICE, DestinationEnMemoire)
     yield PROVIDER_FACTICE
     unregister_provider(PROVIDER_FACTICE)
+
+
+@pytest.fixture
+def fournisseur_oauth_factice() -> Iterator[str]:
+    """Enregistre le fournisseur factice qui déclare s'authentifier en OAuth2.
+
+    Il partage tout avec le fournisseur en mémoire, mais expose une
+    `OAUTH2_SPEC` : le flux d'options lui demande donc des identifiants
+    d'application puis une autorisation (issue #7).
+    """
+    register_provider(PROVIDER_OAUTH_FACTICE, DestinationOAuthEnMemoire)
+    yield PROVIDER_OAUTH_FACTICE
+    unregister_provider(PROVIDER_OAUTH_FACTICE)
+
+
+@pytest.fixture
+def ouvrir_les_options(
+    hass: HomeAssistant,
+) -> Callable[[str, str], Awaitable[ConfigFlowResult]]:
+    """Ouvre le flux d'options et choisit une étape dans son menu.
+
+    Depuis l'issue #7, le flux d'options commence par un menu : le formulaire
+    upstream (`auto_purge`, `backup_timeout`) reste accessible, mais par
+    l'entrée « init » de ce menu.
+    """
+
+    async def _ouvrir(entry_id: str, etape: str) -> ConfigFlowResult:
+        resultat = await hass.config_entries.options.async_init(entry_id)
+        assert resultat["type"] is FlowResultType.MENU, resultat
+        return await hass.config_entries.options.async_configure(
+            resultat["flow_id"], {"next_step_id": etape}
+        )
+
+    return _ouvrir

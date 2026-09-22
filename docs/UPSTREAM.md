@@ -33,9 +33,11 @@ Lien direct vers la révision :
 
 Le code propre au fork vit dans le sous-paquet `custom_components/auto_backup/destinations/`,
 absent de l'upstream : contrat commun des destinations distantes, types de données, erreurs
-typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis
-l'orchestration du téléversement après création (`destinations/upload.py`, issue #8). Les
-fournisseurs Dropbox et Google Drive viendront s'y greffer sans toucher au code upstream.
+typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis autorisation
+OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
+d'interface du flux d'options (`flow.py`, issue #7), enfin l'orchestration du téléversement
+après création (`destinations/upload.py`, issue #8). Les fournisseurs Dropbox et Google Drive
+viendront s'y greffer sans toucher au code upstream.
 
 `handlers.py` n'est, lui, **pas modifié du tout** : `destinations/upload.py` lit une sauvegarde
 en flux en s'appuyant sur `isinstance(handler, SupervisorHandler | BackupHandler)` et sur les
@@ -69,11 +71,6 @@ caractère près.
   gestionnaire de service, `async_prepare_upload()` **avant** la création de la sauvegarde puis
   `async_release_upload()` dans un `finally`. Tout cela est ajouté, à une ré-indentation près,
   décrite juste en dessous.
-- `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées — l'import de
-  `preserve_destinations` et son appel dans `OptionsFlowHandler.async_step_init`. Le flux
-  d'options upstream remplace l'intégralité des options par le contenu de son formulaire, qui
-  ignore les destinations : sans ce report, enregistrer les options effacerait les destinations
-  configurées.
 - `custom_components/auto_backup/services.yaml` : un champ `upload_to` ajouté aux services
   `backup`, `backup_full` et `backup_partial` (défini une fois avec l'ancre YAML `&upload_to`,
   référencé deux fois), à la fin de la liste des champs de chacun. Aucun champ upstream n'est
@@ -81,6 +78,31 @@ caractère près.
   upstream : ce fichier est la source de vérité des libellés par défaut de l'interface, et les
   traductions françaises vivent dans `translations/fr.json`, qui n'a pas encore de section
   `services`. Traduire ce seul champ rendrait le formulaire bilingue pour tout le monde.
+- `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées par l'issue #6 —
+  l'import de `preserve_destinations` et son appel dans `OptionsFlowHandler.async_step_init`.
+  Le flux d'options upstream remplace l'intégralité des options par le contenu de son
+  formulaire, qui ignore les destinations : sans ce report, enregistrer les options effacerait
+  les destinations configurées. L'issue #7 ajoute deux lignes **à la fin du fichier** :
+  l'import de `etendre_le_flux_d_options()` et la réaffectation
+  `OptionsFlowHandler = etendre_le_flux_d_options(OptionsFlowHandler)`. La méthode upstream
+  `ConfigFlow.async_get_options_flow()` résout ce nom au moment de l'appel : lui substituer une
+  sous-classe suffit à ajouter le menu et les étapes d'ajout, de ré-autorisation et de
+  suppression d'une destination, sans modifier ni la classe upstream ni sa méthode. Le
+  formulaire upstream reste l'étape `init`, désormais atteinte depuis le menu.
+- `custom_components/auto_backup/translations/fr.json` et
+  `custom_components/auto_backup/translations/en.json` : clés ajoutées par l'issue #7 —
+  `issues.reauthentification_requise` et, sous `options`, les sections `abort`, `error` et les
+  étapes `menu`, `ajouter_destination`, `identifiants`, `autorisation`, `destination`,
+  `reautoriser_destination`, `supprimer_destination`, plus un `title` pour l'étape `init`.
+  Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
+  les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
+  upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
+  `sk`, `ur`) ne sont pas touchées : Home Assistant retombe sur l'anglais pour les clés
+  absentes, et leur traduction relève de l'issue #17.
+- Le fork enregistre une vue HTTP propre, `/auth/auto_backup/callback`, au moment où une
+  autorisation OAuth2 démarre. Elle est nécessaire parce que la vue standard
+  (`/auth/external/callback`) ne sait reprendre qu'un *config flow*, alors que les destinations
+  sont éditées par un flux d'**options** (cf. l'ADR).
 
 Le choix de persister les destinations dans `entry.options` plutôt qu'en sous-entrées de
 configuration est justifié dans
@@ -140,9 +162,9 @@ restauration de configuration), et la valeur par défaut couvre les sauvegardes 
 
 - les fichiers réécrits (`manifest.json`) sortent de la comparaison ligne à ligne mais sont
   contrôlés par leurs propres tests ;
-- les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `services.yaml`)
-  sont comparés à l'upstream : le test échoue si une ligne upstream y a été supprimée ou
-  modifiée ;
+- les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `services.yaml`,
+  `translations/fr.json`, `translations/en.json`) sont comparés à l'upstream : le test échoue
+  si une ligne upstream y a été supprimée ou modifiée ;
 - les seules divergences tolérées dans ces fichiers sont les ré-indentations énumérées dans
   `REINDENTATIONS_TOLEREES` (aujourd'hui la seule ligne ci-dessus) : la ligne doit se retrouver
   telle quelle dans le fichier du fork, au décalage d'indentation près, et être citée mot pour

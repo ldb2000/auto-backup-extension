@@ -46,8 +46,10 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_entities.py` | Entités créées et rattachement au device de service. |
 | `tests/test_destinations.py` | Socle des destinations distantes : contrat, types, erreurs, registre, gestionnaire. |
 | `tests/test_destinations_persistance.py` | Persistance des destinations dans l'entrée et rechargement après redémarrage. |
+| `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
+| `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
-| `tests/destinations_factices.py` | Fournisseur de destination factice, en mémoire (aide, pas un module de tests). |
+| `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
 | `tests/test_project_tooling.py` | Cohérence de l'outillage Python déclaré dans `pyproject.toml`. |
@@ -65,6 +67,8 @@ Toutes sont définies dans `tests/conftest.py`.
 | `entree_auto_backup` | Initialise l'intégration depuis une `MockConfigEntry` et renvoie l'entrée créée. |
 | `gestionnaire_auto_backup` | Renvoie l'objet `AutoBackup` stocké dans `hass.data`. |
 | `fournisseur_factice` | Enregistre le fournisseur de destination factice dans le registre le temps du test, puis le retire. |
+| `fournisseur_oauth_factice` | Idem pour `DestinationOAuthEnMemoire`, la variante qui déclare une `OAUTH2_SPEC` et exige un jeton valide avant chaque opération. |
+| `ouvrir_les_options` | Ouvre le flux d'options et choisit une étape de son menu : `await ouvrir_les_options(entry_id, "init")`. |
 
 Écrire un test qui démarre l'intégration tient alors en une ligne :
 
@@ -114,6 +118,47 @@ async def test_mon_comportement(hass, fournisseur_factice):
 La fixture `fournisseur_factice` enregistre le fournisseur dans le registre global du processus
 puis l'en retire : tout test qui enregistre un fournisseur doit faire de même, sous peine de
 polluer les tests suivants.
+
+## Tester l'autorisation OAuth2 d'une destination
+
+Depuis l'issue #7, `tests/destinations_factices.py` fournit aussi `DestinationOAuthEnMemoire`
+(fournisseur `factice_oauth`, fixture `fournisseur_oauth_factice`) : elle déclare une
+`OAUTH2_SPEC` pointant vers un fournisseur imaginaire du domaine réservé `.test` et demande un
+jeton valide avant chaque opération. Les jetons qu'elle a effectivement utilisés sont
+mémorisés dans `destination.jetons_utilises`, ce qui permet de vérifier qu'un jeton expiré a
+bien été rafraîchi **avant** l'appel.
+
+Le point de jeton du fournisseur est simulé par la fixture `aioclient_mock` de
+`pytest-homeassistant-custom-component` : aucun appel réseau n'est fait.
+
+```python
+async def test_le_jeton_expire_est_rafraichi(hass, entree_oauth, aioclient_mock):
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    destination = hass.data[DATA_DESTINATIONS].async_get("destination_oauth")
+    await destination.async_check_connection()
+
+    assert destination.jetons_utilises == ["acces-factice-2"]
+```
+
+Un accès révoqué se simule par une réponse d'erreur : `aioclient_mock.post(URL_JETON_FACTICE,
+status=400, json={"error": "invalid_grant"})`. L'opération lève alors `DestinationAuthError`,
+la destination est marquée « ré-authentification requise » dans le gestionnaire et un problème
+Home Assistant est créé pour elle seule.
+
+Trois règles pour ces tests :
+
+- **Aucune valeur réelle.** Identifiants d'application, codes et jetons sont des chaînes
+  reconnaissables (`identifiant-application-factice`, `acces-factice-1`), et les URL pointent
+  vers `.test` (RFC 2606). Un test vérifie qu'aucune de ces valeurs n'apparaît dans les
+  journaux, même en niveau `debug`.
+- **L'instance doit être joignable.** L'URI de redirection dérive de l'URL externe de
+  l'instance : `await async_process_ha_core_config(hass, {"external_url": ...})` avant de
+  démarrer un flux d'autorisation, sans quoi celui-ci s'interrompt sur `url_indisponible`.
+- **Les écritures directes dans `entry.options` doivent porter les options upstream.**
+  L'écouteur de mise à jour upstream lit `auto_purge` et `backup_timeout` sans valeur de repli ;
+  le code du fork passe pour cela par `options_avec_destinations()`, mais un test qui écrit à la
+  main doit les inclure.
 
 Le champ `folder` d'une destination est un **chemin relatif POSIX** : `tests/test_destinations.py`
 éprouve, pour le schéma voluptuous comme pour `DestinationConfig` (par `from_dict()` et par
@@ -197,7 +242,8 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 ## Périmètre
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
-entités), le socle des destinations distantes (contrat, registre, persistance) et le
+entités), le socle des destinations distantes (contrat, registre, persistance), leur
+autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression) et le
 téléversement après création (lecture en flux, événements, échecs, délai maximum). Les
 fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

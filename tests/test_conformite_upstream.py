@@ -56,6 +56,8 @@ FICHIERS_UPSTREAM_ETENDUS = (
     "const.py",
     "config_flow.py",
     "services.yaml",
+    "translations/fr.json",
+    "translations/en.json",
 )
 REPERTOIRES_DU_FORK = ("destinations",)
 
@@ -245,8 +247,11 @@ def test_le_code_importe_est_identique_a_l_upstream(
     étendus par `test_les_fichiers_upstream_etendus_ne_sont_que_completes`, et
     le code propre au fork par sa propre suite de tests.
     """
+    # `diff --exclude` compare le **nom** du fichier, pas son chemin : les écarts
+    # rangés dans un sous-répertoire (`translations/fr.json`) sont donc exclus par
+    # leur seul nom de base.
     exclusions = [
-        f"--exclude={nom}"
+        f"--exclude={Path(nom).name}"
         for nom in (
             "__pycache__",
             *FICHIERS_UPSTREAM_REECRITS,
