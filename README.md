@@ -27,13 +27,26 @@ identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké d
 
 ## Développement
 
+Le projet utilise [`uv`](https://docs.astral.sh/uv/) et Python 3.13 (version épinglée dans
+`.python-version`). Les dépendances, la configuration de `pytest` et celle de `ruff` sont
+déclarées dans `pyproject.toml` ; `uv.lock` fige les versions installées.
+
 | Action | Commande |
 | --- | --- |
-| Installer | `—` |
-| Tests unitaires | `—` |
-| Tests e2e | `—` |
-| Lint | `—` |
-| Build | `—` |
+| Installer | `uv sync --group dev` |
+| Tests unitaires | `uv run pytest` |
+| Tests e2e | aucun |
+| Lint | `uv run ruff check . && uv run ruff format --check .` |
+| Build | aucun |
+
+La version de Home Assistant utilisée pour les tests est celle qu'épingle
+`pytest-homeassistant-custom-component`. Attention : Home Assistant >= 2026.3 exige
+Python >= 3.14. Tant que le projet reste sur Python 3.13, les tests s'exécutent donc contre
+Home Assistant 2026.2.x ; passer à Python 3.14 dans `.python-version`, `requires-python` et
+`target-version` de `ruff` permettra de suivre à nouveau la dernière version de Home Assistant.
+
+Le répertoire `custom_components/auto_backup/` est exclu du reformatage `ruff` pour rester
+identique à l'upstream (voir [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
 
 ## Travailler avec l'équipe d'agents
 

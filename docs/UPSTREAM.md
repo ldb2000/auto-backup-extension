@@ -33,6 +33,30 @@ Aucune modification fonctionnelle du code upstream n'a été faite lors de l'imp
 Toute divergence fonctionnelle ultérieure (destinations Dropbox et Google Drive notamment)
 doit être ajoutée à cette liste au fil des évolutions.
 
+## Outillage : pourquoi l'upstream n'est ni reformaté ni linté au même niveau
+
+Le dépôt utilise `ruff` (configuration dans `pyproject.toml`). Le code importé ne respecte ni
+le style de formatage de `ruff format`, ni les règles de modernisation (`UP`), de tri des
+imports (`I`) ou de simplification (`SIM`, `B`, `RUF`). Le reformater créerait un diff massif
+face à l'upstream et rendrait illisible chaque resynchronisation (étape 4 de la procédure
+ci-dessous, qui compare fichier par fichier). Le choix retenu est donc de **ne pas modifier le
+code importé** et d'adapter la configuration :
+
+- `[tool.ruff.format] exclude` : `custom_components/auto_backup/**` n'est pas reformaté.
+- `[tool.ruff.lint.per-file-ignores]` : sur ce même répertoire, seules les règles de
+  correction restent actives (`E4`, `E7`, `E9` et `F`, c'est-à-dire pyflakes : imports
+  inutilisés, noms indéfinis, etc.). Les familles de style (`E501`, `W`, `I`, `UP`, `B`,
+  `SIM`, `RUF`) y sont neutralisées.
+
+Conséquences à connaître :
+
+- `ruff check .` et `ruff format --check .` passent sur le code importé sans l'avoir touché.
+- Le code ajouté par le fork **dans ce répertoire** hérite de ces exemptions de style : il
+  reste couvert par pyflakes, mais pas par le formatage automatique. Si les ajouts du fork
+  deviennent volumineux, préférer un module ou un sous-répertoire dédié qui ne porte pas
+  l'exemption plutôt que d'étendre le code upstream sur place.
+- `tests/` reste soumis à l'intégralité des règles et au formatage.
+
 ## Procédure de resynchronisation
 
 1. Relever le SHA upstream visé :
@@ -66,10 +90,13 @@ doit être ajoutée à cette liste au fil des évolutions.
             custom_components/auto_backup
    ```
 
-5. Vérifier que le fork compile toujours et que sa suite de tests passe :
+5. Vérifier que le fork compile toujours, que le lint passe et que sa suite de tests passe :
 
    ```bash
-   python3 -m compileall custom_components/auto_backup
+   uv sync --group dev
+   uv run python -m compileall custom_components/auto_backup
+   uv run ruff check . && uv run ruff format --check .
+   uv run pytest
    ```
 
 6. Mettre à jour le tableau « Révision importée » ci-dessus (SHA, dates) ainsi que la liste des

@@ -4,16 +4,19 @@
 Reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter la possibilité de sauvegarder directement sur dropbox et google drive
 
 ## Stack
-- Backend : à définir
-- Frontend : à définir
-- BDD : à définir
+- Langage : Python 3.13 (`.python-version`), gestionnaire de projet et d'environnement : `uv`
+- Backend : intégration Home Assistant `custom_components/auto_backup` (HACS, domaine `auto_backup`)
+- Frontend : aucun (l'UI est fournie par Home Assistant : config flow et entités)
+- BDD : aucune (l'état est persisté via le `Store` de Home Assistant)
+- Tests : `pytest` + `pytest-asyncio` + `pytest-homeassistant-custom-component`
+- Lint et format : `ruff`
 
 ## Commandes
-- Installer : `npm ci`
-- Tests unitaires : `npm test`
-- Tests e2e : `npm run test:e2e`
-- Lint : `npm run lint`
-- Build : `npm run build`
+- Installer : `uv sync --group dev`
+- Tests unitaires : `uv run pytest`
+- Tests e2e : aucun (pas de suite e2e sur ce projet)
+- Lint : `uv run ruff check . && uv run ruff format --check .`
+- Build : aucun (l'intégration est chargée telle quelle depuis `custom_components/`)
 
 ## Conventions
 - Branches : `issue-<num>-<slug>`
