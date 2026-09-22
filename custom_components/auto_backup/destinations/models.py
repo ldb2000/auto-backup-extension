@@ -79,11 +79,12 @@ class DestinationConfig:
         """Construit une configuration à partir de données persistées.
 
         Lève `DestinationConfigError` si les données ne respectent pas
-        `DESTINATION_SCHEMA`.
+        `DESTINATION_SCHEMA`, ou si elles ne sont même pas un dictionnaire :
+        les options d'une entrée restent modifiables à la main.
         """
         try:
             valide = DESTINATION_SCHEMA(dict(donnees))
-        except vol.Invalid as err:
+        except (vol.Invalid, TypeError, ValueError) as err:
             raise DestinationConfigError(
                 f"configuration de destination invalide : {err}"
             ) from err
