@@ -13,6 +13,7 @@ Usage :
 
 Code de sortie : 0 si tous les critères sont validés, 1 sinon.
 """
+
 from __future__ import annotations
 
 import base64
@@ -85,7 +86,11 @@ def check_criterion_1() -> None:
         return
 
     if not gh_available():
-        record(label, False, "CLI `gh` introuvable : impossible de comparer au tarball upstream")
+        record(
+            label,
+            False,
+            "CLI `gh` introuvable : impossible de comparer au tarball upstream",
+        )
         return
 
     sha = extract_sha()
@@ -141,7 +146,8 @@ def check_criterion_1() -> None:
             record(
                 label,
                 False,
-                f"Différences avec l'upstream (SHA {sha}) :\n{diff.stdout}{diff.stderr}",
+                f"Différences avec l'upstream (SHA {sha}) :\n"
+                f"{diff.stdout}{diff.stderr}",
             )
             return
 
@@ -163,15 +169,31 @@ def check_criterion_2() -> None:
         record(label, False, "Le texte 'MIT License' est absent de LICENSE")
         return
     if "Permission is hereby granted" not in text:
-        record(label, False, "La clause 'Permission is hereby granted' est absente de LICENSE")
+        record(
+            label,
+            False,
+            "La clause 'Permission is hereby granted' est absente de LICENSE",
+        )
         return
-    copyright_lines = [l.strip() for l in re.findall(r"^Copyright \(c\).*$", text, re.MULTILINE)]
+    copyright_lines = [
+        ligne.strip()
+        for ligne in re.findall(r"^Copyright \(c\).*$", text, re.MULTILINE)
+    ]
     if len(copyright_lines) < 2:
-        record(label, False, f"Moins de deux lignes de copyright trouvées : {copyright_lines}")
+        record(
+            label,
+            False,
+            f"Moins de deux lignes de copyright trouvées : {copyright_lines}",
+        )
         return
 
     if not gh_available():
-        record(label, False, "CLI `gh` introuvable : impossible de vérifier le copyright upstream d'origine")
+        record(
+            label,
+            False,
+            "CLI `gh` introuvable : impossible de vérifier "
+            "le copyright upstream d'origine",
+        )
         return
     sha = extract_sha()
     if not sha:
@@ -188,12 +210,20 @@ def check_criterion_2() -> None:
         ]
     )
     if proc.returncode != 0 or not proc.stdout.strip():
-        record(label, False, f"Impossible de récupérer LICENSE upstream (SHA {sha}) : {proc.stderr}")
+        record(
+            label,
+            False,
+            f"Impossible de récupérer LICENSE upstream (SHA {sha}) : {proc.stderr}",
+        )
         return
-    upstream_license = base64.b64decode(proc.stdout.strip()).decode("utf-8", errors="replace")
+    upstream_license = base64.b64decode(proc.stdout.strip()).decode(
+        "utf-8", errors="replace"
+    )
     m = re.search(r"^Copyright \(c\).*$", upstream_license, re.MULTILINE)
     if not m:
-        record(label, False, "Aucune ligne de copyright trouvée dans la LICENSE upstream")
+        record(
+            label, False, "Aucune ligne de copyright trouvée dans la LICENSE upstream"
+        )
         return
     upstream_copyright = m.group(0).strip()
 
@@ -206,9 +236,13 @@ def check_criterion_2() -> None:
         )
         return
 
-    fork_lines = [l for l in copyright_lines if l != upstream_copyright]
+    fork_lines = [ligne for ligne in copyright_lines if ligne != upstream_copyright]
     if not fork_lines:
-        record(label, False, "Aucune ligne de copyright distincte pour le fork trouvée dans LICENSE")
+        record(
+            label,
+            False,
+            "Aucune ligne de copyright distincte pour le fork trouvée dans LICENSE",
+        )
         return
 
     record(label, True, "Lignes de copyright : " + " | ".join(copyright_lines))
@@ -222,16 +256,24 @@ def check_criterion_3() -> None:
     text = README_FILE.read_text(encoding="utf-8")
     checks = {
         "mentionne 'fork'": re.search(r"\bfork\b", text, re.IGNORECASE) is not None,
-        "lien vers https://github.com/jcwillox/hass-auto-backup": "https://github.com/jcwillox/hass-auto-backup" in text,
+        "lien vers https://github.com/jcwillox/hass-auto-backup": "https://github.com/jcwillox/hass-auto-backup"
+        in text,
         "mentionne la licence MIT": "MIT" in text,
         "mentionne Dropbox": re.search(r"\bDropbox\b", text) is not None,
         "mentionne Google Drive": re.search(r"\bGoogle Drive\b", text) is not None,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
-        record(label, False, "Éléments manquants dans README.md : " + ", ".join(missing))
+        record(
+            label, False, "Éléments manquants dans README.md : " + ", ".join(missing)
+        )
         return
-    record(label, True, "Section fork trouvée : lien upstream, licence MIT, Dropbox et Google Drive mentionnés.")
+    record(
+        label,
+        True,
+        "Section fork trouvée : lien upstream, licence MIT, "
+        "Dropbox et Google Drive mentionnés.",
+    )
 
 
 def check_criterion_4() -> None:
@@ -242,7 +284,12 @@ def check_criterion_4() -> None:
     text = UPSTREAM_DOC.read_text(encoding="utf-8")
     sha = extract_sha()
     if not sha:
-        record(label, False, "SHA upstream introuvable (attendu un SHA git de 40 caractères hexadécimaux)")
+        record(
+            label,
+            False,
+            "SHA upstream introuvable "
+            "(attendu un SHA git de 40 caractères hexadécimaux)",
+        )
         return
     date_match = re.search(r"Date de l'import.*?\|\s*(\d{4}-\d{2}-\d{2})", text)
     if not date_match:
@@ -281,12 +328,20 @@ def check_criterion_5() -> None:
         problems.append(f"version={manifest.get('version')!r} (attendu '0.0.0')")
     documentation = manifest.get("documentation", "")
     if "ldb2000/auto-backup-extension" not in documentation:
-        problems.append(f"documentation={documentation!r} ne pointe pas vers ldb2000/auto-backup-extension")
+        problems.append(
+            f"documentation={documentation!r} ne pointe pas vers "
+            "ldb2000/auto-backup-extension"
+        )
     issue_tracker = manifest.get("issue_tracker", "")
     if "ldb2000/auto-backup-extension" not in issue_tracker:
-        problems.append(f"issue_tracker={issue_tracker!r} ne pointe pas vers ldb2000/auto-backup-extension")
+        problems.append(
+            f"issue_tracker={issue_tracker!r} ne pointe pas vers "
+            "ldb2000/auto-backup-extension"
+        )
     codeowners = manifest.get("codeowners", [])
-    if not isinstance(codeowners, list) or not any("ldb2000" in str(c) for c in codeowners):
+    if not isinstance(codeowners, list) or not any(
+        "ldb2000" in str(c) for c in codeowners
+    ):
         problems.append(f"codeowners={codeowners!r} ne référence pas ldb2000")
 
     if problems:
@@ -296,7 +351,16 @@ def check_criterion_5() -> None:
         label,
         True,
         json.dumps(
-            {k: manifest.get(k) for k in ("domain", "version", "documentation", "issue_tracker", "codeowners")},
+            {
+                k: manifest.get(k)
+                for k in (
+                    "domain",
+                    "version",
+                    "documentation",
+                    "issue_tracker",
+                    "codeowners",
+                )
+            },
             ensure_ascii=False,
         ),
     )
@@ -318,7 +382,9 @@ def check_criterion_6() -> None:
         problems.append("champ 'name' absent ou vide")
     ha_version = hacs.get("homeassistant")
     if not ha_version or not re.match(r"^\d+\.\d+(\.\d+)?$", str(ha_version)):
-        problems.append(f"champ 'homeassistant' absent ou de format invalide : {ha_version!r}")
+        problems.append(
+            f"champ 'homeassistant' absent ou de format invalide : {ha_version!r}"
+        )
     if problems:
         record(label, False, "; ".join(problems))
         return
@@ -333,7 +399,9 @@ def check_criterion_7() -> None:
     proc = run([sys.executable, "-m", "compileall", "-q", str(AUTO_BACKUP_DIR)])
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
-        record(label, False, f"compileall a échoué (code {proc.returncode}) :\n{output}")
+        record(
+            label, False, f"compileall a échoué (code {proc.returncode}) :\n{output}"
+        )
         return
     record(label, True, "Aucune erreur de compilation (compileall -q).")
 
