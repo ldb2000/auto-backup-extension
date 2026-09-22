@@ -2,7 +2,7 @@
 
 - **Statut** : accepté
 - **Date** : 2026-09-22
-- **Issue** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+- **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle), [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et interface) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -77,8 +77,9 @@ Conséquences pratiques :
   échouerait sur une entrée n'ayant jamais visité le flux d'options ;
 - `preserve_destinations()` est appelé par le flux d'options upstream pour reporter les
   destinations que son formulaire ignore ;
-- aucun secret ne transite par cette liste : les jetons d'authentification resteront gérés par
-  Home Assistant (issue #7), `DestinationConfig` ne contient que des données de configuration.
+- les secrets d'autorisation vivent dans cette même liste depuis l'issue #7 : le support de
+  persistance retenu étant `entry.options`, il n'existe pas d'autre endroit propre où mettre le
+  jeton d'une destination (voir la décision 4 ci-dessous).
 
 ### Révision possible
 
@@ -122,6 +123,116 @@ Le découpage suit les **réactions** possibles, pas les codes d'erreur des API 
 permet à `#9` (rétention distante) et `#17` (notifications et ré-authentification) d'être écrites
 une seule fois pour tous les fournisseurs. Un fournisseur qui ne sait pas qualifier un échec lève
 `DestinationError` : l'appelant reste correct, il perd seulement en finesse de réaction.
+
+## Décision 4 — conduire l'autorisation OAuth2 dans le flux d'options (issue #7)
+
+### Contexte
+
+L'utilisateur crée lui-même son application OAuth2 chez le fournisseur (aucun secret n'est livré
+dans le code, règle de `CLAUDE.md`), saisit ses identifiants, autorise l'accès dans son
+navigateur, puis Home Assistant reçoit un jeton à conserver et à rafraîchir.
+
+Home Assistant offre pour cela `homeassistant.helpers.config_entry_oauth2_flow`. Mais son
+`AbstractOAuth2FlowHandler` n'est utilisable que dans un **config flow** : sa vue de retour
+standard (`/auth/external/callback`) reprend le flux par
+`hass.config_entries.flow.async_configure()`. Or la décision 1 place les destinations dans
+`entry.options` : c'est donc un flux d'**options** qui les crée, et lui seul sait les écrire.
+
+### Options étudiées
+
+**A. Une entrée de configuration par destination, avec `AbstractOAuth2FlowHandler`.**
+Le mécanisme natif fonctionnerait tel quel, jeton compris.
+
+- Contre : contredit la décision 1, revient sur le support de persistance et impose de modifier
+  le flux de configuration upstream (`single_instance` à lever, entrées multiples à gérer).
+- Contre : une entrée par destination ferait apparaître autant d'intégrations « Auto Backup »
+  dans l'interface, chacune avec ses entités et son appareil de service.
+
+**B. Un config flow secondaire, déclenché par le flux d'options.**
+Le flux d'options lancerait un config flow dédié à l'autorisation, puis récupérerait son jeton.
+
+- Contre : deux flux imbriqués, deux boîtes de dialogue, et un aller-retour à inventer entre
+  eux ; l'entrée créée par le config flow devrait être supprimée aussitôt.
+
+**C. Conduire l'autorisation dans le flux d'options, avec une vue de retour propre au fork.**
+Le flux d'options utilise `async_external_step()` — disponible sur tout `FlowHandler`, flux
+d'options compris — et le fork enregistre sa propre vue sur `/auth/auto_backup/callback`, qui
+reprend le flux par `hass.config_entries.options.async_configure()`.
+
+- Pour : un seul flux, une seule boîte de dialogue, et les destinations restent où la décision 1
+  les a placées.
+- Pour : l'échange du code et le rafraîchissement du jeton restent ceux du cœur de Home
+  Assistant (`LocalOAuth2Implementation`), y compris la qualification des erreurs
+  (`OAuth2TokenRequestReauthError` pour un 4xx, transitoire pour un 5xx).
+- Contre : l'URI de redirection à déclarer chez le fournisseur n'est pas celle, habituelle, de
+  Home Assistant, et le raccourci My Home Assistant (`https://my.home-assistant.io/redirect/oauth`)
+  n'est pas utilisable : il ne sait rediriger que vers `/auth/external/callback`.
+- Contre : une instance sans URL externe configurée ne peut pas recevoir le retour. Le flux
+  s'interrompt alors avec un message explicite (`options.abort.url_indisponible`) plutôt que de
+  fabriquer une URL fausse.
+
+### Décision
+
+**Option C.** L'autorisation est conduite par le flux d'options, l'URL d'autorisation est
+construite par une sous-classe de `LocalOAuth2Implementation`, et le retour est reçu par la vue
+`RetourAutorisationOAuthView` du fork.
+
+L'**état** (`state`) transmis au fournisseur n'est pas le JWT du cœur — il encode un identifiant
+de config flow — mais un aléa de 256 bits (`secrets.token_urlsafe(32)`) associé, côté Home
+Assistant, au flux d'options à reprendre et à l'URI de redirection utilisée. Il est à usage
+unique et expire au bout de quinze minutes : il sert à la fois de clé de reprise et de jeton
+anti-CSRF, et rejouer un retour d'autorisation ne relance rien.
+
+### Où vivent les secrets
+
+`DestinationConfig` porte désormais `client_id`, `client_secret` et `token`, persistés dans
+`entry.options["destinations"][i]`, c'est-à-dire dans `.storage/core.config_entries` — le même
+fichier que celui où Home Assistant range les identifiants d'application
+(`application_credentials`) et les jetons de toutes les intégrations OAuth2. Le support n'est
+donc pas moins protégé que l'usage courant du cœur.
+
+Deux garde-fous accompagnent ce choix :
+
+- `DestinationConfig.__repr__()` masque les trois champs, et `as_dict(masquer=True)` produit une
+  copie assainie où le jeton est réduit à ses clés. Seul `as_dict()` — sans masquage — est écrit
+  dans l'entrée. Un test parcourt l'ajout complet d'une destination avec les journaux en niveau
+  `debug` et vérifie qu'aucun secret n'y apparaît.
+- Les messages d'erreur portant sur un secret ne citent jamais la valeur reçue, contrairement
+  aux autres validateurs du socle.
+
+### Rafraîchissement et ré-autorisation
+
+`DestinationOAuth2Session` est la seule porte d'entrée des fournisseurs vers le jeton :
+`async_get_access_token()` rafraîchit le jeton s'il est expiré (marge d'horloge comprise), le
+persiste, puis le renvoie. Le jeton est relu dans l'entrée à chaque appel, et non dans la
+configuration en mémoire : un rafraîchissement fait foi immédiatement, y compris pour une
+destination instanciée avant lui.
+
+Quand le fournisseur refuse le renouvellement (`invalid_grant`, 4xx), ou qu'aucun jeton de
+rafraîchissement n'existe, la session lève `DestinationAuthError` et signale la destination :
+
+- le `DestinationManager` la marque « ré-authentification requise » — un marquage par
+  destination, que le téléversement (#8) et la purge distante (#9) pourront consulter ;
+- un problème (« repair issue ») est créé dans Home Assistant, nommant la destination.
+
+**Le problème est déclaré `is_fixable=False`.** Un problème réparable exige un module
+`repairs.py` à la racine de l'intégration, c'est-à-dire un module du fork hors de son
+sous-paquet — ce que `tests/test_conformite_upstream.py` interdit — et son `RepairsFlow` ne
+pourrait de toute façon qu'ouvrir un nouveau parcours d'autorisation, que les options offrent
+déjà. Le problème décrit donc la marche à suivre : options de l'intégration, « Ré-autoriser une
+destination », puis la destination nommée. Il disparaît dès que celle-ci est ré-autorisée ou
+supprimée.
+
+Ce choix est révisable : si un module `repairs.py` devient acceptable (ou si Home Assistant
+autorise un flux de réparation déclaré ailleurs), le problème pourra devenir réparable sans rien
+changer au reste.
+
+### Interface
+
+Le flux d'options s'ouvre désormais sur un menu (`async_show_menu`) : ajouter, ré-autoriser ou
+supprimer une destination, et les réglages upstream. **Le formulaire upstream n'est pas
+modifié** : il reste l'étape `init`, simplement atteinte depuis le menu. Le branchement se fait
+en deux lignes ajoutées à la fin de `config_flow.py` (cf. `docs/UPSTREAM.md`).
 
 ## Validation du dossier distant : un chemin relatif POSIX
 
@@ -190,14 +301,19 @@ de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relat
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
 
 - **Liste blanche de caractères** : le refus des caractères `' & + ! ,` (apostrophe, ampersand,
-  plus, point d'exclamation, virgule) est strict pour cette issue. Une révision ultérieure en #7
-  pourra élargir cette liste en fonction des API des fournisseurs, avec un **message d'erreur
-  explicite** si la validation rejette un caractère qu'un utilisateur tente d'utiliser.
+  plus, point d'exclamation, virgule) est strict pour cette issue. Une révision ultérieure
+  pourra élargir cette liste en fonction des API des fournisseurs. **Traité partiellement en
+  #7** : la liste n'a pas été élargie — aucun fournisseur réel n'étant encore implémenté, rien
+  ne justifie de la desserrer —, mais le formulaire d'ajout affiche désormais un **message
+  d'erreur explicite** (`options.error.dossier_invalide`) qui énumère les caractères admis,
+  au lieu de laisser l'utilisateur deviner.
 
 - **Unicité des noms de destination** : deux destinations homonymes peuvent être configurées ; la
-  distinction se fait par identifiant interne. C'est un défaut connu, à traiter en #7 lors de
-  l'ajout de l'interface de configuration (formulaire, ajout, édition, suppression), qui devra
-  garantir l'unicité à la saisie.
+  distinction se fait par identifiant interne. **Traité en #7** : le formulaire d'ajout refuse un
+  nom déjà porté par une autre destination, comparaison faite sans tenir compte de la casse ni
+  des espaces de bordure (`options.error.nom_deja_utilise`). L'unicité est garantie à la saisie
+  et non dans `DestinationConfig` : deux destinations homonymes créées avant #7, ou par une
+  édition manuelle des options, restent chargées plutôt que d'empêcher le démarrage.
 
 - **Fonction `unregister_provider`** : le registre exporte `unregister_provider` pour faciliter
   les tests (voir `tests/destinations_factices.py`). **Cette fonction est un détail de test et ne
@@ -208,6 +324,32 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   mais leur **émission ne commence qu'à partir de #8** (téléversement) et **#9** (rétention
   distante). Ils sont définis ici pour laisser le schéma de constantes stable et lisible, et
   pour que les issues suivantes n'aient qu'à les émettre sans les déclarer.
+
+- **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
+  doit être déclarée chez le fournisseur. **À traiter en #10 (Dropbox) et #13 (Google Drive)** :
+  chaque fournisseur doit livrer une procédure pas à pas claire pour cette déclaration. Google
+  Drive refuse les URI non HTTPS et non publiques (`.local`, adresse IP nue), ce qui signifie
+  qu'une instance sans URL externe publique ne pourra pas connecter Google Drive. La doc utilisateur
+  (#19) devra expliciter ce prérequis au moment de la découverte du fournisseur.
+
+- **Libellés de fournisseur** : le sélecteur affiche actuellement l'identifiant technique
+  (`dropbox`, `google_drive`) comme libellé utilisateur. **À remédier au plus tard en #18**
+  (interface de gestion des destinations) : il faut afficher des libellés lisibles
+  (« Dropbox », « Google Drive »).
+
+- **Stabilité des références lors du rafraîchissement du jeton** : un rafraîchissement de jeton
+  réécrit les options de l'entrée et recrée les instances de destination du gestionnaire, ce qui
+  invalide toute référence antérieure. **À traiter en #8** (téléversement) : conserver la référence
+  obtenue au début d'une opération (vers le gestionnaire, vers une destination), plutôt que de
+  la demander à nouveau, pour garantir que le reste de l'opération utilise les données stables
+  de son début.
+
+- **Cohérence de la ré-authentification** : un problème Home Assistant (repair issue) est créé
+  pour une destination en attente de ré-autorisation, mais il n'est pas réparable automatiquement.
+  **À traiter en #17** (notifications et ré-authentification) : si une notification persistante
+  est ajoutée pour les destinations en défaut d'accès, elle ne doit pas doubler le problème
+  Home Assistant — la faire disparaître en même temps que le problème, une fois la destination
+  ré-autorisée ou supprimée.
 
 ## Conséquences
 
@@ -227,3 +369,20 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   qui suit les options de l'entrée et disparaît à son déchargement.
 - Rien n'est téléversé à ce stade : `#8` branchera le téléversement sur la création de
   sauvegarde, `#9` la rétention distante.
+
+Ajouts de l'issue #7 :
+
+- `DestinationConfig` porte `client_id`, `client_secret` et `token`, facultatifs, validés par le
+  schéma comme par la dataclass, et masqués par `__repr__()` et `as_dict(masquer=True)`. Une
+  destination qui ne les utilise pas est persistée exactement comme avant : les clés absentes ne
+  sont pas ajoutées.
+- Un fournisseur déclare son usage d'OAuth2 par `RemoteDestination.OAUTH2_SPEC` et obtient un
+  jeton valide par `async_session_de_la_destination()`. Il n'a ni URL de retour, ni état, ni
+  rafraîchissement à écrire.
+- Le fork expose une route HTTP supplémentaire, `/auth/auto_backup/callback`, enregistrée
+  seulement lorsqu'une autorisation démarre : une installation sans destination OAuth2 n'ouvre
+  aucune route nouvelle.
+- Le flux d'options upstream devient une étape d'un menu, sans qu'aucune de ses lignes change.
+- `#8` (téléversement) et `#9` (purge distante) devront consulter
+  `DestinationManager.reauthentification_requise()` avant d'appeler une destination : une
+  destination en attente de ré-autorisation échouerait de toute façon.

@@ -29,15 +29,38 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Constantes du fork dans `const.py` : `DATA_DESTINATIONS`, `CONF_DESTINATIONS`, `CONF_DESTINATION_ID`, `CONF_PROVIDER`, `CONF_FOLDER`, `CONF_RETENTION_DAYS`, `CONF_RETENTION_COUNT`, `DEFAULT_DESTINATION_FOLDER` et les événements `auto_backup.upload_start`, `auto_backup.upload_successful`, `auto_backup.upload_failed`, `auto_backup.remote_purge`. Refs #6
 - Décision d'architecture documentée dans `docs/adr/0001-destinations-distantes.md` (support de persistance, registre de fournisseurs, hiérarchie d'erreurs). Refs #6
 - Tests du socle des destinations avec un fournisseur factice en mémoire (`tests/destinations_factices.py`, fixture `fournisseur_factice`) : cycle de vie, erreurs typées, registre, validation des rétentions et persistance après rechargement. Refs #6
+- Gestion des destinations distantes depuis les options de l'intégration : le flux d'options s'ouvre sur un menu (« Ajouter une destination », « Ré-autoriser une destination », « Supprimer une destination », « Réglages des sauvegardes »), le formulaire upstream restant inchangé comme étape du menu. Refs #7
+- Autorisation OAuth2 conduite dans le flux d'options (`destinations/oauth.py`) : l'utilisateur saisit les identifiants de sa propre application (secret masqué à la saisie), est redirigé vers le fournisseur, et Home Assistant reçoit le retour sur la route `/auth/auto_backup/callback` propre au fork — la vue standard ne sachant reprendre qu'un flux de configuration. Refs #7
+- Champs d'autorisation facultatifs sur une destination (`client_id`, `client_secret`, `token`), validés par le schéma comme par `DestinationConfig`, et absents des options persistées quand ils ne servent pas. Refs #7
+- Rafraîchissement automatique du jeton avant chaque opération (`DestinationOAuth2Session`), jeton renouvelé persisté dans l'entrée et relu à chaque usage. Refs #7
+- Détection des accès révoqués : `DestinationAuthError`, marquage « ré-authentification requise » dans le gestionnaire et création d'un problème Home Assistant (« repair issue ») nommant la destination concernée — les autres destinations continuent de fonctionner. Refs #7
+- Suppression d'une destination depuis l'interface : configuration, identifiants et jeton effacés des options, destination retirée du gestionnaire et problème associé supprimé. Refs #7
+- Unicité du nom d'une destination vérifiée à la saisie, et message d'erreur explicite sur le dossier distant (deux points laissés ouverts par l'issue #6). Refs #7
+- Traductions françaises et anglaises des nouvelles étapes, erreurs, abandons et du problème de ré-autorisation (`translations/fr.json`, `translations/en.json`), clés upstream conservées. Refs #7
+- Fournisseur factice OAuth2 pour les tests (`DestinationOAuthEnMemoire`, fixtures `fournisseur_oauth_factice` et `ouvrir_les_options`) et couverture du parcours complet avec un mock HTTP : ajout, retour d'autorisation simulé puis réel, rafraîchissement, ré-authentification, suppression. Refs #7
 
 ### Modifié
 
+- `README.md` : la section sur l'ajout d'une destination précise désormais que l'URL externe
+  doit être HTTPS et publiquement accessible (pas locale `.local` ni adresse IP nue),
+  et que certains fournisseurs comme Google Drive refusent les URI non publiques. Refs #7
+- `docs/adr/0001-destinations-distantes.md` : la section « Points ouverts pour les issues
+  suivantes » s'enrichit de remarques du métier pour les issues #8, #10, #13, #17, #18 et #19 :
+  procédure de déclaration d'URI de redirection chez les fournisseurs, prérequis d'URL externe
+  publique (notamment pour Google Drive), libellés utilisateur du sélecteur de fournisseur,
+  stabilité des références lors du rafraîchissement, cohérence de la ré-authentification. Refs #7
+- `docs/README.md` : ajout de `ci.md` à l'index de documentation. Refs #7
 - Le script ad hoc `tests/check_issue_2.py` est remplacé par `tests/test_conformite_upstream.py` : les contrôles hors ligne sont exécutés par `pytest`, la comparaison avec le dépôt upstream est marquée `network` et ne s'exécute qu'avec `uv run pytest --tests-reseau`. Refs #4
 - Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
 - `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6
 - Les exemptions `ruff` de l'upstream sont énumérées module par module dans `pyproject.toml` : le code du fork (`destinations/`) est soumis à toutes les règles et au formatage. Refs #6
+- Le flux d'options ne s'ouvre plus directement sur le formulaire `auto_purge` / `backup_timeout` : il s'ouvre sur un menu, où ce formulaire reste accessible sous « Réglages des sauvegardes ». Refs #7
+- `docs/adr/0001-destinations-distantes.md` documente le choix de conduire l'autorisation OAuth2 dans le flux d'options plutôt qu'en flux de configuration, le stockage des secrets et le problème de ré-autorisation non réparable automatiquement. Refs #7
+- `tests/test_conformite_upstream.py` compte désormais `translations/fr.json` et `translations/en.json` parmi les fichiers upstream étendus : ils ne peuvent recevoir que des ajouts. Refs #7
 
 ### Sécurité
 
 - Le dossier distant (`folder`) d'une destination est validé comme chemin relatif POSIX par `chemin_de_dossier()`, appelé par le schéma voluptuous comme par `DestinationConfig` : traversée (`..`), chemin absolu, lettre de lecteur, séparateur Windows, segment vide, espace de bordure et caractère de contrôle sont refusés avant d'atteindre un fournisseur. Refs #6
+- Les identifiants d'application et les jetons d'une destination ne sont jamais journalisés : `DestinationConfig.__repr__()` les masque, `as_dict(masquer=True)` produit une copie assainie où le jeton est réduit à ses clés, et un test parcourt l'ajout complet d'une destination avec les journaux en niveau `debug` pour le vérifier. Aucune valeur réelle ne figure dans le code ni dans les tests. Refs #7
+- L'état (`state`) du retour d'autorisation est un aléa de 256 bits, à usage unique et expirant au bout de quinze minutes : il sert de jeton anti-CSRF et rejouer un retour ne relance aucun flux. Refs #7
 - Le dossier distant est normalisé en NFKC **avant** toute vérification, ce qui referme le contournement par confusables Unicode (U+FF0E, U+FF0F, U+2025 valant `..` ou `/` une fois normalisés) ; les caractères admis sont une liste blanche (alphanumérique Unicode, espace ordinaire, `-`, `_`, `.`, `(`, `)`) et le chemin est borné à 255 caractères au total et 100 par segment. Refs #6

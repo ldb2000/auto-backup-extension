@@ -14,7 +14,13 @@ import unicodedata
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.const import CONF_NAME
+from homeassistant.const import (
+    CONF_ACCESS_TOKEN,
+    CONF_CLIENT_ID,
+    CONF_CLIENT_SECRET,
+    CONF_NAME,
+    CONF_TOKEN,
+)
 
 from ..const import (
     CONF_DESTINATION_ID,
@@ -175,6 +181,30 @@ def chemin_de_dossier(valeur: Any) -> str:
 
 RETENTION_SCHEMA = vol.Any(None, entier_strictement_positif)
 
+
+def horodatage(valeur: Any) -> float:
+    """Valide un horodatage epoch (secondes), tel que renvoyé par `time.time()`."""
+    if isinstance(valeur, bool) or not isinstance(valeur, int | float):
+        raise vol.Invalid(f"un horodatage numérique est attendu, reçu {valeur!r}")
+    return float(valeur)
+
+
+# Jeton OAuth2 tel que renvoyé par le fournisseur puis persisté (issue #7).
+#
+# Seuls `access_token` et `expires_at` sont exigés : `expires_at` est ajouté par le
+# fork à partir d'`expires_in` (cf. `destinations/oauth.py`), et c'est lui qui décide
+# du rafraîchissement. Les clés supplémentaires (`token_type`, `scope`, identifiant de
+# compte...) varient d'un fournisseur à l'autre et sont conservées telles quelles :
+# elles seront nécessaires à Dropbox (#10) et à Google Drive (#13).
+TOKEN_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_ACCESS_TOKEN): texte_non_vide,
+        vol.Required("expires_at"): horodatage,
+        vol.Optional("refresh_token"): vol.Any(None, texte_non_vide),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
 DESTINATION_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_DESTINATION_ID): texte_non_vide,
@@ -185,6 +215,14 @@ DESTINATION_SCHEMA = vol.Schema(
         ): chemin_de_dossier,
         vol.Optional(CONF_RETENTION_DAYS, default=None): RETENTION_SCHEMA,
         vol.Optional(CONF_RETENTION_COUNT, default=None): RETENTION_SCHEMA,
+        # Champs d'autorisation (issue #7), volontairement **sans valeur par
+        # défaut** : une destination qui n'utilise pas OAuth2 ne doit pas se voir
+        # ajouter trois clés nulles dans les options persistées. `None` reste
+        # toutefois accepté, une destination désautorisée à la main écrivant la
+        # clé plutôt que de la retirer.
+        vol.Optional(CONF_CLIENT_ID): vol.Any(None, texte_non_vide),
+        vol.Optional(CONF_CLIENT_SECRET): vol.Any(None, texte_non_vide),
+        vol.Optional(CONF_TOKEN): vol.Any(None, TOKEN_SCHEMA),
     }
 )
 

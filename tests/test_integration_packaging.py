@@ -85,3 +85,85 @@ def test_le_manifeste_declare_le_domaine_attendu() -> None:
     assert manifeste["version"]
     assert manifeste["documentation"]
     assert manifeste["issue_tracker"]
+
+
+### Traductions étendues par le fork (issue #7) ###
+
+# Clés d'interface ajoutées par le fork au flux d'options. Elles doivent exister
+# dans **toutes** les langues que le fork étend, faute de quoi Home Assistant
+# afficherait l'identifiant technique de l'étape à l'utilisateur.
+ETAPES_D_OPTIONS_DU_FORK = (
+    "menu",
+    "ajouter_destination",
+    "identifiants",
+    "autorisation",
+    "destination",
+    "reautoriser_destination",
+    "supprimer_destination",
+)
+LANGUES_ETENDUES = ("fr", "en")
+
+
+def _traduction(langue: str) -> dict:
+    fichier = INTEGRATION_DIR / "translations" / f"{langue}.json"
+    return json.loads(fichier.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_les_traductions_conservent_les_cles_upstream(langue: str) -> None:
+    """Les clés importées de l'upstream restent présentes et renseignées."""
+    traduction = _traduction(langue)
+
+    assert traduction["title"]
+    assert traduction["config"]["step"]["user"]["title"]
+    assert set(traduction["config"]["abort"]) >= {"single_instance", "missing_service"}
+    assert set(traduction["options"]["step"]["init"]["data"]) == {
+        "auto_purge",
+        "backup_timeout",
+    }
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_les_traductions_couvrent_les_etapes_du_fork(langue: str) -> None:
+    """Chaque étape ajoutée par le fork est traduite, titre et description."""
+    etapes = _traduction(langue)["options"]["step"]
+
+    manquantes = [nom for nom in ETAPES_D_OPTIONS_DU_FORK if nom not in etapes]
+    assert not manquantes, f"étapes non traduites en {langue} : {manquantes}"
+
+    for nom in ETAPES_D_OPTIONS_DU_FORK:
+        assert etapes[nom].get("title"), f"{langue}/{nom} sans titre"
+        assert etapes[nom].get("description"), f"{langue}/{nom} sans description"
+
+    # Le menu nomme chacune de ses entrées, y compris le formulaire upstream.
+    assert set(etapes["menu"]["menu_options"]) == {
+        "ajouter_destination",
+        "reautoriser_destination",
+        "supprimer_destination",
+        "init",
+    }
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_le_probleme_de_reautorisation_est_traduit(langue: str) -> None:
+    """Le problème créé quand un accès est révoqué est lisible par l'utilisateur."""
+    probleme = _traduction(langue)["issues"]["reauthentification_requise"]
+
+    assert "{nom}" in probleme["title"]
+    assert "{nom}" in probleme["description"]
+    assert "{fournisseur}" in probleme["description"]
+
+
+def test_les_deux_langues_etendues_declarent_les_memes_cles() -> None:
+    """Une clé ajoutée dans une langue doit l'être dans l'autre."""
+
+    def _chemins(valeur: object, prefixe: str = "") -> set[str]:
+        if not isinstance(valeur, dict):
+            return {prefixe}
+        return {
+            chemin
+            for cle, sous_valeur in valeur.items()
+            for chemin in _chemins(sous_valeur, f"{prefixe}.{cle}")
+        }
+
+    assert _chemins(_traduction("fr")) == _chemins(_traduction("en"))

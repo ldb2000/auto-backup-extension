@@ -13,6 +13,8 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
 
 - **[Suivi de l'upstream](UPSTREAM.md)** : Révision importée de jcwillox/hass-auto-backup,
   écarts documentés, exemptions de lint et procédure de resynchronisation.
+- **[Intégration continue](ci.md)** : Workflow GitHub Actions, jobs de lint, tests et validation,
+  reproduction en local, versions d'actions épinglées et garde-fous automatisés.
 
 ## Tests
 

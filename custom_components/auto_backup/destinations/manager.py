@@ -31,6 +31,7 @@ class DestinationManager:
         """Crée un gestionnaire vide rattaché à une instance Home Assistant."""
         self._hass = hass
         self._destinations: dict[str, RemoteDestination] = {}
+        self._reauthentifications: set[str] = set()
 
     @callback
     def async_load(self, raw_configs: Iterable[Mapping[str, Any]]) -> None:
@@ -48,6 +49,9 @@ class DestinationManager:
                 continue
             destinations[destination.destination_id] = destination
         self._destinations = destinations
+        # Un marquage « à ré-autoriser » ne survit pas à la destination qu'il
+        # décrit : une destination supprimée repart d'un état propre (issue #7).
+        self._reauthentifications &= set(destinations)
 
     @callback
     def _async_create(self, raw_config: Mapping[str, Any]) -> RemoteDestination | None:
@@ -89,6 +93,32 @@ class DestinationManager:
             raise DestinationNotFoundError(
                 f"destination inconnue : « {destination_id} »"
             ) from None
+
+    @callback
+    def async_marquer_la_reauthentification(self, destination_id: str) -> None:
+        """Note qu'une destination attend une nouvelle autorisation (issue #7).
+
+        Le marquage est porté par le gestionnaire et non par la destination
+        elle-même : les destinations sont recréées à chaque rechargement des
+        options, l'information doit leur survivre. Il ne concerne qu'une
+        destination : les autres restent utilisables.
+        """
+        self._reauthentifications.add(destination_id)
+
+    @callback
+    def async_effacer_la_reauthentification(self, destination_id: str) -> None:
+        """Lève le marquage d'une destination ré-autorisée ou supprimée."""
+        self._reauthentifications.discard(destination_id)
+
+    @callback
+    def reauthentification_requise(self, destination_id: str) -> bool:
+        """Indique si cette destination attend une nouvelle autorisation."""
+        return destination_id in self._reauthentifications
+
+    @property
+    def reauthentifications_requises(self) -> frozenset[str]:
+        """Identifiants des destinations en attente de ré-autorisation."""
+        return frozenset(self._reauthentifications)
 
     async def async_options_updated(
         self, hass: HomeAssistant, entry: ConfigEntry

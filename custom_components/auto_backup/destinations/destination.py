@@ -5,11 +5,16 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from homeassistant.core import HomeAssistant
 
 from .models import DestinationConfig, RemoteBackup
+
+if TYPE_CHECKING:
+    # Import différé : `oauth` dépend de `config_entry`, qui dépend du
+    # gestionnaire, qui dépend de ce module. L'annotation suffit au typage.
+    from .oauth import OAuth2ProviderSpec
 
 
 class RemoteDestination(ABC):
@@ -22,7 +27,15 @@ class RemoteDestination(ABC):
 
     Toutes les méthodes asynchrones lèvent une `DestinationError` (ou l'une de
     ses sous-classes) en cas d'échec : aucune ne renvoie de code d'erreur.
+
+    Un fournisseur qui s'authentifie en OAuth2 le déclare en surchargeant
+    `OAUTH2_SPEC` (issue #7) : le flux d'options y lit les URL d'autorisation et
+    de jeton, et conduit alors l'utilisateur dans son navigateur avant de créer
+    la destination. Laissé à `None`, le fournisseur est réputé ne demander aucune
+    autorisation externe.
     """
+
+    OAUTH2_SPEC: ClassVar[OAuth2ProviderSpec | None] = None
 
     def __init__(self, hass: HomeAssistant, config: DestinationConfig) -> None:
         """Mémorise l'instance Home Assistant et la configuration figée."""

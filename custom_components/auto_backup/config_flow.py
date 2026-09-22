@@ -65,3 +65,14 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 OPTIONS_SCHEMA, self.config_entry.options
             ),
         )
+
+
+### Fork : gestion des destinations distantes dans le flux d'options (issue #7).
+# `async_get_options_flow` résout `OptionsFlowHandler` au moment de l'appel : lui
+# substituer ici une sous-classe suffit à ajouter le menu et les étapes d'ajout, de
+# ré-autorisation et de suppression, sans modifier une seule ligne upstream. Le
+# formulaire ci-dessus reste l'étape `init`, atteinte depuis le menu.
+# Voir `docs/UPSTREAM.md` et `destinations/flow.py`.
+from .destinations.flow import etendre_le_flux_d_options  # noqa: E402
+
+OptionsFlowHandler = etendre_le_flux_d_options(OptionsFlowHandler)
