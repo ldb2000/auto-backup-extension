@@ -31,6 +31,11 @@ uv run pytest --tests-reseau
 Prérequis : `gh` doit être installé et vous devez être authentifié avec `gh auth login`.
 Les tests sont ignorés si l'authentification échoue ou si `gh` n'est pas disponible.
 
+Ces tests **ne sont pas exécutés par l'intégration continue** : le job `tests` lance
+`uv run pytest` sans `--tests-reseau`. Un runner GitHub n'a pas de `gh` authentifié garanti et
+la CI ne doit pas dépendre de la disponibilité de l'API GitHub. Ils sont donc à lancer
+manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md`](ci.md)).
+
 ## Structure
 
 | Fichier | Rôle |
@@ -46,6 +51,7 @@ Les tests sont ignorés si l'authentification échoue ou si `gh` n'est pas dispo
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
 | `tests/test_project_tooling.py` | Cohérence de l'outillage Python déclaré dans `pyproject.toml`. |
 | `tests/test_configuration_pytest.py` | Garde-fous sur la configuration `pytest` elle-même. |
+| `tests/test_ci_workflow.py` | Garde-fous sur le workflow d'intégration continue. |
 
 ## Fixtures disponibles
 
@@ -143,5 +149,5 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
 entités) et le socle des destinations distantes (contrat, registre, persistance). Les
-fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives,
-et l'exécution en intégration continue est traitée séparément.
+fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
+L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

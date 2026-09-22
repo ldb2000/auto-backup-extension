@@ -1,0 +1,96 @@
+# Intégration continue : lint, tests unitaires et conformité Home Assistant / HACS.
+#
+# Aucun secret n'est nécessaire : seul le `GITHUB_TOKEN` fourni par GitHub est utilisé,
+# en lecture seule (voir `permissions` ci-dessous).
+# Les actions sont épinglées à une version immuable (tag de version ou SHA de commit).
+# Ce qui est vérifié, et comment le rejouer en local : docs/ci.md
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Permissions minimales : les jobs se contentent de lire le dépôt.
+permissions:
+  contents: read
+
+# Un seul run de CI par référence : un nouveau push sur une PR annule le run devenu
+# obsolète. Les runs de `main` ne sont jamais annulés, pour garder l'historique complet
+# de la branche par défaut.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v7.0.1
+
+      - name: Installer uv et activer le cache des dépendances
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Installer la version de Python du projet (.python-version)
+        run: uv python install
+
+      - name: Installer les dépendances
+        run: uv sync --group dev --frozen
+
+      - name: Analyse statique (ruff check)
+        run: uv run ruff check .
+
+      - name: Contrôle du formatage (ruff format --check)
+        run: uv run ruff format --check .
+
+  tests:
+    name: Tests unitaires (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v7.0.1
+
+      - name: Installer uv et activer le cache des dépendances
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Installer la version de Python du projet (.python-version)
+        run: uv python install
+
+      - name: Installer les dépendances
+        run: uv sync --group dev --frozen
+
+      # Les tests marqués `network` (comparaison avec le dépôt upstream via le CLI `gh`)
+      # ne sont pas lancés ici : `--tests-reseau` n'est pas passé. Cf. docs/tests.md.
+      - name: Exécuter les tests
+        run: uv run pytest
+
+  validate:
+    name: Validation Home Assistant et HACS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v7.0.1
+
+      - name: Valider le manifeste de l'intégration (hassfest)
+        # `home-assistant/actions` n'a qu'un tag `1.0.0` (avril 2020), antérieur à la
+        # réécriture de l'action : il est inutilisable. L'action est donc épinglée au
+        # SHA de `master` du 2026-09-10, équivalent de `home-assistant/actions/hassfest@master`.
+        uses: home-assistant/actions/hassfest@58bff37c8947f690ace498be413a9b78d6f30f93
+
+      - name: Valider la conformité HACS
+        uses: hacs/action@22.5.0
+        with:
+          category: integration
+          # Pas de commentaire automatique sur la PR : le workflow n'a que
+          # `contents: read` et n'écrit donc rien sur GitHub.
+          comment: "false"
