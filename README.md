@@ -1,6 +1,6 @@
 # auto-backup-extension
 
- Objectif reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter un backup dans dropbox et google drive. 
+Objectif : reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter un backup dans Dropbox et Google Drive. 
 
 ## Fork et licence
 
