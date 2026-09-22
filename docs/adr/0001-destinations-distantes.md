@@ -442,6 +442,23 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   Home Assistant — la faire disparaître en même temps que le problème, une fois la destination
   ré-autorisée ou supprimée.
 
+- **Convergence des API entre fournisseurs lors de la fusion de #13 (Google Drive)** : l'issue
+  #10 (Dropbox) a ajouté plusieurs crochets facultatifs à la classe de base `RemoteDestination`
+  (`LABEL`, `async_nom_par_defaut()`, `async_donnees_du_fournisseur()`) et une fonction utilitaire
+  `provider_label()`. Une fois Google Drive (#13) fusionnée, **vérifier la stabilité** de ces
+  interfaces sur les deux implémentations et, si des divergences émergent :
+  - Consacrer une table explicite dans `destinations/providers/__init__.py` pour que le sélecteur
+    du flux d'options bascule sur un mécanisme plus robuste qu'une méthode `provider_label()`
+    importée du registre.
+  - Uniformiser le message de refus d'autorisation (`options.abort.autorisation_annulea`) et la
+    politique d'échec gracieux des crochets (actuellement : l'ajout ne s'interrompt pas si
+    `async_nom_par_defaut()` ou `async_donnees_du_fournisseur()` lèvent une exception).
+
+- **Plancher d'Home Assistant** : le fork annonce **2025.1.0** comme version minimale, mais
+  l'absence de sous-entrées de configuration — choix retenu en #6 — a imposé de repousser des
+  mécanismes robustes vers le flux d'options. Le plancher sera aligné sur **2026.3** par
+  l'issue #28 pour lever cette limitation et migrer vers le modèle standard de Home Assistant.
+
 ## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
