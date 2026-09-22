@@ -318,9 +318,14 @@ Home Assistant (`async_get_clientsession`), et `manifest.json` reste sans
 | Portée | Justification |
 | --- | --- |
 | `account_info.read` | Identifier le compte à l'autorisation : nom proposé par défaut et vérification d'accès (`async_check_connection`). |
-| `files.content.write` | Déposer une sauvegarde (#11) et supprimer celles qui expirent (#12). |
+| `files.content.write` | Déposer une sauvegarde (#11) et supprimer celles qui expirent (`files/delete_v2`, #12). |
 | `files.metadata.read` | Lister les sauvegardes déjà déposées avec leur date et leur taille : sans elles, la rétention distante supprimerait à l'aveugle (#12). |
-| `files.content.read` | Relire une sauvegarde déposée — vérification d'un envoi, restauration (#12). |
+
+`files.content.read` est volontairement absente : aucune opération du périmètre ne relit le
+contenu d'une sauvegarde déposée (l'envoi, le listage et la suppression s'en passent), et la
+restauration depuis le nuage est hors périmètre de l'epic #1. La demander « au cas où »
+contredirait le critère de moindre privilège de l'issue #10 ; elle sera ajoutée avec la
+fonctionnalité qui la justifiera, au prix d'une ré-autorisation par l'utilisateur.
 
 Aucune portée de partage, de demande de fichier, de contact ni d'équipe n'est demandée.
 `token_access_type=offline` est ajouté à la demande d'autorisation : sans lui Dropbox ne

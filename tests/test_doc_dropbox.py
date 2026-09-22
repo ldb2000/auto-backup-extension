@@ -14,6 +14,7 @@ entre la doc et le code).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from custom_components.auto_backup.const import DOMAIN, OAUTH_CALLBACK_PATH
@@ -28,6 +29,11 @@ DOC_DROPBOX = RACINE_DEPOT / "docs" / "destinations" / "dropbox.md"
 # Quelques marqueurs simples et peu ambigus d'un texte rédigé en français :
 # mots grammaticaux qui n'apparaissent normalement pas dans une page en anglais.
 MARQUEURS_FRANCAIS = ("vous", "votre", "compte", "application", "autorisation")
+
+# Ligne du tableau des portées : une cellule qui ne contient qu'un nom de portée
+# entre accents graves (`files.content.write`). Les autres tableaux de la page ne
+# sont pas concernés, leur première cellule n'étant jamais de cette forme.
+LIGNE_DE_PORTEE = re.compile(r"^\| `([a-z_]+(?:\.[a-z_]+)+)` \|", re.MULTILINE)
 
 
 def _texte_de_la_doc() -> str:
@@ -82,6 +88,22 @@ def test_la_doc_decrit_exactement_les_portees_utilisees_par_le_code() -> None:
     # Section qui introduit la liste des portées à cocher.
     assert "Permissions" in texte
     assert "Ne cochez rien d'autre" in texte
+
+
+def test_la_doc_ne_fait_cocher_aucune_portee_que_le_code_ne_demande_pas() -> None:
+    """Le tableau des portées ne liste **que** celles que le code demande.
+
+    Le test précédent vérifie que rien ne manque ; celui-ci vérifie que rien n'est
+    en trop. Une portée retirée du code mais laissée dans la doc ferait accorder à
+    l'application un accès dont Auto Backup n'a pas l'usage — exactement ce que le
+    principe de moindre privilège cherche à éviter.
+    """
+    listees = set(LIGNE_DE_PORTEE.findall(_texte_de_la_doc()))
+
+    en_trop = listees - set(PORTEES)
+    assert not en_trop, f"portées listées par la doc mais non demandées : {en_trop}"
+    assert listees == set(PORTEES)
+    assert "files.content.read" not in listees
 
 
 def test_la_doc_decrit_l_uri_de_redirection_a_declarer() -> None:

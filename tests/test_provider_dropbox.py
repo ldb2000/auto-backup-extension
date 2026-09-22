@@ -287,8 +287,12 @@ async def test_dropbox_declare_les_portees_minimales(entree: MockConfigEntry) ->
         "account_info.read",
         "files.metadata.read",
         "files.content.write",
-        "files.content.read",
     }
+    # Lire le contenu d'une sauvegarde déposée ne sert à aucune opération du
+    # périmètre : l'envoi et la suppression relèvent de `files.content.write`, le
+    # listage de `files.metadata.read`, et la restauration depuis le nuage est
+    # hors périmètre de l'epic.
+    assert "files.content.read" not in spec.scopes
     # Aucune portée de partage, de demande de fichier, de contact ni d'équipe.
     assert not [
         portee

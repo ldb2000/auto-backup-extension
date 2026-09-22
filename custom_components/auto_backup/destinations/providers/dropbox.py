@@ -58,20 +58,24 @@ URL_COMPTE = "https://api.dropboxapi.com/2/users/get_current_account"
 #
 # - `account_info.read`     : identifier le compte connecté, pour proposer un nom
 #                             de destination et vérifier l'accès (issue #10) ;
-# - `files.content.write`   : déposer une sauvegarde et la supprimer (#11, #12) ;
+# - `files.content.write`   : déposer une sauvegarde (#11) et la supprimer
+#                             (`files/delete_v2`, qui relève de cette portée, #12) ;
 # - `files.metadata.read`   : lister les sauvegardes déjà déposées, avec leur date
-#                             et leur taille, ce qui conditionne la rétention (#12) ;
-# - `files.content.read`    : relire une sauvegarde déposée — vérification d'un
-#                             envoi et restauration (#12).
+#                             et leur taille, ce qui conditionne la rétention (#12).
 #
-# Ne sont pas demandées : `sharing.*` (aucun partage n'est créé),
+# `files.content.read` n'est **pas** demandée : aucune opération du périmètre ne
+# relit le contenu d'une sauvegarde déposée — l'envoi, le listage et la
+# suppression s'en passent — et la restauration depuis le nuage est hors
+# périmètre de l'epic #1. Le jour où elle deviendrait nécessaire, elle sera
+# ajoutée avec la fonctionnalité qui la justifie, et l'utilisateur ré-autorisera.
+#
+# Ne sont pas demandées non plus : `sharing.*` (aucun partage n'est créé),
 # `file_requests.*`, `contacts.*`, ni la moindre portée d'équipe (`team_*`) —
 # Dropbox Business est explicitement hors périmètre de l'epic.
 PORTEES: tuple[str, ...] = (
     "account_info.read",
     "files.metadata.read",
     "files.content.write",
-    "files.content.read",
 )
 
 # `token_access_type=offline` est **indispensable** : sans lui, Dropbox ne renvoie

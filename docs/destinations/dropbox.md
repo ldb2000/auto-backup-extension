@@ -52,18 +52,19 @@ s'interrompt avec le message « Home Assistant n'a pas d'URL externe configurée
 
 ## 2. Cocher les portées (onglet « Permissions »)
 
-Ouvrez l'onglet **Permissions** de l'application et cochez **exactement** ces quatre cases :
+Ouvrez l'onglet **Permissions** de l'application et cochez **exactement** ces trois cases :
 
 | Portée | À quoi elle sert dans Auto Backup |
 | --- | --- |
 | `account_info.read` | Identifier le compte connecté : Auto Backup propose son nom comme nom de destination et s'en sert pour vérifier que l'accès fonctionne. |
 | `files.content.write` | Déposer une sauvegarde dans le dossier choisi, et supprimer celles qui ont dépassé la rétention. |
 | `files.metadata.read` | Lister les sauvegardes déjà déposées, avec leur date et leur taille — c'est ce qui permet d'appliquer la rétention sans rien supprimer à l'aveugle. |
-| `files.content.read` | Relire une sauvegarde déposée : vérification d'un envoi, et restauration. |
 
-**Ne cochez rien d'autre.** Auto Backup ne demande ni partage (`sharing.*`), ni demandes de
-fichiers, ni contacts, ni la moindre permission d'équipe. Une portée cochée « au cas où »
-serait un accès que vous accordez sans contrepartie.
+**Ne cochez rien d'autre.** Auto Backup ne demande pas `files.content.read` : il n'a jamais
+besoin de relire le contenu de vos sauvegardes (les restaurer depuis Dropbox ne fait pas
+partie de ce qu'il sait faire). Il ne demande pas davantage de partage (`sharing.*`), de
+demandes de fichiers, de contacts, ni la moindre permission d'équipe. Une portée cochée
+« au cas où » serait un accès que vous accordez sans contrepartie.
 
 Cliquez sur **Submit** en bas de l'onglet pour enregistrer les portées.
 
