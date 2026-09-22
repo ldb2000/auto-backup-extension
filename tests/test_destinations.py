@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -505,3 +506,42 @@ def test_les_evenements_du_fork_sont_prefixes_et_distincts() -> None:
     assert len(set(evenements)) == len(evenements)
     for evenement in evenements:
         assert evenement.startswith("auto_backup")
+
+
+### ADR ###
+
+
+def test_l_adr_justifie_la_persistance_et_la_hierarchie_d_erreurs() -> None:
+    """L'ADR #6 justifie le support de persistance et la hiérarchie d'erreurs.
+
+    Il ne suffit pas que le fichier existe : il doit trancher explicitement
+    entre les options de persistance étudiées et documenter chaque erreur
+    typée, faute de quoi une future resynchronisation upstream ne saurait pas
+    pourquoi `entry.options` a été préféré aux sous-entrées de configuration.
+    """
+    adr = (
+        Path(__file__).resolve().parent.parent
+        / "docs"
+        / "adr"
+        / "0001-destinations-distantes.md"
+    )
+    assert adr.is_file(), "l'ADR des destinations distantes est introuvable"
+
+    texte = adr.read_text(encoding="utf-8")
+
+    # Justifie le choix du support de persistance face à l'alternative écartée.
+    assert "Décision" in texte
+    assert "entry.options" in texte
+    assert "ConfigSubentry" in texte or "sous-entrées de configuration" in texte
+
+    # Justifie la hiérarchie d'erreurs, classe par classe.
+    for nom_erreur in (
+        "DestinationError",
+        "DestinationAuthError",
+        "DestinationQuotaError",
+        "DestinationNotFoundError",
+        "DestinationConfigError",
+        "UnknownProviderError",
+        "DuplicateProviderError",
+    ):
+        assert nom_erreur in texte, f"{nom_erreur} absente de l'ADR"
