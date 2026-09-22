@@ -44,6 +44,7 @@ from custom_components.auto_backup.const import (
     DATA_DESTINATIONS,
     DATA_UPLOADS,
     DOMAIN,
+    EVENT_BACKUP_FAILED,
     EVENT_BACKUP_START,
     EVENT_BACKUP_SUCCESSFUL,
     EVENT_UPLOAD_FAILED,
@@ -875,6 +876,166 @@ async def test_une_sauvegarde_homonyme_sans_upload_to_n_est_pas_televersee(
 
     assert not debuts
     assert not succes
+
+
+async def test_une_creation_echouee_apres_le_demarrage_ne_laisse_rien_a_reclamer(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Une création confirmée puis échouée libère sa demande.
+
+    L'échec survient ici **après** `auto_backup.backup_start` : la demande a
+    donc été confirmée, et l'expiration ne purge pas les demandes confirmées.
+    C'est `auto_backup.backup_failed` qui doit la libérer, sans quoi la
+    prochaine sauvegarde homonyme — créée sans `upload_to` — la consommerait.
+    """
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    creations_echouees = async_capture_events(hass, EVENT_BACKUP_FAILED)
+    coordinateur = hass.data[DATA_UPLOADS]
+    instance.creation.side_effect = HassioAPIError("sauvegarde déjà en cours")
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    # La création a bien démarré (donc confirmé la demande) avant d'échouer.
+    assert len(creations_echouees) == 1
+    assert not coordinateur.demandes_en_attente
+
+    instance.creation.side_effect = None
+    await hass.services.async_call(DOMAIN, SERVICE_BACKUP, {}, blocking=True)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts
+    assert not succes
+
+
+async def test_un_echec_de_creation_libere_la_demande_confirmee(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """`auto_backup.backup_failed` retire la demande confirmée qu'il concerne."""
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    coordinateur = hass.data[DATA_UPLOADS]
+    demande = coordinateur.async_enregistrer("Sauvegarde du 22", ("destination_test",))
+
+    hass.bus.async_fire(EVENT_BACKUP_START, {ATTR_NAME: "Sauvegarde du 22"})
+    await hass.async_block_till_done()
+    assert demande.confirmee
+
+    hass.bus.async_fire(
+        EVENT_BACKUP_FAILED,
+        {ATTR_NAME: "Sauvegarde du 22", ATTR_ERROR: "disque plein"},
+    )
+    # Un échec qui ne correspond à aucune demande ne fait rien de plus.
+    hass.bus.async_fire(EVENT_BACKUP_FAILED, {ATTR_NAME: "Une autre sauvegarde"})
+    await hass.async_block_till_done()
+
+    assert not coordinateur.demandes_en_attente
+
+    # La sauvegarde homonyme suivante n'a donc plus rien à réclamer.
+    hass.bus.async_fire(
+        EVENT_BACKUP_SUCCESSFUL, {ATTR_NAME: "Sauvegarde du 22", ATTR_SLUG: SLUG}
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts
+
+
+async def test_liberer_une_demande_non_confirmee_la_supprime_aussitot(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """`async_release_upload()` referme la fenêtre d'armement de la demande.
+
+    Non confirmée, la demande disparaît sur-le-champ, sans attendre son
+    expiration : c'est ce qui rend l'appel de service étanche, y compris quand
+    la création lève avant `auto_backup.backup_start`.
+    """
+    debuts = async_capture_events(hass, EVENT_UPLOAD_START)
+    coordinateur = hass.data[DATA_UPLOADS]
+    donnees: dict[str, Any] = {ATTR_UPLOAD_TO: ["destination_test"]}
+
+    demande = async_prepare_upload(hass, donnees)
+
+    assert demande is not None
+    assert demande.en_cours and not demande.confirmee
+    assert coordinateur.demandes_en_attente == [demande]
+
+    async_release_upload(hass, demande)
+
+    assert not demande.en_cours
+    assert not coordinateur.demandes_en_attente
+
+    # Même une sauvegarde portant exactement le nom corrélé ne la ressuscite pas.
+    hass.bus.async_fire(EVENT_BACKUP_START, {ATTR_NAME: donnees[ATTR_NAME]})
+    hass.bus.async_fire(
+        EVENT_BACKUP_SUCCESSFUL, {ATTR_NAME: donnees[ATTR_NAME], ATTR_SLUG: SLUG}
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not debuts
+
+
+async def test_liberer_une_demande_confirmee_laisse_la_creation_aboutir(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Une demande déjà confirmée survit à la fermeture de sa fenêtre.
+
+    La création a démarré : son succès reste à venir et doit encore pouvoir
+    déclencher le téléversement, même si l'appel de service a rendu la main.
+    """
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    coordinateur = hass.data[DATA_UPLOADS]
+    donnees: dict[str, Any] = {
+        ATTR_NAME: "Sauvegarde du 22",
+        ATTR_UPLOAD_TO: ["destination_test"],
+    }
+
+    demande = async_prepare_upload(hass, donnees)
+    hass.bus.async_fire(EVENT_BACKUP_START, {ATTR_NAME: "Sauvegarde du 22"})
+    await hass.async_block_till_done()
+
+    async_release_upload(hass, demande)
+    assert coordinateur.demandes_en_attente == [demande]
+
+    hass.bus.async_fire(
+        EVENT_BACKUP_SUCCESSFUL, {ATTR_NAME: "Sauvegarde du 22", ATTR_SLUG: SLUG}
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(succes) == 1
+    assert not coordinateur.demandes_en_attente
+
+
+async def test_chaque_demande_porte_un_identifiant_unique(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Deux demandes homonymes restent distinguables dans les journaux."""
+    coordinateur = hass.data[DATA_UPLOADS]
+    premiere = coordinateur.async_enregistrer("Core 2026.9", ("destination_test",))
+    seconde = coordinateur.async_enregistrer("Core 2026.9", ("destination_test",))
+
+    assert premiere.identifiant and seconde.identifiant
+    assert premiere.identifiant != seconde.identifiant
+
+
+async def test_le_slug_est_encode_dans_l_url_du_supervisor(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Un slug inattendu ne peut pas déborder du chemin appelé sur le Supervisor."""
+    chemin_encode = "/backups/..%2Faddons%2Fself%2Foptions/download"
+    aioclient_mock.get(
+        f"http://{ADRESSE_SUPERVISOR}{chemin_encode}", content=CONTENU_SAUVEGARDE
+    )
+    handler = SupervisorHandler(ADRESSE_SUPERVISOR, async_get_clientsession(hass))
+
+    async with async_ouvrir_sauvegarde(
+        hass, handler, "../addons/self/options"
+    ) as contenu:
+        morceaux = [morceau async for morceau in contenu.flux]
+
+    assert b"".join(morceaux) == CONTENU_SAUVEGARDE
+    assert aioclient_mock.mock_calls[0][1].raw_path == chemin_encode
 
 
 async def test_une_chaine_unique_vaut_une_destination(
