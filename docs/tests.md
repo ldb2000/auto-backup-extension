@@ -53,6 +53,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
 | `tests/test_project_tooling.py` | Cohérence de l'outillage Python déclaré dans `pyproject.toml`. |
+| `tests/test_compatibilite_python.py` | Le code livré reste analysable par le plancher Python des utilisateurs (voir « Compatibilité Python »). |
 | `tests/test_configuration_pytest.py` | Garde-fous sur la configuration `pytest` elle-même. |
 | `tests/test_ci_workflow.py` | Garde-fous sur le workflow d'intégration continue. |
 
@@ -216,6 +217,44 @@ aioclient_mock.get(
     URL_ABOUT, status=403, json=erreur_google(403, "accessNotConfigured")
 )
 ```
+
+## Compatibilité Python
+
+Le dépôt se développe et se teste sur l'interpréteur exigé par la dernière version de Home
+Assistant (`requires-python` dans `pyproject.toml`, aujourd'hui **3.14**). L'intégration est en
+revanche **installée** chez des utilisateurs dont le plancher annoncé est celui de `hacs.json` :
+**Home Assistant 2025.1, qui tourne sous Python 3.12**.
+
+**Règle : tout ce qui vit sous `custom_components/auto_backup/` doit rester analysable par
+Python 3.12.** Une syntaxe plus récente ne casse rien en développement, mais lève une
+`SyntaxError` au chargement de l'intégration chez ces utilisateurs, avant l'exécution de la
+moindre ligne de logique. La règle ne s'applique qu'au code livré : `tests/` et les scripts du
+dépôt ne tournent que sur l'interpréteur de développement.
+
+Le piège rencontré sur l'issue #13 est la PEP 758 : `except A, B:` sans parenthèses, valide à
+partir de Python 3.14 seulement. On écrit donc :
+
+```python
+except (ClientError, ValueError, UnicodeDecodeError) as err:
+    ...
+```
+
+Les parenthèses sont **obligatoires**, et le `as err` doit être réellement utilisé (ici un
+journal `debug`) : la cible de `ruff format` est l'interpréteur de développement
+(`target-version = "py314"` dans `pyproject.toml`), et le formateur retirerait des parenthèses
+qu'il juge superflues sur une clause sans `as`.
+
+Le garde-fou est [`tests/test_compatibilite_python.py`](../tests/test_compatibilite_python.py) :
+il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 12))` et
+échoue en nommant le fichier, la ligne et la construction fautive. Deux tests l'accompagnent :
+l'un vérifie que le garde-fou refuse bien un extrait écrit en PEP 758 (sans quoi il pourrait
+passer à côté de ce qu'il surveille), l'autre relie le plancher testé à `hacs.json` — monter la
+version minimale de Home Assistant annoncée oblige à revoir `PLANCHER_UTILISATEUR` et cette
+section plutôt qu'à les laisser diverger en silence.
+
+Limite assumée : `feature_version` est donnée pour « best effort » par CPython et ne couvre pas
+l'intégralité des évolutions de syntaxe. Ce garde-fou ne remplace pas une exécution réelle sur
+le plancher, mais il est instantané et bloque la régression la plus probable.
 
 ## Modifier l'intégration importée
 
