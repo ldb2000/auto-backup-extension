@@ -7,6 +7,7 @@ from homeassistant.util.hass_dict import HassKey
 if TYPE_CHECKING:
     from .manager import AutoBackup
     from .destinations import DestinationManager
+    from .destinations.upload import CoordinateurTeleversement
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -79,3 +80,24 @@ EVENT_UPLOAD_START = f"{DOMAIN}.upload_start"
 EVENT_UPLOAD_SUCCESSFUL = f"{DOMAIN}.upload_successful"
 EVENT_UPLOAD_FAILED = f"{DOMAIN}.upload_failed"
 EVENT_REMOTE_PURGE = f"{DOMAIN}.remote_purge"
+
+### TÉLÉVERSEMENT APRÈS CRÉATION (issue #8) ###
+# Coordinateur qui corrèle un appel de service avec la sauvegarde créée, puis
+# téléverse celle-ci en tâche de fond (cf. `destinations/upload.py`).
+DATA_UPLOADS: HassKey[CoordinateurTeleversement] = HassKey(f"{DOMAIN}_uploads")
+
+# Option des services `backup`, `backup_full` et `backup_partial` : la ou les
+# destinations distantes vers lesquelles envoyer la sauvegarde créée.
+ATTR_UPLOAD_TO = "upload_to"
+
+# Champs des événements `auto_backup.upload_*`, en complément d'ATTR_NAME,
+# ATTR_SLUG et ATTR_ERROR ci-dessus.
+ATTR_DESTINATION = "destination"
+ATTR_DESTINATION_NAME = "destination_name"
+ATTR_SIZE = "size"
+ATTR_REMOTE_ID = "remote_id"
+
+# Délai maximum d'un téléversement, en secondes. Lu dans `entry.options` ; le
+# formulaire d'options ne l'expose pas encore (cf. docs/UPSTREAM.md).
+CONF_UPLOAD_TIMEOUT = "upload_timeout"
+DEFAULT_UPLOAD_TIMEOUT = 1800

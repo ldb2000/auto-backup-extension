@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -75,13 +75,34 @@ class RemoteDestination(ABC):
     @abstractmethod
     async def async_upload(
         self,
-        source: Path | str,
+        source: Path | str | None = None,
         *,
         name: str,
         slug: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        stream: AsyncIterator[bytes] | None = None,
+        size: int | None = None,
+        filename: str | None = None,
     ) -> RemoteBackup:
-        """Téléverse le fichier `source` dans le dossier cible.
+        """Téléverse une sauvegarde dans le dossier cible.
+
+        Deux formes de contenu peuvent être fournies, au choix de l'appelant :
+
+        - `source` : chemin du fichier local, quand il en existe un ;
+        - `stream` : itérateur asynchrone de morceaux d'octets, accompagné de
+          `size` (taille totale annoncée, `None` si inconnue) et de `filename`
+          (nom d'archive proposé).
+
+        Depuis l'issue #8, l'orchestrateur (`destinations/upload.py`) fournit
+        **toujours** `stream`, `size` et `filename`, et `source` uniquement sur
+        une installation Home Assistant Core, où la sauvegarde existe sur le
+        disque. Un fournisseur doit donc savoir consommer `stream` ; il ne peut
+        compter sur `source` que s'il accepte de ne pas fonctionner sous
+        Supervisor. Le flux ne se consomme qu'une fois : téléverser vers
+        plusieurs destinations relit la sauvegarde autant de fois.
+
+        Les paramètres ajoutés sont nommés et facultatifs : un appel de la
+        forme `async_upload(chemin, name=...)` reste valide.
 
         Renvoie la sauvegarde distante créée. Lève `DestinationQuotaError` si
         l'espace de stockage est épuisé, `DestinationAuthError` si l'accès est

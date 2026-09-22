@@ -46,11 +46,17 @@ from .const import (
     DOMAIN,
     ATTR_ENCRYPTED,
     ATTR_EXCLUDE_DATABASE,
+    ATTR_UPLOAD_TO,  # téléversement distant (fork)
 )
 from .handlers import SupervisorHandler, BackupHandler
 from .helpers import is_backup
 from .manager import AutoBackup
 from .destinations import async_setup_destinations
+from .destinations.upload import (  # téléversement distant (fork)
+    async_prepare_upload,
+    async_release_upload,
+    async_setup_upload,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +75,8 @@ SCHEMA_BACKUP_BASE = vol.Schema(
         vol.Optional(ATTR_LOCATION): vol.All(
             cv.string, lambda v: None if v == "/backup" else v
         ),
+        # Destinations distantes du fork (#8) : identifiants ou noms.
+        vol.Optional(ATTR_UPLOAD_TO): vol.All(cv.ensure_list, [cv.string]),
     },
 )
 
@@ -136,6 +144,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     auto_backup = AutoBackup(hass, options, handler)
     hass.data[DATA_AUTO_BACKUP] = auto_backup
     async_setup_destinations(hass, entry)  # destinations distantes (fork)
+    async_setup_upload(hass, entry)  # téléversement après création (fork)
     entry.async_on_unload(entry.add_update_listener(auto_backup.update_listener))
 
     await auto_backup.load_snapshots_expiry()
@@ -164,7 +173,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         ATTR_ADDONS: data.pop(ATTR_EXCLUDE_ADDONS, []),
                     }
 
+            # Fork (#8) : `upload_to` est validé et retiré des données avant la
+            # création ; la demande est corrélée à la sauvegarde par son nom.
+            demande_televersement = async_prepare_upload(hass, data)
             await auto_backup.async_create_backup(data)
+            async_release_upload(hass, demande_televersement)
 
     for service, schema in MAP_SERVICES.items():
         hass.services.async_register(DOMAIN, service, async_service_handler, schema)
