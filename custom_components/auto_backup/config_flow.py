@@ -8,6 +8,7 @@ from homeassistant.core import callback, HomeAssistant
 from homeassistant.helpers.hassio import is_hassio
 
 from .helpers import is_backup
+from .destinations import preserve_destinations
 from .const import DOMAIN, DEFAULT_BACKUP_TIMEOUT, CONF_AUTO_PURGE, CONF_BACKUP_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,6 +55,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Manage the Auto Backup options."""
         if user_input is not None:
+            # Fork : le formulaire ignore les destinations, on les reporte.
+            user_input = preserve_destinations(self.config_entry.options, user_input)
             return self.async_create_entry(data=user_input)
 
         return self.async_show_form(

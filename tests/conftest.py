@@ -6,7 +6,9 @@ instance Home Assistant de test en quelques lignes :
 - le paquet `custom_components` du dépôt est rendu chargeable par Home Assistant ;
 - la fixture `auto_enable_custom_integrations` est appliquée automatiquement ;
 - `entree_auto_backup` initialise l'intégration depuis une `MockConfigEntry` ;
-- `gestionnaire_auto_backup` donne accès au gestionnaire stocké dans `hass.data`.
+- `gestionnaire_auto_backup` donne accès au gestionnaire stocké dans `hass.data` ;
+- `fournisseur_factice` enregistre le fournisseur de destination en mémoire
+  (`tests/destinations_factices.py`) le temps d'un test.
 
 Les tests marqués `network` (comparaison avec le dépôt upstream) ne sont pas
 exécutés par défaut : ajouter `--tests-reseau` à la ligne de commande.
@@ -15,7 +17,7 @@ exécutés par défaut : ajouter `--tests-reseau` à la ligne de commande.
 from __future__ import annotations
 
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -39,7 +41,15 @@ if str(RACINE_DEPOT) not in sys.path:
 
 import custom_components  # noqa: E402
 from custom_components.auto_backup.const import DATA_AUTO_BACKUP, DOMAIN  # noqa: E402
+from custom_components.auto_backup.destinations import (  # noqa: E402
+    register_provider,
+    unregister_provider,
+)
 from custom_components.auto_backup.manager import AutoBackup  # noqa: E402
+from destinations_factices import (  # noqa: E402
+    PROVIDER_FACTICE,
+    DestinationEnMemoire,
+)
 
 _CHEMIN_PAQUET = Path(next(iter(custom_components.__path__))).resolve()
 if _CHEMIN_PAQUET != RACINE_DEPOT / "custom_components":
@@ -111,3 +121,15 @@ def gestionnaire_auto_backup(
 ) -> AutoBackup:
     """Renvoie le gestionnaire `AutoBackup` stocké dans `hass.data`."""
     return hass.data[DATA_AUTO_BACKUP]
+
+
+@pytest.fixture
+def fournisseur_factice() -> Iterator[str]:
+    """Enregistre le fournisseur factice en mémoire, puis le retire du registre.
+
+    Le registre est un état global du processus : le retrait en fin de test
+    garantit qu'un test n'en pollue pas un autre.
+    """
+    register_provider(PROVIDER_FACTICE, DestinationEnMemoire)
+    yield PROVIDER_FACTICE
+    unregister_provider(PROVIDER_FACTICE)
