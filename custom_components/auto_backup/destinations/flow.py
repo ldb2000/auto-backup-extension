@@ -31,6 +31,7 @@ import asyncio
 import logging
 import secrets
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from typing import Any
 
 import voluptuous as vol
@@ -565,20 +566,23 @@ class GestionDesDestinationsMixin:
         )
 
     def _terminer_la_reautorisation(self) -> ConfigFlowResult:
-        """Remplace le jeton de la destination ré-autorisée et clôt le flux."""
+        """Remplace le jeton de la destination ré-autorisée et clôt le flux.
+
+        Seuls les trois champs d'autorisation changent : la destination est
+        recopiée par `dataclasses.replace()` plutôt que reconstruite champ par
+        champ, pour que rien d'autre ne puisse être perdu en chemin. Une
+        reconstruction manuelle avait déjà effacé `provider_data` (le compte
+        rattaché à la destination), et aurait effacé de la même façon tout champ
+        ajouté plus tard à `DestinationConfig`.
+        """
         configurations = self._configurations()
         identifiant = str(self._destination_id)
         if not any(config.destination_id == identifiant for config in configurations):
             return self.async_abort(reason="destination_inconnue")
 
         mises_a_jour = [
-            DestinationConfig(
-                destination_id=config.destination_id,
-                provider=config.provider,
-                name=config.name,
-                folder=config.folder,
-                retention_days=config.retention_days,
-                retention_count=config.retention_count,
+            replace(
+                config,
                 client_id=self._client_id or config.client_id,
                 client_secret=self._client_secret or config.client_secret,
                 token=self._token,

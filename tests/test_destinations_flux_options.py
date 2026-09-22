@@ -43,6 +43,7 @@ from custom_components.auto_backup.const import (
     CONF_DESTINATIONS,
     CONF_FOLDER,
     CONF_PROVIDER,
+    CONF_PROVIDER_DATA,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     DATA_DESTINATIONS,
@@ -83,6 +84,10 @@ from destinations_factices import (
 )
 
 URL_EXTERNE = "https://auto-backup.exemple.test"
+
+# Données de compte telles qu'un fournisseur les renvoie à l'autorisation
+# (issue #10) : elles décrivent le compte rattaché à la destination, sans secret.
+DONNEES_DU_COMPTE = {"account_id": "compte-factice-0000"}
 
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
@@ -673,6 +678,55 @@ async def test_la_reautorisation_remplace_le_jeton_et_efface_le_probleme(
         )
         is None
     )
+
+
+async def test_la_reautorisation_conserve_les_donnees_du_compte(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Ré-autoriser ne remplace que les champs d'autorisation.
+
+    Les données du compte (`provider_data`, issue #10) décrivent la destination,
+    pas son autorisation : les perdre en ré-autorisant reviendrait à oublier à
+    quel compte la destination est rattachée, sans rien signaler à l'utilisateur.
+    """
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={
+            CONF_DESTINATIONS: [config_oauth_factice(provider_data=DONNEES_DU_COMPTE)]
+        },
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    resultat = await ouvrir_les_options(entree.entry_id, "reautoriser_destination")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_DESTINATION_ID: "destination_oauth"}
+    )
+    resultat = await _retour_du_fournisseur(
+        hass, resultat, code=CODE_AUTORISATION_FACTICE
+    )
+    await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_TOKEN]["access_token"] == "acces-factice-2"
+    assert persistee[CONF_PROVIDER_DATA] == DONNEES_DU_COMPTE
+    # Et le reste de la configuration est intact.
+    attendue = config_oauth_factice()
+    assert persistee[CONF_NAME] == attendue[CONF_NAME]
+    assert persistee[CONF_FOLDER] == attendue[CONF_FOLDER]
+    assert persistee[CONF_RETENTION_DAYS] == attendue[CONF_RETENTION_DAYS]
+    assert persistee[CONF_RETENTION_COUNT] == attendue[CONF_RETENTION_COUNT]
 
 
 async def test_sans_destination_oauth_la_reautorisation_est_impossible(
