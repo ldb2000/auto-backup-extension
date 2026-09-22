@@ -1386,6 +1386,30 @@ async def test_un_delai_nul_ou_negatif_est_refuse(
     assert _valeur_proposee(resultat, CONF_UPLOAD_TIMEOUT) == delai
 
 
+@pytest.mark.parametrize("delai", [float("inf"), float("-inf")])
+async def test_un_delai_infini_est_refuse(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+    ouvrir_les_options: OuvrirLesOptions,
+    delai: float,
+) -> None:
+    """Un délai infini est refusé par un message, pas par une exception qui fuit.
+
+    `NumberSelector` ne borne volontairement pas la saisie (cf. la docstring de
+    `_delai_de_televersement`) : rien n'empêche `float("inf")` de l'atteindre.
+    Le critère 6 promet alors l'erreur `delai_invalide`, pas une exception qui
+    ferait échouer le flux d'options sans explication pour l'utilisateur.
+    """
+    instance = await _demarrer(hass, fichier_de_sauvegarde)
+
+    resultat = await _regler_le_delai(hass, instance.entree, ouvrir_les_options, delai)
+
+    assert resultat["type"] is FlowResultType.FORM
+    assert resultat["errors"] == {CONF_UPLOAD_TIMEOUT: "delai_invalide"}
+
+
 @pytest.mark.parametrize(
     ("saisie", "attendu"),
     [(1, 1), (DELAI_CHOISI, DELAI_CHOISI), ("120", 120), (1800.0, 1800)],

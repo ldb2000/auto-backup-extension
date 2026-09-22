@@ -137,7 +137,8 @@ def _delai_de_televersement(valeur: Any) -> int:
     """
     try:
         secondes = int(float(valeur))
-    except (TypeError, ValueError) as err:
+    except (TypeError, ValueError, OverflowError) as err:
+        # OverflowError : un flottant infini ne se convertit pas en entier.
         raise DestinationConfigError(
             f"{CONF_UPLOAD_TIMEOUT} doit être un nombre de secondes"
         ) from err
