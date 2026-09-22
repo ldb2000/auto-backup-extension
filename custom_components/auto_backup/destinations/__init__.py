@@ -48,6 +48,7 @@ from .oauth import (
     spec_oauth_du_fournisseur,
     url_de_retour,
 )
+from .providers import enregistrer_les_fournisseurs
 from .reauth import (
     async_effacer_la_reauthentification,
     async_signaler_la_reauthentification,
@@ -60,6 +61,7 @@ from .registry import (
     get_provider,
     list_providers,
     provider,
+    provider_label,
     register_provider,
     unregister_provider,
 )
@@ -95,6 +97,7 @@ __all__ = [
     "async_setup_destinations",
     "async_signaler_la_reauthentification",
     "create_destination",
+    "enregistrer_les_fournisseurs",
     "get_provider",
     "identifiant_du_probleme",
     "jeton_persiste",
@@ -104,6 +107,7 @@ __all__ = [
     "options_avec_destinations",
     "preserve_destinations",
     "provider",
+    "provider_label",
     "reauthentification_requise",
     "register_provider",
     "spec_oauth_du_fournisseur",

@@ -56,12 +56,17 @@ from custom_components.auto_backup.destinations import (
     DestinationManager,
     DestinationOAuth2Implementation,
     identifiant_du_probleme,
+    list_providers,
     register_provider,
     unregister_provider,
 )
 from custom_components.auto_backup.destinations.flow import (
+    GestionDesDestinationsMixin,
     _identifiant_disponible,
     _retention,
+)
+from custom_components.auto_backup.destinations.providers.dropbox import (
+    PROVIDER_DROPBOX,
 )
 from destinations_factices import (
     CLIENT_ID_FACTICE,
@@ -195,10 +200,19 @@ async def test_sans_fournisseur_enregistre_l_ajout_est_impossible(
     entree_auto_backup: MockConfigEntry,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Aucun fournisseur livré : le flux le dit au lieu d'un formulaire vide."""
-    resultat = await ouvrir_les_options(
-        entree_auto_backup.entry_id, "ajouter_destination"
-    )
+    """Registre vide : le flux le dit au lieu d'un formulaire vide.
+
+    Le cas ne se produit plus en fonctionnement normal depuis que Dropbox est
+    livré (issue #10) : le registre est simulé vide pour éprouver la branche, qui
+    reste utile à une installation dont un fournisseur aurait été retiré.
+    """
+    with patch(
+        "custom_components.auto_backup.destinations.flow.list_providers",
+        return_value=(),
+    ):
+        resultat = await ouvrir_les_options(
+            entree_auto_backup.entry_id, "ajouter_destination"
+        )
 
     assert resultat["type"] is FlowResultType.ABORT
     assert resultat["reason"] == "aucun_fournisseur"
@@ -210,12 +224,22 @@ async def test_le_choix_du_fournisseur_liste_le_registre(
     fournisseur_factice: str,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Critère : les fournisseurs proposés sont ceux du registre."""
+    """Critère : les fournisseurs proposés sont ceux du registre.
+
+    Dropbox y figure depuis l'issue #10, sous son libellé lisible ; les
+    fournisseurs factices, qui n'en déclarent pas, restent affichés sous leur
+    identifiant technique.
+    """
     resultat = await ouvrir_les_options(entree.entry_id, "ajouter_destination")
 
     selecteur = resultat["data_schema"].schema[CONF_PROVIDER]
-    proposes = [option["value"] for option in selecteur.config["options"]]
-    assert proposes == [PROVIDER_FACTICE, PROVIDER_OAUTH_FACTICE]
+    libelles = {
+        option["value"]: option["label"] for option in selecteur.config["options"]
+    }
+    assert list(libelles) == list(list_providers())
+    assert {PROVIDER_FACTICE, PROVIDER_OAUTH_FACTICE} <= set(libelles)
+    assert libelles[PROVIDER_FACTICE] == PROVIDER_FACTICE
+    assert libelles[PROVIDER_DROPBOX] == "Dropbox"
 
 
 ### Parcours complet d'ajout ###
@@ -408,15 +432,33 @@ async def test_une_autorisation_refusee_interrompt_le_flux(
     entree: MockConfigEntry,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """L'utilisateur refuse l'accès : rien n'est enregistré, le motif est rendu."""
+    """L'utilisateur refuse l'accès : rien n'est enregistré, le motif est rendu.
+
+    `access_denied` reçoit un message dédié (issue #10) : montrer le code brut
+    n'apprend rien à l'utilisateur qui vient de fermer la page d'autorisation.
+    """
     resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
 
     resultat = await _retour_du_fournisseur(hass, resultat, error="access_denied")
 
     assert resultat["type"] is FlowResultType.ABORT
-    assert resultat["reason"] == "autorisation_refusee"
-    assert resultat["description_placeholders"] == {"erreur": "access_denied"}
+    assert resultat["reason"] == "autorisation_annulee"
     assert CONF_DESTINATIONS not in entree.options
+
+
+async def test_un_refus_inconnu_est_rendu_tel_quel(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Un code d'erreur non répertorié reste cité dans le message générique."""
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+
+    resultat = await _retour_du_fournisseur(hass, resultat, error="server_error")
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "autorisation_refusee"
+    assert resultat["description_placeholders"] == {"erreur": "server_error"}
 
 
 async def test_un_echec_d_echange_du_code_interrompt_le_flux(
@@ -574,7 +616,7 @@ async def test_la_vue_de_retour_transmet_un_refus(
 
     suite = await hass.config_entries.options.async_configure(resultat["flow_id"])
     assert suite["type"] is FlowResultType.ABORT
-    assert suite["reason"] == "autorisation_refusee"
+    assert suite["reason"] == "autorisation_annulee"
 
 
 ### Ré-autorisation ###
@@ -816,6 +858,16 @@ def test_une_retention_illisible_est_refusee() -> None:
     """Une valeur non numérique ne peut pas devenir une rétention."""
     with pytest.raises(DestinationConfigError):
         _retention({CONF_RETENTION_DAYS: "sept"}, CONF_RETENTION_DAYS)
+
+
+def test_le_libelle_du_fournisseur_retombe_sur_l_identifiant() -> None:
+    """Sans fournisseur choisi, ou s'il a disparu, l'affichage reste correct."""
+    flux = GestionDesDestinationsMixin()
+
+    assert flux._libelle_du_fournisseur() == ""
+
+    flux._provider = "fournisseur_disparu"
+    assert flux._libelle_du_fournisseur() == "fournisseur_disparu"
 
 
 def test_un_identifiant_deja_pris_recoit_un_suffixe() -> None:
