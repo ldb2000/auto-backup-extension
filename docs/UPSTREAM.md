@@ -35,8 +35,10 @@ Le code propre au fork vit dans le sous-paquet `custom_components/auto_backup/de
 absent de l'upstream : contrat commun des destinations distantes, types de données, erreurs
 typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis autorisation
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
-d'interface du flux d'options (`flow.py`, issue #7). Les fournisseurs Dropbox et Google Drive
-viendront s'y greffer sans toucher au code upstream.
+d'interface du flux d'options (`flow.py`, issue #7). Les fournisseurs concrets vivent dans le
+sous-paquet `destinations/providers/` — `google_drive.py` depuis l'issue #13 — et s'enregistrent
+par `enregistrer_les_fournisseurs()`, appelée au démarrage de l'entrée : ajouter un fournisseur
+ne touche donc aucun module upstream.
 
 Les modules upstream ne sont, eux, **que complétés** : aucune ligne upstream n'est supprimée ni
 modifiée, ce qui garde la resynchronisation en simple report de diff.
@@ -45,9 +47,11 @@ modifiée, ce qui garde la resynchronisation en simple report de diff.
   d'un bloc de constantes du fork — `DATA_DESTINATIONS`, `CONF_DESTINATIONS`,
   `CONF_DESTINATION_ID`, `CONF_PROVIDER`, `CONF_FOLDER`, `CONF_RETENTION_DAYS`,
   `CONF_RETENTION_COUNT`, `DEFAULT_DESTINATION_FOLDER`, `EVENT_UPLOAD_START`,
-  `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`. Aucune constante
-  upstream n'est renommée ni modifiée, et les noms d'événements suivent la convention upstream
-  `<domaine>.<événement>`.
+  `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`, complété par
+  l'issue #7 (`OAUTH_CALLBACK_PATH`, `DATA_OAUTH_STATES`, `DATA_OAUTH_VIEW`, `OAUTH_STATE_TTL`,
+  `OAUTH_AUTHORIZE_URL_TIMEOUT`, `OAUTH_TOKEN_TIMEOUT`, `ISSUE_REAUTH_PREFIX`) puis par l'issue
+  #13 (`CONF_PROVIDER_DATA`). Aucune constante upstream n'est renommée ni modifiée, et les noms
+  d'événements suivent la convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées — l'import de
   `async_setup_destinations` et son appel dans `async_setup_entry`, qui charge les destinations
   configurées et les expose dans `hass.data[DATA_DESTINATIONS]`. Le nettoyage au déchargement
@@ -68,6 +72,9 @@ modifiée, ce qui garde la resynchronisation en simple report de diff.
   `issues.reauthentification_requise` et, sous `options`, les sections `abort`, `error` et les
   étapes `menu`, `ajouter_destination`, `identifiants`, `autorisation`, `destination`,
   `reautoriser_destination`, `supprimer_destination`, plus un `title` pour l'étape `init`.
+  L'issue #13 y ajoute un unique abandon, `options.abort.echec_fournisseur`, **à la fin du bloc
+  du fork** : le fournisseur y explique en français ce qui a échoué à sa première requête (API
+  Drive non activée, par exemple).
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,

@@ -9,6 +9,13 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
   Couvre la persistance (entry.options), le registre de fournisseurs, la hiérarchie d'erreurs,
   et la validation sécurisée des chemins distants en POSIX normalisé.
 
+## Destinations distantes
+
+- **[Connecter Google Drive](destinations/google-drive.md)** : création du projet Google Cloud,
+  activation de l'API Drive, écran de consentement, identifiants OAuth « Application Web »,
+  URI de redirection et prérequis d'URL externe publique, portée `drive.file` et ses
+  conséquences.
+
 ## Maintenance
 
 - **[Suivi de l'upstream](UPSTREAM.md)** : Révision importée de jcwillox/hass-auto-backup,

@@ -38,9 +38,21 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Unicité du nom d'une destination vérifiée à la saisie, et message d'erreur explicite sur le dossier distant (deux points laissés ouverts par l'issue #6). Refs #7
 - Traductions françaises et anglaises des nouvelles étapes, erreurs, abandons et du problème de ré-autorisation (`translations/fr.json`, `translations/en.json`), clés upstream conservées. Refs #7
 - Fournisseur factice OAuth2 pour les tests (`DestinationOAuthEnMemoire`, fixtures `fournisseur_oauth_factice` et `ouvrir_les_options`) et couverture du parcours complet avec un mock HTTP : ajout, retour d'autorisation simulé puis réel, rafraîchissement, ré-authentification, suppression. Refs #7
+- Fournisseur **Google Drive** (`destinations/providers/google_drive.py`) : l'option « Ajouter une destination » propose « Google Drive », guide la saisie de l'identifiant et du secret client du projet Google Cloud de l'utilisateur, puis conduit à l'écran de consentement Google. Aucun SDK ni dépendance supplémentaire : les appels passent par la session aiohttp partagée de Home Assistant. Refs #13
+- Autorisation Google demandée en accès hors-ligne (`access_type=offline`, `prompt=consent`, `include_granted_scopes=false`) et limitée à la seule portée `https://www.googleapis.com/auth/drive.file` : Auto Backup n'accède qu'aux fichiers qu'il a lui-même créés. Refs #13
+- Identification du compte autorisé (`drive/v3/about`) : la destination est proposée sous le nom « Google Drive – <compte> » et l'adresse du compte est conservée dans le nouveau champ facultatif `provider_data` d'une destination, borné, validé et masqué dans les journaux. Refs #13
+- Libellés lisibles dans le sélecteur de fournisseur : un fournisseur déclare son nom d'affichage par un attribut `label` (point laissé ouvert par l'issue #7) ; un fournisseur sans libellé garde son identifiant technique. Refs #13
+- Messages d'échec explicites en français à l'ajout d'une destination Google Drive — identifiants invalides, consentement refusé, API Drive non activée (403 `accessNotConfigured`) — avec la cause probable et la marche à suivre ; le flux se relance sans redémarrer Home Assistant. Refs #13
+- Sous-paquet `destinations/providers/` et sa fonction `enregistrer_les_fournisseurs()`, appelée au démarrage de l'entrée : ajouter un fournisseur reste sans effet sur le code upstream. Refs #13
+- Guide utilisateur `docs/destinations/google-drive.md` : création du projet Google Cloud, activation de l'API Drive, écran de consentement (type externe, utilisateurs test, publication), identifiants OAuth « Application Web », URI de redirection et prérequis d'URL externe publique, portée `drive.file` et ses conséquences, diagnostic des échecs. Refs #13
+- Tests du fournisseur Google Drive (`tests/test_provider_google_drive.py`) avec mock HTTP : déclaration OAuth2, paramètres de l'URL d'autorisation, parcours complet d'ajout, nom par défaut, erreurs caractéristiques, rafraîchissement du jeton, révocation et vérification d'accès — sans aucune valeur réelle et sans secret dans les journaux, même en niveau `debug`. Refs #13
 
 ### Modifié
 
+- `custom_components/auto_backup/const.py` : ajout de `CONF_PROVIDER_DATA`, et `translations/fr.json` / `translations/en.json` : ajout de l'abandon `options.abort.echec_fournisseur`, en fin de bloc du fork. Refs #13
+- `docs/adr/0001-destinations-distantes.md` : nouvelle section « Fournisseur Google Drive » (où vit un fournisseur, absence de SDK, portée et paramètres demandés à Google, crochets facultatifs du flux d'ajout, échec précoce, prérequis d'URL externe publique) ; les points ouverts « URI de redirection » et « libellés de fournisseur » sont marqués traités. Refs #13
+- `docs/UPSTREAM.md`, `docs/README.md` et `docs/tests.md` : sous-paquet `destinations/providers/`, écarts de `const.py` et des traductions, index de la documentation et procédure de test d'un fournisseur réel. Refs #13
+- `README.md` : Google Drive n'est plus annoncé comme à venir ; la section renvoie au guide de connexion. Refs #13
 - `README.md` : la section sur l'ajout d'une destination précise désormais que l'URL externe
   doit être HTTPS et publiquement accessible (pas locale `.local` ni adresse IP nue),
   et que certains fournisseurs comme Google Drive refusent les URI non publiques. Refs #7

@@ -48,6 +48,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_persistance.py` | Persistance des destinations dans l'entrée et rechargement après redémarrage. |
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
+| `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
@@ -98,10 +99,11 @@ unique (`unique_id`) de chaque entité.
 
 ## Tester une destination distante
 
-Les destinations cloud n'ont pas de fournisseur livré tant que Dropbox (#10) et Google Drive
-(#13) ne sont pas implémentés. Les tests s'appuient donc sur le fournisseur factice de
+Les tests du **socle** s'appuient sur le fournisseur factice de
 [`tests/destinations_factices.py`](../tests/destinations_factices.py), entièrement en mémoire :
-aucun fichier n'est lu, aucun appel réseau n'est fait.
+aucun fichier n'est lu, aucun appel réseau n'est fait. Ils démontrent qu'un fournisseur s'ajoute
+par le seul registre, sans rien changer au cœur de l'intégration. Un **fournisseur réel** se
+teste autrement : voir [Tester un fournisseur réel](#tester-un-fournisseur-réel-google-drive).
 
 ```python
 async def test_mon_comportement(hass, fournisseur_factice):
@@ -173,6 +175,48 @@ Les cas Unicode sont écrits en séquences d'échappement (`\uff0e`) et non avec
 littéral : `ruff` refuse les caractères ambigus dans le code (RUF001/RUF002), et un confusable
 copié tel quel serait de toute façon illisible en revue.
 
+## Tester un fournisseur réel (Google Drive)
+
+Depuis l'issue #13, l'intégration livre un vrai fournisseur : `google_drive`, enregistré par
+`enregistrer_les_fournisseurs()` au démarrage de l'entrée. Deux conséquences pour les tests :
+
+- **le registre n'est jamais vide** dès qu'une entrée est configurée. Un test qui exige un
+  registre vide doit neutraliser `list_providers` (voir
+  `test_sans_fournisseur_enregistre_l_ajout_est_impossible`), et un test qui liste les
+  fournisseurs proposés doit tolérer la présence de Google Drive ;
+- **les points d'accès de Google sont simulés**, jamais appelés :
+  `aioclient_mock.post(URL_JETON, ...)` pour l'échange et le rafraîchissement du jeton,
+  `aioclient_mock.get(URL_ABOUT, ...)` pour l'identification du compte.
+
+```python
+async def test_la_verification_de_connexion_interroge_drive(
+    hass, entree_google, aioclient_mock
+):
+    aioclient_mock.get(URL_ABOUT, json=reponse_about())
+
+    await _destination(hass).async_check_connection()
+
+    (methode, url, _, entetes) = _appels(aioclient_mock, URL_ABOUT)[0]
+    assert url.query["fields"] == "user"
+    assert entetes["Authorization"] == "Bearer acces-google-factice-1"
+```
+
+Les règles du fournisseur factice s'appliquent telles quelles, avec une précision : **aucune
+valeur réelle**, ni identifiant d'application, ni jeton, ni compte. Le compte de test vit dans
+le domaine réservé `.test` (`camille.martin@exemple.test`), et un test vérifie qu'aucune de ces
+valeurs — l'adresse du compte comprise, car elle identifie une personne — n'apparaît dans les
+journaux en niveau `debug`.
+
+Un échec de l'API Drive se simule par son corps d'erreur habituel, ce qui permet d'éprouver la
+qualification des erreurs (`accessNotConfigured` -> API non activée, `storageQuotaExceeded` ->
+`DestinationQuotaError`, 401 -> `DestinationAuthError`) :
+
+```python
+aioclient_mock.get(
+    URL_ABOUT, status=403, json=erreur_google(403, "accessNotConfigured")
+)
+```
+
 ## Modifier l'intégration importée
 
 Le répertoire `custom_components/auto_backup/` contient le code importé de l'upstream
@@ -193,7 +237,8 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 ## Périmètre
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
-entités), le socle des destinations distantes (contrat, registre, persistance) et leur
-autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression). Les
-fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
+entités), le socle des destinations distantes (contrat, registre, persistance), leur
+autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression) et la
+connexion d'un compte Google Drive (issue #13). Le téléversement (#14) et la purge distante
+(#15) sont testés par leurs issues respectives, comme le fournisseur Dropbox (#10 à #12).
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

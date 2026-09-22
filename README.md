@@ -23,6 +23,9 @@ capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le clou
 
 - **Dropbox** : téléversement de la sauvegarde créée et rétention distante dédiée.
 - **Google Drive** : téléversement de la sauvegarde créée et rétention distante dédiée.
+  La **connexion du compte est disponible** — voir le guide
+  [Connecter Google Drive](docs/destinations/google-drive.md) ; le téléversement et la purge
+  distante arrivent avec les issues #14 et #15.
 
 La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
@@ -44,8 +47,16 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
 
-Aucun fournisseur cloud n'est encore livré : Dropbox et Google Drive viendront s'enregistrer
-dans ce même parcours.
+**Google Drive** est le premier fournisseur livré : l'ajout d'une destination le propose
+directement, demande les identifiants de votre application Google Cloud, puis vous conduit à
+l'écran de consentement. Il ne demande que la portée `drive.file`, qui limite son accès aux
+seuls fichiers qu'il a créés. La marche à suivre complète — projet Google Cloud, activation de
+l'API Drive, écran de consentement, identifiants « Application Web » et URI de redirection — est
+décrite dans [Connecter Google Drive](docs/destinations/google-drive.md). Google exigeant une URI
+de redirection HTTPS sur un domaine public, une instance sans URL externe publique ne peut pas
+connecter ce fournisseur.
+
+Dropbox viendra s'enregistrer dans ce même parcours.
 
 ## Développement
 

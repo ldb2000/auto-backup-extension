@@ -2,7 +2,7 @@
 
 - **Statut** : accepté
 - **Date** : 2026-09-22
-- **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle), [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et interface) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+- **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle), [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et interface), [#13](https://github.com/ldb2000/auto-backup-extension/issues/13) (fournisseur Google Drive) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -296,6 +296,63 @@ erreur ou par abus, ne se propage dans chaque requête et dans les options persi
 La règle vit dans le socle et non chez chaque fournisseur : un fournisseur ajouté plus tard hérite
 de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relatif déjà assaini.
 
+## Fournisseur Google Drive (issue #13)
+
+Premier fournisseur réel branché sur le socle, il valide les décisions ci-dessus : il n'ajoute
+aucune ligne aux modules upstream et ne touche ni au gestionnaire, ni au flux d'options, hormis
+les crochets décrits plus bas.
+
+**Où il vit.** Dans `destinations/providers/google_drive.py`. Le paquet `providers` expose
+`enregistrer_les_fournisseurs()`, appelée par `async_setup_destinations()` : elle importe les
+modules de fournisseurs, dont l'import suffit à les enregistrer (décision 2). L'import est
+différé *dans* la fonction, car `config_entry` importe `providers`, et un fournisseur importe
+`oauth`, qui dépend de `config_entry` : au niveau du module, ce cycle se refermerait sur un
+paquet à moitié initialisé.
+
+**Aucun SDK.** Les appels passent par `async_get_clientsession(hass)` : aucune dépendance n'est
+ajoutée au manifeste, et le cœur garde la main sur le pool de connexions. L'API Drive v3 est une
+API REST JSON ; le SDK Google, synchrone et volumineux, n'apporterait rien ici.
+
+**Ce qui est demandé à Google, et pourquoi.** Portée `https://www.googleapis.com/auth/drive.file`
+et elle seule : l'application n'accède **qu'aux fichiers qu'elle a créés**, ce qui interdit
+structurellement à la purge distante (#15) de toucher aux documents de l'utilisateur, et évite la
+procédure de vérification que Google impose aux portées étendues. S'y ajoutent
+`access_type=offline` (sans lui, aucun jeton de rafraîchissement), `prompt=consent` (Google ne
+livre ce jeton qu'au **premier** consentement d'un couple compte/application : sans cette
+demande, reconnecter un compte déjà autorisé donnerait un accès non renouvelable) et
+`include_granted_scopes=false` (l'autorisation ne doit pas hériter d'autres portées accordées au
+même projet).
+
+**Deux crochets facultatifs au flux d'ajout.** Après l'obtention du jeton, le flux cherche sur la
+fabrique du fournisseur, par `getattr`, `async_donnees_du_fournisseur(session)` et
+`async_nom_par_defaut(session)`. Google Drive les implémente en interrogeant
+`drive/v3/about` : la destination est alors proposée sous le nom du compte autorisé, et l'adresse
+de ce compte est conservée dans le nouveau champ facultatif `DestinationConfig.provider_data`.
+Ces crochets sont détectés et non déclarés dans `RemoteDestination` : un fournisseur qui ne les
+expose pas garde exactement le parcours de l'issue #7, sans le moindre appel réseau
+supplémentaire. Ils interrogent le fournisseur chacun de leur côté plutôt que de partager une
+réponse : ils restent ainsi indépendants, au prix d'un aller-retour qui n'a lieu qu'une fois,
+dans un parcours interactif.
+
+`provider_data` suit les règles du socle : facultatif, absent des options quand il n'est pas
+utilisé, validé deux fois (schéma voluptuous et dataclass), borné en nombre de clés et en
+longueur, et **masqué** par `__repr__()` comme par `as_dict(masquer=True)`. Ce ne sont pas des
+secrets — les identifiants d'application et le jeton ont leurs propres champs — mais une adresse
+de compte identifie une personne et n'a rien à faire dans un journal.
+
+**Échouer tôt plutôt que créer une destination morte.** La première requête sert aussi de test :
+si Google la refuse, l'ajout s'interrompt en citant la cause (`options.abort.echec_fournisseur`,
+dont le détail est fourni par le fournisseur, en français). Le cas le plus fréquent — l'API Drive
+non activée sur le projet Google Cloud (403 `accessNotConfigured`) — est nommé explicitement, avec
+la manipulation à faire. Rien n'est écrit dans les options : l'utilisateur corrige et relance
+l'ajout, sans redémarrage.
+
+**Contrainte assumée : une URL externe publique.** Google n'accepte que des URI de redirection
+HTTPS sur un domaine public. Une instance joignable seulement en `.local`, par adresse IP ou en
+HTTP ne peut pas connecter Google Drive — ce n'est pas un défaut du fork, et aucun contournement
+n'est possible côté intégration. La procédure complète est dans
+[`docs/destinations/google-drive.md`](../destinations/google-drive.md).
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -326,16 +383,20 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   pour que les issues suivantes n'aient qu'à les émettre sans les déclarer.
 
 - **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
-  doit être déclarée chez le fournisseur. **À traiter en #10 (Dropbox) et #13 (Google Drive)** :
-  chaque fournisseur doit livrer une procédure pas à pas claire pour cette déclaration. Google
-  Drive refuse les URI non HTTPS et non publiques (`.local`, adresse IP nue), ce qui signifie
-  qu'une instance sans URL externe publique ne pourra pas connecter Google Drive. La doc utilisateur
-  (#19) devra expliciter ce prérequis au moment de la découverte du fournisseur.
+  doit être déclarée chez le fournisseur. **Traité en #13 pour Google Drive** :
+  [`docs/destinations/google-drive.md`](../destinations/google-drive.md) livre la procédure pas à
+  pas (projet Google Cloud, API Drive, écran de consentement, identifiants « Application Web »,
+  URI de redirection) et énonce clairement le prérequis : Google refuse les URI non HTTPS et non
+  publiques (`.local`, adresse IP nue), donc une instance sans URL externe publique ne peut pas
+  connecter Google Drive. **Reste à faire en #10** pour Dropbox, et en #19 pour la doc utilisateur
+  d'ensemble.
 
-- **Libellés de fournisseur** : le sélecteur affiche actuellement l'identifiant technique
-  (`dropbox`, `google_drive`) comme libellé utilisateur. **À remédier au plus tard en #18**
-  (interface de gestion des destinations) : il faut afficher des libellés lisibles
-  (« Dropbox », « Google Drive »).
+- **Libellés de fournisseur** : le sélecteur affichait l'identifiant technique
+  (`dropbox`, `google_drive`) comme libellé utilisateur. **Traité en #13** : un fournisseur
+  déclare son nom d'affichage par un attribut de classe `label` (« Google Drive »), que le flux
+  d'options lit par `getattr` pour le sélecteur d'ajout comme pour les listes de ré-autorisation
+  et de suppression. L'attribut est facultatif : un fournisseur qui ne le déclare pas — ou qui a
+  été retiré du registre — reste affiché sous son identifiant.
 
 - **Stabilité des références lors du rafraîchissement du jeton** : un rafraîchissement de jeton
   réécrit les options de l'entrée et recrée les instances de destination du gestionnaire, ce qui
@@ -386,3 +447,14 @@ Ajouts de l'issue #7 :
 - `#8` (téléversement) et `#9` (purge distante) devront consulter
   `DestinationManager.reauthentification_requise()` avant d'appeler une destination : une
   destination en attente de ré-autorisation échouerait de toute façon.
+
+Ajouts de l'issue #13 :
+
+- Les fournisseurs concrets vivent dans `destinations/providers/` et sont chargés par
+  `enregistrer_les_fournisseurs()` au démarrage de l'entrée : le registre n'est donc plus vide en
+  fonctionnement, et le flux d'ajout propose « Google Drive » sans rien installer de plus.
+- `DestinationConfig` porte `provider_data`, facultatif, borné et masqué dans les journaux.
+- Le flux d'ajout interroge le fournisseur juste après l'obtention du jeton, ce qui nomme la
+  destination d'après le compte autorisé et fait échouer tôt une configuration inexploitable.
+- `#14` (téléversement Google Drive) et `#15` (listage et suppression) n'auront que trois
+  méthodes à écrire : le reste du fournisseur est en place.
