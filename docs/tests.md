@@ -39,7 +39,10 @@ Les tests sont ignorés si l'authentification échoue ou si `gh` n'est pas dispo
 | `tests/test_config_flow.py` | Flux de configuration « user » et flux d'options. |
 | `tests/test_init.py` | Cycle de vie de l'entrée de configuration et services du domaine. |
 | `tests/test_entities.py` | Entités créées et rattachement au device de service. |
-| `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste ; comparaison réseau). |
+| `tests/test_destinations.py` | Socle des destinations distantes : contrat, types, erreurs, registre, gestionnaire. |
+| `tests/test_destinations_persistance.py` | Persistance des destinations dans l'entrée et rechargement après redémarrage. |
+| `tests/destinations_factices.py` | Fournisseur de destination factice, en mémoire (aide, pas un module de tests). |
+| `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
 | `tests/test_project_tooling.py` | Cohérence de l'outillage Python déclaré dans `pyproject.toml`. |
 | `tests/test_configuration_pytest.py` | Garde-fous sur la configuration `pytest` elle-même. |
@@ -54,6 +57,7 @@ Toutes sont définies dans `tests/conftest.py`.
 | `integration_backup` | Charge l'intégration `backup` du cœur, prérequis d'`auto_backup` hors Supervisor. |
 | `entree_auto_backup` | Initialise l'intégration depuis une `MockConfigEntry` et renvoie l'entrée créée. |
 | `gestionnaire_auto_backup` | Renvoie l'objet `AutoBackup` stocké dans `hass.data`. |
+| `fournisseur_factice` | Enregistre le fournisseur de destination factice dans le registre le temps du test, puis le retire. |
 
 Écrire un test qui démarre l'intégration tient alors en une ligne :
 
@@ -82,20 +86,48 @@ Quand des entités sont ajoutées ou supprimées à l'intégration, cette liste 
 en conséquence, sinon les tests échoueront. Il en est de même pour l'ordre ou l'identifiant
 unique (`unique_id`) de chaque entité.
 
+## Tester une destination distante
+
+Les destinations cloud n'ont pas de fournisseur livré tant que Dropbox (#10) et Google Drive
+(#13) ne sont pas implémentés. Les tests s'appuient donc sur le fournisseur factice de
+[`tests/destinations_factices.py`](../tests/destinations_factices.py), entièrement en mémoire :
+aucun fichier n'est lu, aucun appel réseau n'est fait.
+
+```python
+async def test_mon_comportement(hass, fournisseur_factice):
+    destination = DestinationEnMemoire(
+        hass, DestinationConfig.from_dict(config_factice())
+    )
+    destination.erreur_a_lever = DestinationQuotaError("quota dépassé")
+
+    with pytest.raises(DestinationQuotaError):
+        await destination.async_upload("/backup/ha.tar", name="ha")
+```
+
+La fixture `fournisseur_factice` enregistre le fournisseur dans le registre global du processus
+puis l'en retire : tout test qui enregistre un fournisseur doit faire de même, sous peine de
+polluer les tests suivants.
+
 ## Modifier l'intégration importée
 
 Le répertoire `custom_components/auto_backup/` contient le code importé de l'upstream
-(voir [`docs/UPSTREAM.md`](UPSTREAM.md)). **Aucune modification fonctionnelle de ce code ne doit
-être faite**, sauf lors d'une resynchronisation intentionnelle avec l'upstream. Les tests
-valident d'ailleurs cette identité (voir la section « Tests réseau » et
-[`tests/test_conformite_upstream.py`](../tests/test_conformite_upstream.py)).
+(voir [`docs/UPSTREAM.md`](UPSTREAM.md)). **Aucune ligne de ce code ne doit être supprimée ni
+modifiée**, sauf lors d'une resynchronisation intentionnelle avec l'upstream. Les tests valident
+cette règle (voir la section « Tests réseau » et
+[`tests/test_conformite_upstream.py`](../tests/test_conformite_upstream.py)) : les modules
+upstream que le fork complète sont comparés à la révision importée, et le test échoue si une
+ligne y a disparu ou changé.
 
-Si des extensions ou ajouts fonctionnels sont nécessaires, créer un module ou sous-répertoire
-dédié en dehors de `custom_components/auto_backup/`, et mettre à jour [`docs/UPSTREAM.md`](UPSTREAM.md)
-pour documenter ces écarts intentionnels.
+Le code propre au fork se range dans un sous-paquet dédié de l'intégration — aujourd'hui
+`custom_components/auto_backup/destinations/` — et non dans les modules upstream ni hors de
+l'intégration : Home Assistant ne charge que ce qui vit sous `custom_components/auto_backup/`.
+Ce code est soumis à l'intégralité des règles de lint et au formatage automatique. Tout nouvel
+écart doit être ajouté à [`docs/UPSTREAM.md`](UPSTREAM.md) **et** aux listes de
+`tests/test_conformite_upstream.py`.
 
 ## Périmètre
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
-entités). Les destinations cloud (Dropbox, Google Drive) sont testées par leurs issues
-respectives, et l'exécution en intégration continue est traitée séparément.
+entités) et le socle des destinations distantes (contrat, registre, persistance). Les
+fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives,
+et l'exécution en intégration continue est traitée séparément.

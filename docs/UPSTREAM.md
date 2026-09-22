@@ -19,8 +19,7 @@ Lien direct vers la révision :
 
 ## Écarts volontaires par rapport à l'upstream
 
-Aucune modification fonctionnelle du code upstream n'a été faite lors de l'import. Les seuls
-écarts sont des éléments d'identité du fork :
+### Identité du fork
 
 - `custom_components/auto_backup/manifest.json` : `documentation`, `issue_tracker` et
   `codeowners` pointent vers ce dépôt (`ldb2000/auto-backup-extension`, `@ldb2000`).
@@ -30,8 +29,51 @@ Aucune modification fonctionnelle du code upstream n'a été faite lors de l'imp
 - `LICENSE` : licence MIT d'origine, copyright de l'auteur upstream conservé et complété par
   celui du fork.
 
-Toute divergence fonctionnelle ultérieure (destinations Dropbox et Google Drive notamment)
-doit être ajoutée à cette liste au fil des évolutions.
+### Extensions fonctionnelles du fork
+
+Le code propre au fork vit dans le sous-paquet `custom_components/auto_backup/destinations/`,
+absent de l'upstream : contrat commun des destinations distantes, types de données, erreurs
+typées, registre de fournisseurs et gestionnaire de destinations (issue #6). Les fournisseurs
+Dropbox et Google Drive viendront s'y greffer sans toucher au code upstream.
+
+Les modules upstream ne sont, eux, **que complétés** : aucune ligne upstream n'est supprimée ni
+modifiée, ce qui garde la resynchronisation en simple report de diff.
+
+- `custom_components/auto_backup/const.py` : ajout de l'import de type `DestinationManager` et
+  d'un bloc de constantes du fork — `DATA_DESTINATIONS`, `CONF_DESTINATIONS`,
+  `CONF_DESTINATION_ID`, `CONF_PROVIDER`, `CONF_FOLDER`, `CONF_RETENTION_DAYS`,
+  `CONF_RETENTION_COUNT`, `DEFAULT_DESTINATION_FOLDER`, `EVENT_UPLOAD_START`,
+  `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`. Aucune constante
+  upstream n'est renommée ni modifiée, et les noms d'événements suivent la convention upstream
+  `<domaine>.<événement>`.
+- `custom_components/auto_backup/__init__.py` : deux lignes ajoutées — l'import de
+  `async_setup_destinations` et son appel dans `async_setup_entry`, qui charge les destinations
+  configurées et les expose dans `hass.data[DATA_DESTINATIONS]`. Le nettoyage au déchargement
+  passe par `entry.async_on_unload()`, ce qui évite de toucher à `async_unload_entry`.
+- `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées — l'import de
+  `preserve_destinations` et son appel dans `OptionsFlowHandler.async_step_init`. Le flux
+  d'options upstream remplace l'intégralité des options par le contenu de son formulaire, qui
+  ignore les destinations : sans ce report, enregistrer les options effacerait les destinations
+  configurées.
+
+Le choix de persister les destinations dans `entry.options` plutôt qu'en sous-entrées de
+configuration est justifié dans
+[`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md).
+
+### Comment ces écarts sont contrôlés
+
+`tests/test_conformite_upstream.py` énumère les écarts et vérifie qu'ils restent bornés :
+
+- les fichiers réécrits (`manifest.json`) sortent de la comparaison ligne à ligne mais sont
+  contrôlés par leurs propres tests ;
+- les modules upstream étendus (`__init__.py`, `const.py`, `config_flow.py`) sont comparés à
+  l'upstream : le test échoue si une ligne upstream y a été supprimée ou modifiée ;
+- le reste du répertoire doit rester identique à la révision importée ;
+- aucun module du fork ne doit apparaître à la racine de `custom_components/auto_backup/` ;
+- chaque écart doit être listé dans cette page.
+
+Toute divergence fonctionnelle ultérieure doit donc être ajoutée ici **et** aux listes de
+`tests/test_conformite_upstream.py`.
 
 ## Outillage : pourquoi l'upstream n'est ni reformaté ni linté au même niveau
 
@@ -42,19 +84,26 @@ face à l'upstream et rendrait illisible chaque resynchronisation (étape 4 de l
 ci-dessous, qui compare fichier par fichier). Le choix retenu est donc de **ne pas modifier le
 code importé** et d'adapter la configuration :
 
-- `[tool.ruff.format] exclude` : `custom_components/auto_backup/**` n'est pas reformaté.
-- `[tool.ruff.lint.per-file-ignores]` : sur ce même répertoire, seules les règles de
+- `[tool.ruff.format] exclude` : les modules upstream ne sont pas reformatés.
+- `[tool.ruff.lint.per-file-ignores]` : sur ces mêmes modules, seules les règles de
   correction restent actives (`E4`, `E7`, `E9` et `F`, c'est-à-dire pyflakes : imports
   inutilisés, noms indéfinis, etc.). Les familles de style (`E501`, `W`, `I`, `UP`, `B`,
   `SIM`, `RUF`) y sont neutralisées.
 
+Les deux listes énumèrent les modules upstream **un par un**, au lieu d'un motif du type
+`custom_components/auto_backup/*.py` : dans les motifs de `ruff`, `*` traverse les séparateurs
+de chemin, et un tel motif exempterait aussi le code du fork rangé dans les sous-paquets.
+`tests/test_project_tooling.py` vérifie que ces listes correspondent exactement aux modules
+upstream livrés : ajouter un module upstream lors d'une resynchronisation oblige à compléter
+`pyproject.toml`.
+
 Conséquences à connaître :
 
 - `ruff check .` et `ruff format --check .` passent sur le code importé sans l'avoir touché.
-- Le code ajouté par le fork **dans ce répertoire** hérite de ces exemptions de style : il
-  reste couvert par pyflakes, mais pas par le formatage automatique. Si les ajouts du fork
-  deviennent volumineux, préférer un module ou un sous-répertoire dédié qui ne porte pas
-  l'exemption plutôt que d'étendre le code upstream sur place.
+- Le code du fork (`custom_components/auto_backup/destinations/` et tout futur sous-paquet)
+  est soumis à **l'intégralité** des règles et au formatage automatique : c'est du code neuf,
+  il n'a pas à hériter des exemptions de l'upstream. Un ajout du fork se range donc dans un
+  sous-paquet dédié plutôt que dans un module upstream.
 - `tests/` reste soumis à l'intégralité des règles et au formatage.
 
 ## Procédure de resynchronisation
