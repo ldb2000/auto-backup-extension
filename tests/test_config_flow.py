@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
@@ -16,6 +18,9 @@ from custom_components.auto_backup.const import (
     DOMAIN,
 )
 from custom_components.auto_backup.manager import AutoBackup
+
+# Signature de la fixture `ouvrir_les_options` (cf. `tests/conftest.py`).
+type OuvrirLesOptions = Callable[[str, str], Awaitable[dict]]
 
 
 async def test_le_flux_user_cree_l_entree_auto_backup(
@@ -76,11 +81,29 @@ async def test_le_flux_est_refuse_sans_supervisor_ni_backup(
     assert hass.config_entries.async_entries(DOMAIN) == []
 
 
-async def test_le_flux_d_options_propose_les_valeurs_par_defaut(
+async def test_le_flux_d_options_ouvre_sur_le_menu_des_destinations(
     hass: HomeAssistant, entree_auto_backup: MockConfigEntry
 ) -> None:
-    """Le flux d'options affiche le formulaire `init` de l'entrée existante."""
+    """Le flux d'options s'ouvre sur un menu (issue #7).
+
+    Sans destination configurée, seules l'addition d'une destination et les
+    réglages upstream sont proposées : ré-autoriser ou supprimer n'aurait
+    aucun sens.
+    """
     resultat = await hass.config_entries.options.async_init(entree_auto_backup.entry_id)
+
+    assert resultat["type"] is FlowResultType.MENU
+    assert resultat["step_id"] == "menu"
+    assert list(resultat["menu_options"]) == ["ajouter_destination", "init"]
+
+
+async def test_le_flux_d_options_propose_les_valeurs_par_defaut(
+    hass: HomeAssistant,
+    entree_auto_backup: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Le formulaire upstream `init` reste accessible depuis le menu."""
+    resultat = await ouvrir_les_options(entree_auto_backup.entry_id, "init")
 
     assert resultat["type"] is FlowResultType.FORM
     assert resultat["step_id"] == "init"
@@ -94,6 +117,7 @@ async def test_le_flux_d_options_persiste_et_applique_les_valeurs(
     hass: HomeAssistant,
     entree_auto_backup: MockConfigEntry,
     gestionnaire_auto_backup: AutoBackup,
+    ouvrir_les_options: OuvrirLesOptions,
     auto_purge: bool,
     backup_timeout: int,
 ) -> None:
@@ -102,7 +126,7 @@ async def test_le_flux_d_options_persiste_et_applique_les_valeurs(
     assert gestionnaire_auto_backup._auto_purge is True
     assert gestionnaire_auto_backup._backup_timeout == DEFAULT_BACKUP_TIMEOUT * 60
 
-    resultat = await hass.config_entries.options.async_init(entree_auto_backup.entry_id)
+    resultat = await ouvrir_les_options(entree_auto_backup.entry_id, "init")
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"],
         user_input={

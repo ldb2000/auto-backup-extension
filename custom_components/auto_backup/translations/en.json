@@ -1,4 +1,10 @@
 {
+    "issues": {
+        "reauthentification_requise": {
+            "title": "Auto Backup: destination “{nom}” must be re-authorised",
+            "description": "Provider “{fournisseur}” refused to renew access for destination “{nom}”: the authorisation expired or was revoked. Other destinations keep working.\n\nTo restore it, open the Auto Backup integration options, choose “Re-authorise a destination” and select “{nom}”."
+        }
+    },
     "title": "Auto Backup",
     "config": {
         "step": {
@@ -13,8 +19,86 @@
         }
     },
     "options": {
+        "abort": {
+            "aucun_fournisseur": "No remote destination provider is available in this version of the integration.",
+            "aucune_destination": "No remote destination is configured.",
+            "aucune_destination_oauth": "No configured destination uses an authorisation that can be renewed.",
+            "destination_inconnue": "This destination no longer exists: it was removed in the meantime.",
+            "url_indisponible": "Home Assistant has no external URL configured: the provider could not send you back here. Set the external URL in Settings > System > Network, then try again.",
+            "vue_indisponible": "The Home Assistant HTTP server is unavailable: the authorisation callback could not be received.",
+            "delai_url_autorisation": "The authorisation URL could not be prepared in time.",
+            "delai_jeton": "The provider did not return a token in time.",
+            "echec_jeton": "Could not obtain a token from the provider. Check your connection and try again.",
+            "autorisation_non_accordee": "The provider rejected the authorisation code. Check your application's client ID and secret, and the redirect URL it declares.",
+            "autorisation_refusee": "Authorisation refused by the provider: {erreur}.",
+            "jeton_invalide": "The provider returned an unusable token: the destination was not created.",
+            "fournisseur_invalide": "The chosen provider is no longer available or does not support the requested authorisation.",
+            "configuration_invalide": "The destination configuration could not be saved."
+        },
+        "error": {
+            "identifiants_invalides": "Enter your application's client ID and secret.",
+            "nom_invalide": "The destination name cannot be empty.",
+            "nom_deja_utilise": "A destination already uses this name.",
+            "dossier_invalide": "The folder must be a relative path made of letters, digits, spaces and “- _ . ( )”, with levels separated by “/” — for example “Backups/Home Assistant”.",
+            "destination_invalide": "The destination could not be created with these values.",
+            "aucune_selection": "Select at least one destination."
+        },
         "step": {
+            "menu": {
+                "title": "Auto Backup",
+                "description": "What would you like to configure?",
+                "menu_options": {
+                    "ajouter_destination": "Add a destination",
+                    "reautoriser_destination": "Re-authorise a destination",
+                    "supprimer_destination": "Remove a destination",
+                    "init": "Backup settings"
+                }
+            },
+            "ajouter_destination": {
+                "title": "Add a destination",
+                "description": "Choose where a copy of your backups should be sent.",
+                "data": {
+                    "provider": "Provider"
+                }
+            },
+            "identifiants": {
+                "title": "Your application credentials",
+                "description": "Create an application with “{fournisseur}”, then declare this redirect URL in it:\n\n`{url_de_retour}`\n\nThen enter that application's client ID and secret below. They stay in your Home Assistant instance and are never logged.",
+                "data": {
+                    "client_id": "Client ID",
+                    "client_secret": "Client secret"
+                }
+            },
+            "autorisation": {
+                "title": "Authorisation",
+                "description": "Authorise Auto Backup in the window that just opened, then come back here."
+            },
+            "destination": {
+                "title": "New destination",
+                "description": "Provider “{fournisseur}”. Name this destination, choose the remote folder backups are uploaded to and, optionally, a retention of its own.",
+                "data": {
+                    "name": "Destination name",
+                    "folder": "Remote folder",
+                    "retention_days": "Keep for (days)",
+                    "retention_count": "Maximum number of backups kept"
+                }
+            },
+            "reautoriser_destination": {
+                "title": "Re-authorise a destination",
+                "description": "Choose the destination whose access must be renewed. Other destinations are left untouched.",
+                "data": {
+                    "destination_id": "Destination"
+                }
+            },
+            "supprimer_destination": {
+                "title": "Remove a destination",
+                "description": "The configuration and authorisation of the chosen destinations will be erased. Backups already uploaded to the provider are not deleted.",
+                "data": {
+                    "destinations": "Destinations to remove"
+                }
+            },
             "init": {
+                "title": "Backup settings",
                 "data": {
                     "auto_purge": "Automatically delete expired backups",
                     "backup_timeout": "Backup Timeout (minutes)"
