@@ -81,16 +81,22 @@ pour lire les métadonnées du dépôt (description, sujets, licence, arborescen
 | `home-assistant/actions/hassfest` | SHA `58bff37c8947f690ace498be413a9b78d6f30f93` | Le dépôt n'a qu'un tag `1.0.0` (avril 2020), antérieur à la réécriture de l'action et inutilisable. Le SHA épinglé correspond à `master` au 2026-09-10, c'est-à-dire à l'usage recommandé `@master` mais figé. |
 | `hacs/action` | `22.5.0` | Dernier tag publié (mai 2022). |
 
-Deux limites à connaître, inhérentes à ces actions :
+Trois limites à connaître, inhérentes à ces actions :
 
 - `hacs/action` est une action Docker dont le `action.yml` référence l'image
   `ghcr.io/hacs/action:main`, y compris sur les tags : épingler `22.5.0` fige le contrat de
   l'action, pas le code de validation, qui suit toujours `main` côté HACS ;
 - `home-assistant/actions/hassfest` exécute l'image `ghcr.io/home-assistant/hassfest` (tag
-  flottant) : hassfest suit donc la dernière version de Home Assistant.
+  flottant) : hassfest suit donc la dernière version de Home Assistant ;
+- `hacs/action` lit `hacs.json` et `manifest.json` en brut via `raw.githubusercontent.com`,
+  sans authentification : sur un dépôt privé, ces deux requêtes renvoient 404 et les contrôles
+  `hacsjson` et `integration_manifest` échouent (« Got None »). Le dépôt doit donc être public
+  pour que ces contrôles passent (voir
+  [Prérequis côté dépôt GitHub](#prérequis-côté-dépôt-github)).
 
-Autrement dit, la conformité HA/HACS peut évoluer sans changement dans ce dépôt — c'est le
-comportement voulu, le but étant de rester conforme aux règles en vigueur.
+Pour les deux premières, la conformité HA/HACS peut évoluer sans changement dans ce dépôt —
+c'est le comportement voulu, le but étant de rester conforme aux règles en vigueur. La
+troisième ne dépend pas du code mais de la visibilité du dépôt.
 
 ### Choix de configuration
 
@@ -102,17 +108,30 @@ comportement voulu, le but étant de rester conforme aux règles en vigueur.
 ### Prérequis côté dépôt GitHub
 
 La validation HACS ne porte pas que sur les fichiers : elle contrôle aussi les métadonnées du
-dépôt. Deux d'entre elles ont dû être renseignées pour que le job `validate` passe (aucune ne
-concerne le code) :
+dépôt, et certains contrôles supposent que celui-ci soit lisible publiquement. Trois prérequis
+côté dépôt, dont aucun ne concerne le code :
 
-- **description du dépôt** (contrôle `description`) ;
-- **sujets / topics** (contrôle `topics`) : `home-assistant`, `hacs`, `custom-component`,
-  `backup`, `dropbox`, `google-drive`.
+- **description du dépôt**, pour satisfaire le contrôle `description` de HACS ;
+- **sujets / topics**, pour satisfaire le contrôle `topics` de HACS : `home-assistant`, `hacs`,
+  `custom-component`, `backup`, `dropbox`, `google-drive` ;
+- **dépôt public**, pour satisfaire les contrôles `hacsjson` et `integration_manifest` :
+  `hacs/action` ne lit pas ces deux fichiers via l'API GitHub authentifiée, elle les télécharge
+  en brut sur `raw.githubusercontent.com` **sans authentification**. Tant que le dépôt est
+  privé, ces requêtes renvoient 404 et les deux contrôles échouent (« Got None »). C'est un
+  prérequis côté dépôt au même titre que la description et les sujets, pas un défaut du code
+  ni du workflow.
 
-Les autres contrôles HACS passent sans aménagement : `license` (MIT détectée par GitHub),
-`archived`, `information` (`README.md`), `hacsjson` (l'absence de `zip_release` est valide, cf.
-[`UPSTREAM.md`](UPSTREAM.md)), `integration_manifest` et `brands` (le domaine `auto_backup` est
-déjà déclaré dans [home-assistant/brands](https://github.com/home-assistant/brands)).
+Les autres contrôles passent sans aménagement, y compris sur un dépôt privé : `license` (MIT
+détectée par GitHub), `archived`, `issues`, `information` (`README.md`) et `brands` (le domaine
+`auto_backup` est déjà déclaré dans
+[home-assistant/brands](https://github.com/home-assistant/brands)). Le contenu de `hacs.json`
+est lui aussi valide tel quel (l'absence de `zip_release` est correcte, cf.
+[`UPSTREAM.md`](UPSTREAM.md)) : seul son accès en lecture anonyme manque tant que le dépôt
+reste privé.
+
+La protection de la branche `main` (CI obligatoire avant merge) relève du même prérequis de
+visibilité : sur un dépôt **privé**, les règles de protection de branche ne sont disponibles
+qu'avec un abonnement GitHub Pro ; sur un dépôt **public**, elles le sont sans abonnement.
 
 Aucun fichier de `custom_components/auto_backup/` n'a été modifié pour satisfaire `hassfest` ou
 HACS : le code upstream importé passe les deux validations tel quel.
