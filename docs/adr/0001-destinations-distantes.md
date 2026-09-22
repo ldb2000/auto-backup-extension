@@ -143,9 +143,44 @@ règle, afin que les deux chemins de validation ne puissent pas diverger :
 | segment vide | `a//b`, `a/b/` |
 | espace en tête ou en fin de segment | `" Sauvegardes"`, `a/ b` |
 | caractère de contrôle ou non imprimable | `Sauvegardes\n`, `Sauvegardes\x00HA` |
+| caractère hors liste blanche | `a\u200bb` (U+200B), `Sauvegardes*`, `a:b`, `a?b` |
+| longueur excessive | plus de 255 caractères au total, plus de 100 par segment |
 
 Restent acceptés `Sauvegardes`, `Sauvegardes/HA`, les accents et la valeur par défaut
 `Home Assistant` : seul `/` sépare les segments, et la valeur renvoyée est le chemin normalisé.
+
+### Normalisation NFKC avant toute vérification
+
+Refuser `..` et `/` ne suffit pas : Unicode offre plusieurs écritures du même caractère, et c'est
+la forme **normalisée** qu'un fournisseur ou un système de fichiers finira par interpréter. Un
+premier audit de sécurité laissait ainsi passer `"．．"` (U+FF0E deux fois), `"a／..／b"` (U+FF0F)
+et `"a/‥"` (U+2025, point de suspension double), dont les formes NFKC valent respectivement `..`,
+`a/../b` et `a/..` — c'est-à-dire exactement les traversées que la validation prétendait refuser.
+
+`chemin_de_dossier()` normalise donc la valeur en **NFKC en tout premier**, puis applique
+l'intégralité des règles à la chaîne normalisée, et **renvoie cette chaîne normalisée** : ce qui
+est validé est exactement ce qui sera écrit dans les options puis transmis au fournisseur. Valider
+la forme d'origine et renvoyer autre chose rouvrirait la faille à l'identique.
+
+### Liste blanche de caractères et bornes de longueur
+
+La normalisation seule reste une défense au coup par coup : d'autres confusables existent, et les
+caractères invisibles (`Cf`, espaces exotiques) ne se ramènent pas tous à `..` ou à `/`. Le jeu de
+caractères est donc une **liste blanche**, pas une liste noire :
+
+- alphanumérique Unicode (`str.isalnum()`), pour que `Sauvegardes/Été` ou un nom non latin
+  restent valides — refuser tout ce qui n'est pas ASCII serait hostile aux utilisateurs
+  francophones, qui sont le public de ce fork ;
+- l'espace ordinaire U+0020, et lui seul, à l'intérieur d'un segment (`Home Assistant`) ;
+- la ponctuation sûre `-`, `_`, `.`, `(`, `)`.
+
+Tout le reste est refusé, notamment les catégories Unicode `Cc`, `Cf`, `Zl`, `Zp` et `Zs` (autres
+que U+0020), ainsi que `Po`, `Ps`, `Pe`, `Sm` et `So` hors liste blanche : ni `:` ni `*` ni `?`,
+dont l'interprétation varie d'un fournisseur et d'un système de fichiers à l'autre.
+
+Enfin le chemin est borné à **255 caractères au total et 100 par segment**. Dropbox et Google
+Drive acceptent plus large ; la borne conservatrice évite qu'une valeur démesurée, saisie par
+erreur ou par abus, ne se propage dans chaque requête et dans les options persistées.
 
 La règle vit dans le socle et non chez chaque fournisseur : un fournisseur ajouté plus tard hérite
 de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relatif déjà assaini.

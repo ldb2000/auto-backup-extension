@@ -32,3 +32,8 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
 - `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6
 - Les exemptions `ruff` de l'upstream sont énumérées module par module dans `pyproject.toml` : le code du fork (`destinations/`) est soumis à toutes les règles et au formatage. Refs #6
+
+### Sécurité
+
+- Le dossier distant (`folder`) d'une destination est validé comme chemin relatif POSIX par `chemin_de_dossier()`, appelé par le schéma voluptuous comme par `DestinationConfig` : traversée (`..`), chemin absolu, lettre de lecteur, séparateur Windows, segment vide, espace de bordure et caractère de contrôle sont refusés avant d'atteindre un fournisseur. Refs #6
+- Le dossier distant est normalisé en NFKC **avant** toute vérification, ce qui referme le contournement par confusables Unicode (U+FF0E, U+FF0F, U+2025 valant `..` ou `/` une fois normalisés) ; les caractères admis sont une liste blanche (alphanumérique Unicode, espace ordinaire, `-`, `_`, `.`, `(`, `)`) et le chemin est borné à 255 caractères au total et 100 par segment. Refs #6

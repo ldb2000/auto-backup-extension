@@ -111,8 +111,16 @@ polluer les tests suivants.
 Le champ `folder` d'une destination est un **chemin relatif POSIX** : `tests/test_destinations.py`
 éprouve, pour le schéma voluptuous comme pour `DestinationConfig` (par `from_dict()` et par
 construction directe), les valeurs refusées — traversée `..`, chemin absolu, séparateur Windows,
-segment vide, espace de bordure, caractère de contrôle — et les valeurs acceptées ; la règle est
-justifiée dans [l'ADR des destinations distantes](adr/0001-destinations-distantes.md).
+segment vide, espace de bordure, caractère de contrôle, confusable Unicode dont la forme NFKC est
+une traversée (`\uff0e\uff0e`, `a\uff0f..\uff0fb`, `a/\u2025`), caractère hors liste blanche et
+longueur excessive — et les valeurs acceptées. Ces dernières sont écrites sous la forme
+`(entrée, valeur attendue)` : la validation normalise en NFKC, la sortie doit donc être comparée
+à la forme normalisée (`"Sauvegardes/\uff28"` vaut `"Sauvegardes/H"`) et non à l'entrée brute. La
+règle est justifiée dans [l'ADR des destinations distantes](adr/0001-destinations-distantes.md).
+
+Les cas Unicode sont écrits en séquences d'échappement (`\uff0e`) et non avec le caractère
+littéral : `ruff` refuse les caractères ambigus dans le code (RUF001/RUF002), et un confusable
+copié tel quel serait de toute façon illisible en revue.
 
 ## Modifier l'intégration importée
 
