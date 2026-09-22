@@ -5,8 +5,9 @@
 - **Issues** : [#6](https://github.com/ldb2000/auto-backup-extension/issues/6) (socle),
   [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et
   interface), [#10](https://github.com/ldb2000/auto-backup-extension/issues/10) (fournisseur
-  Dropbox) et [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement
-  après création) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+  Dropbox), [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement
+  après création) et [#13](https://github.com/ldb2000/auto-backup-extension/issues/13)
+  (fournisseur Google Drive) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -355,18 +356,39 @@ rétrocompatibles** — un fournisseur qui ne les surcharge pas se comporte exac
 avant l'issue #10 :
 
 - `RemoteDestination.LABEL` et `provider_label()` : le sélecteur du flux d'options affiche
-  enfin un libellé lisible (« Dropbox ») au lieu de l'identifiant technique. C'est le point
-  ouvert « Libellés de fournisseur » ci-dessous, traité ici plutôt qu'en #18.
-- `async_nom_par_defaut()` et `async_donnees_du_fournisseur()` : appelés une fois le jeton
-  obtenu, sur une destination provisoire, pour pré-remplir le nom et retenir l'identifiant
-  de compte. **Leur échec n'interrompt pas l'ajout** : une autorisation que l'utilisateur
-  vient d'accorder ne doit pas être perdue parce que l'API a bafouillé ; le formulaire de
-  nommage s'ouvre alors sans proposition.
+  enfin un libellé lisible (« Dropbox ») au lieu de l'identifiant technique, et les
+  formulaires d'identifiants et de nommage le reprennent dans leur placeholder
+  `{fournisseur}`. C'est le point ouvert « Libellés de fournisseur » ci-dessous, traité ici
+  plutôt qu'en #18.
+- `async_nom_par_defaut()` et `async_donnees_du_fournisseur()` : **déclarés sur
+  `RemoteDestination`** et appelés une fois le jeton obtenu, sur **une seule** destination
+  provisoire construite par `create_destination()`. Un fournisseur qui mémorise la réponse
+  du service n'a donc qu'un aller-retour à faire pour les deux.
 
 `DestinationConfig` gagne pour cela `provider_data`, un dictionnaire de scalaires JSON
 persisté avec la destination (`{"account_id": "dbid:..."}`). Ce ne sont pas des secrets
 d'authentification, mais des identifiants de personne : ils sont masqués par `__repr__()`
 et par `as_dict(masquer=True)` au même titre que le jeton.
+
+### Échec d'un crochet : l'ajout s'interrompt
+
+Décision **révisée à la convergence des issues #10 et #13**. L'issue #10 avait d'abord
+laissé l'ajout se poursuivre — ne pas perdre une autorisation que l'utilisateur vient
+d'accorder — mais l'issue #13 a montré le revers : la cause la plus fréquente d'échec
+(l'API Drive non activée) est **permanente**, et poursuivre créait une destination qui
+échouerait à chaque sauvegarde, sans rien dire de ce qu'il fallait corriger.
+
+La règle retenue est donc d'**échouer tôt** : la première requête sert de test, et son échec
+interrompt l'ajout en citant la cause (`options.abort.echec_fournisseur`, dont le détail est
+fourni par le fournisseur, en français). Rien n'est écrit dans les options ; l'utilisateur
+corrige et relance l'ajout sans redémarrer Home Assistant. Le coût est une autorisation à
+réaccorder, ce qui prend un clic, contre une destination muette qu'il aurait fallu
+diagnostiquer.
+
+Le signalement de ré-authentification porté par la destination **provisoire** est effacé dans
+tous les cas (`finally`), échec compris : un problème Home Assistant nommant « Autorisation en
+cours » désignerait une destination qui n'existe pas, que l'utilisateur ne pourrait ni
+ré-autoriser ni supprimer.
 
 ### Erreurs Dropbox et réaction
 
@@ -580,6 +602,71 @@ attendant l'unicité des noms promise par l'issue #7.
 Sans `upload_to`, rien de tout cela ne se déclenche : la clé est absente, aucune demande n'est
 enregistrée, aucun événement n'est émis, et le déroulement est exactement celui de l'upstream.
 
+## Fournisseur Google Drive (issue #13)
+
+Second fournisseur réel, branché sur le même socle et sur les mêmes crochets que Dropbox : il
+n'ajoute aucune ligne aux modules upstream et ne touche ni au gestionnaire ni au flux
+d'options.
+
+**Où il vit.** Dans `destinations/providers/google_drive.py`, déclaré dans la table de
+`providers/fournisseurs_livres()` — une ligne par fournisseur. `enregistrer_les_fournisseurs()`
+est appelée par `async_setup_destinations()`, et l'import est différé *dans* la fonction : au
+niveau du module, le cycle `config_entry` -> `providers` -> `oauth` -> `config_entry` se
+refermerait sur un paquet à moitié initialisé.
+
+**Aucun SDK.** Même raison que pour Dropbox : les appels passent par
+`async_get_clientsession(hass)`, aucune dépendance n'est ajoutée au manifeste, et le cœur garde
+la main sur le pool de connexions. L'API Drive v3 est une API REST JSON ; le SDK Google,
+synchrone et volumineux, n'apporterait rien ici.
+
+**Ce qui est demandé à Google, et pourquoi.** Portée `https://www.googleapis.com/auth/drive.file`
+et elle seule : l'application n'accède **qu'aux fichiers qu'elle a créés**, ce qui interdit
+structurellement à la purge distante (#15) de toucher aux documents de l'utilisateur, et évite la
+procédure de vérification que Google impose aux portées étendues. S'y ajoutent
+`access_type=offline` (sans lui, aucun jeton de rafraîchissement), `prompt=consent` (Google ne
+livre ce jeton qu'au **premier** consentement d'un couple compte/application : sans cette
+demande, reconnecter un compte déjà autorisé donnerait un accès non renouvelable) et
+`include_granted_scopes=false` (l'autorisation ne doit pas hériter d'autres portées accordées au
+même projet).
+
+**Les crochets du socle, tels que #10 les a posés.** `async_nom_par_defaut()` et
+`async_donnees_du_fournisseur()` sont surchargés comme méthodes d'instance et lisent
+`drive/v3/about` **une seule fois** : le compte est mémorisé sur l'instance, donc le nom proposé
+(« Google Drive – <compte> ») et l'adresse persistée sortent du même aller-retour. L'adresse est
+conservée dans `DestinationConfig.provider_data`, champ facultatif, absent des options quand il
+n'est pas utilisé, validé deux fois (schéma voluptuous et dataclass), borné en nombre de clés
+(20) et en longueur de valeur (500 caractères), et **masqué** par `__repr__()` comme par
+`as_dict(masquer=True)` : ce n'est pas un secret — les identifiants d'application et le jeton
+ont leurs propres champs — mais une adresse de compte identifie une personne.
+
+**Ré-autorisation.** Les crochets sont rejoués et `provider_data` est rafraîchi : une
+destination ré-autorisée sur un autre compte le dit, au lieu de garder l'adresse du précédent.
+Seuls les champs d'autorisation et les données du compte changent — la destination est recopiée
+par `dataclasses.replace()`, pour que rien d'autre ne puisse être perdu en chemin.
+
+**Un 401 signale la ré-autorisation.** La session ne rafraîchit un jeton que lorsqu'il a expiré.
+Si Drive refuse un jeton qui n'a pas expiré, c'est que l'autorisation a été révoquée côté Google
+ou que le projet Cloud a changé : le fournisseur signale alors lui-même la destination à
+ré-autoriser, comme Dropbox le fait pour 401 et 403, faute de quoi elle resterait muette au lieu
+d'être réparable depuis les options. Un `403` ne le fait **pas** : API non activée ou quota
+épuisé se corrigent dans la console Google, ré-autoriser n'y changerait rien.
+
+**Erreurs Drive et réaction.**
+
+| Réponse | Erreur levée | Conséquence |
+| --- | --- | --- |
+| `401` | `DestinationAuthError` | Destination signalée à ré-autoriser, problème Home Assistant créé |
+| `403 accessNotConfigured` | `DestinationError` | L'API Drive n'est pas activée : le message nomme la manipulation à faire |
+| `403 storageQuotaExceeded`, `quotaExceeded` | `DestinationQuotaError` | Espace épuisé côté compte Google |
+| `404` | `DestinationNotFoundError` | La ressource n'existe pas (ou plus) |
+| Autre `4xx`/`5xx`, réseau, délai dépassé | `DestinationError` | Échec transitoire : l'autorisation n'est pas remise en cause |
+
+**Contrainte assumée : une URL externe publique.** Google n'accepte que des URI de redirection
+HTTPS sur un domaine public. Une instance joignable seulement en `.local`, par adresse IP ou en
+HTTP ne peut pas connecter Google Drive — ce n'est pas un défaut du fork, et aucun contournement
+n'est possible côté intégration. La procédure complète est dans
+[`docs/destinations/google-drive.md`](../destinations/google-drive.md).
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -611,27 +698,26 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   n'aient qu'à les émettre sans les déclarer.
 
 - **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
-  doit être déclarée chez le fournisseur. **Traité pour Dropbox en #10**
-  ([`docs/destinations/dropbox.md`](../destinations/dropbox.md) décrit la déclaration pas à
-  pas, le prérequis d'URL externe HTTPS et les messages d'erreur correspondants) ;
-  reste **à traiter en #13 (Google Drive)** :
-  chaque fournisseur doit livrer une procédure pas à pas claire pour cette déclaration. Google
-  Drive refuse les URI non HTTPS et non publiques (`.local`, adresse IP nue), ce qui signifie
-  qu'une instance sans URL externe publique ne pourra pas connecter Google Drive. La doc utilisateur
-  (#19) devra expliciter ce prérequis au moment de la découverte du fournisseur.
+  doit être déclarée chez le fournisseur. **Traité en #10 pour Dropbox et en #13 pour Google
+  Drive** : [`docs/destinations/dropbox.md`](../destinations/dropbox.md) et
+  [`docs/destinations/google-drive.md`](../destinations/google-drive.md) livrent chacune la
+  procédure pas à pas (création de l'application ou du projet, portées, identifiants, URI de
+  redirection) et énoncent le prérequis d'URL externe HTTPS. Google refuse en outre les URI non
+  publiques (`.local`, adresse IP nue) : une instance sans URL externe publique ne peut pas
+  connecter Google Drive. Reste la doc utilisateur d'ensemble (#19).
 
 - **Libellés de fournisseur** : le sélecteur affichait l'identifiant technique (`dropbox`,
   `google_drive`) comme libellé utilisateur. **Traité en #10** : un fournisseur déclare son
-  libellé par `RemoteDestination.LABEL`, que `provider_label()` expose et que le sélecteur
-  utilise ; un fournisseur qui n'en déclare pas reste affiché sous son identifiant. #13 n'a
-  qu'à déclarer « Google Drive ».
+  libellé par `RemoteDestination.LABEL`, que `provider_label()` expose ; le sélecteur d'ajout,
+  les listes de ré-autorisation et de suppression et les placeholders `{fournisseur}` des
+  formulaires l'utilisent. Un fournisseur qui n'en déclare pas — ou qui a été retiré du registre
+  — reste affiché sous son identifiant. #13 n'a eu qu'à déclarer « Google Drive ».
 
 - **Stabilité des références lors du rafraîchissement du jeton** : un rafraîchissement de jeton
   réécrit les options de l'entrée et recrée les instances de destination du gestionnaire, ce qui
-  invalide toute référence antérieure. **À traiter en #8** (téléversement) : conserver la référence
-  obtenue au début d'une opération (vers le gestionnaire, vers une destination), plutôt que de
-  la demander à nouveau, pour garantir que le reste de l'opération utilise les données stables
-  de son début.
+  invalide toute référence antérieure. **Traité en #8** (téléversement) : le coordinateur conserve
+  la référence de destination obtenue au début d'une opération plutôt que de la demander à
+  nouveau ; #9 (rétention distante) doit appliquer la même règle.
 
 - **Cohérence de la ré-authentification** : un problème Home Assistant (repair issue) est créé
   pour une destination en attente de ré-autorisation, mais il n'est pas réparable automatiquement.
@@ -639,23 +725,26 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   est ajoutée pour les destinations en défaut d'accès, elle ne doit pas doubler le problème
   Home Assistant — la faire disparaître en même temps que le problème, une fois la destination
   ré-autorisée ou supprimée.
+  Résidu à traiter : la ré-autorisation d'une destination doit détecter un changement de compte
+  (dans `provider_data`) sans réécrire le reste de la configuration ; le code porte
+  `provider_data=self._provider_data or config.provider_data` qu'il faudra évaluer pour s'assurer
+  que les données du fournisseur sont bien rafraîchies lors de la ré-autorisation sur un autre compte.
 
-- **Convergence des API entre fournisseurs lors de la fusion de #13 (Google Drive)** : l'issue
-  #10 (Dropbox) a ajouté plusieurs crochets facultatifs à la classe de base `RemoteDestination`
-  (`LABEL`, `async_nom_par_defaut()`, `async_donnees_du_fournisseur()`) et une fonction utilitaire
-  `provider_label()`. Une fois Google Drive (#13) fusionnée, **vérifier la stabilité** de ces
-  interfaces sur les deux implémentations et, si des divergences émergent :
-  - Consacrer une table explicite dans `destinations/providers/__init__.py` pour que le sélecteur
-    du flux d'options bascule sur un mécanisme plus robuste qu'une méthode `provider_label()`
-    importée du registre.
-  - Uniformiser le message de refus d'autorisation (`options.abort.autorisation_annulea`) et la
-    politique d'échec gracieux des crochets (actuellement : l'ajout ne s'interrompt pas si
-    `async_nom_par_defaut()` ou `async_donnees_du_fournisseur()` lèvent une exception).
+- **Convergence des API entre fournisseurs** : **traitée en #13** lors de la fusion avec #10.
+  Convention retenue : crochets déclarés comme méthodes d'instance sur `RemoteDestination`
+  (`async_nom_par_defaut()`, `async_donnees_du_fournisseur()`), libellé `LABEL` exposé par
+  `provider_label()`, table explicite `fournisseurs_livres()` dans `destinations/providers/__init__.py`,
+  motif de refus `autorisation_annulee` commun, `provider_data` borné. Politique d'échec d'un
+  crochet : l'ajout **s'interrompt** (abandon `echec_fournisseur`), voir la section « Échec d'un
+  crochet » ci-dessus.
 
 - **Plancher d'Home Assistant** : le fork annonce **2025.1.0** comme version minimale, mais
   l'absence de sous-entrées de configuration — choix retenu en #6 — a imposé de repousser des
   mécanismes robustes vers le flux d'options. Le plancher sera aligné sur **2026.3** par
   l'issue #28 pour lever cette limitation et migrer vers le modèle standard de Home Assistant.
+  **Traité en #28** : le `hacs.json` est mis à jour et le garde-fou `tests/test_compatibilite_python.py`
+  doit dériver de ce nouveau plancher, et non plus de 2025.1.0, pour que le plancher d'analyse
+  reste aligné avec la version minimale déclarée aux utilisateurs.
 
 - **Limitation d'une corrélation par nom en présence d'appels concurrents (FAQ, issue #19)** :
   deux appels **concurrents** portant le **même nom explicite** et `upload_to` ne sont pas
@@ -716,3 +805,14 @@ Ajouts de l'issue #7 :
   d'appeler une destination : une destination en attente de ré-autorisation échouerait de toute
   façon, et l'échec est signalé sans aucun appel réseau. `#9` (purge distante) devra faire de
   même.
+
+Ajouts de l'issue #13 :
+
+- Les fournisseurs concrets vivent dans `destinations/providers/` et sont chargés par
+  `enregistrer_les_fournisseurs()` au démarrage de l'entrée : le registre n'est donc plus vide en
+  fonctionnement, et le flux d'ajout propose « Google Drive » sans rien installer de plus.
+- `DestinationConfig` porte `provider_data`, facultatif, borné et masqué dans les journaux.
+- Le flux d'ajout interroge le fournisseur juste après l'obtention du jeton, ce qui nomme la
+  destination d'après le compte autorisé et fait échouer tôt une configuration inexploitable.
+- `#14` (téléversement Google Drive) et `#15` (listage et suppression) n'auront que trois
+  méthodes à écrire : le reste du fournisseur est en place.

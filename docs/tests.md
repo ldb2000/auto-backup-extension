@@ -50,10 +50,12 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
+| `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
 | `tests/test_project_tooling.py` | Cohérence de l'outillage Python déclaré dans `pyproject.toml`. |
+| `tests/test_compatibilite_python.py` | Le code livré reste analysable par le plancher Python des utilisateurs (voir « Compatibilité Python »). |
 | `tests/test_configuration_pytest.py` | Garde-fous sur la configuration `pytest` elle-même. |
 | `tests/test_ci_workflow.py` | Garde-fous sur le workflow d'intégration continue. |
 
@@ -100,10 +102,11 @@ unique (`unique_id`) de chaque entité.
 
 ## Tester une destination distante
 
-Les destinations cloud n'ont pas de fournisseur livré tant que Dropbox (#10) et Google Drive
-(#13) ne sont pas implémentés. Les tests s'appuient donc sur le fournisseur factice de
+Les tests du **socle** s'appuient sur le fournisseur factice de
 [`tests/destinations_factices.py`](../tests/destinations_factices.py), entièrement en mémoire :
-aucun fichier n'est lu, aucun appel réseau n'est fait.
+aucun fichier n'est lu, aucun appel réseau n'est fait. Ils démontrent qu'un fournisseur s'ajoute
+par le seul registre, sans rien changer au cœur de l'intégration. Un **fournisseur réel** se
+teste autrement : voir [Tester un fournisseur réel](#tester-un-fournisseur-réel-google-drive).
 
 ```python
 async def test_mon_comportement(hass, fournisseur_factice):
@@ -236,33 +239,95 @@ Cinq points méritent l'attention en écrivant un nouveau test :
 
 ## Tester un fournisseur réel
 
-Depuis l'issue #10, un fournisseur est livré : Dropbox
-([`tests/test_provider_dropbox.py`](../tests/test_provider_dropbox.py)). Il est enregistré
-automatiquement au chargement de l'entrée (`async_setup_destinations()` appelle
-`enregistrer_les_fournisseurs()`), donc **présent dans le registre dès qu'une instance de
-test démarre l'intégration** : un test qui énumère les fournisseurs doit s'y attendre, et
-un test qui veut éprouver le cas « aucun fournisseur » doit simuler un registre vide
-(`patch` sur `destinations.flow.list_providers`).
+Deux fournisseurs sont livrés : Dropbox
+([`tests/test_provider_dropbox.py`](../tests/test_provider_dropbox.py), issue #10) et Google
+Drive ([`tests/test_provider_google_drive.py`](../tests/test_provider_google_drive.py),
+issue #13). Tous deux sont enregistrés automatiquement au chargement de l'entrée
+(`async_setup_destinations()` appelle `enregistrer_les_fournisseurs()`), donc **présents dans le
+registre dès qu'une instance de test démarre l'intégration** : un test qui énumère les
+fournisseurs doit s'y attendre, et un test qui veut éprouver le cas « aucun fournisseur » doit
+simuler un registre vide (`patch` sur `destinations.flow.list_providers`).
 
-Comme pour le fournisseur factice, tout passe par `aioclient_mock` :
+Comme pour le fournisseur factice, tout passe par `aioclient_mock` — `URL_JETON` pour l'échange
+et le rafraîchissement du jeton, le point d'accès « compte » du fournisseur pour son
+identification (`users/get_current_account` chez Dropbox, `drive/v3/about` chez Google) :
 
 ```python
-async def test_la_verification_d_acces(hass, entree_dropbox, aioclient_mock):
-    aioclient_mock.post(URL_COMPTE, json=reponse_de_compte())
+async def test_la_verification_de_connexion_interroge_drive(
+    hass, entree_google, aioclient_mock
+):
+    aioclient_mock.get(URL_ABOUT, json=reponse_about())
 
-    await _destination(hass, entree_dropbox).async_check_connection()
+    await _destination(hass).async_check_connection()
+
+    (methode, url, _, entetes) = _appels(aioclient_mock, URL_ABOUT)[0]
+    assert url.query["fields"] == "user"
+    assert entetes["Authorization"] == "Bearer acces-google-factice-1"
 ```
 
-Les règles du fournisseur factice s'appliquent telles quelles — aucune valeur réelle,
-instance joignable, options upstream complétées — et deux s'y ajoutent :
+Les règles du fournisseur factice s'appliquent telles quelles — aucune valeur réelle, instance
+joignable, options upstream complétées — et trois s'y ajoutent :
 
 - **Le compte est une donnée personnelle.** L'identifiant de compte (`account_id`), le nom
   affiché et l'adresse de courriel figurent dans la liste des valeurs qu'un test vérifie
-  absentes des journaux en niveau `debug`, au même titre que les jetons.
-- **Les codes d'erreur HTTP sont testés un par un** : `401` et `403` doivent lever
-  `DestinationAuthError` *et* créer le problème de ré-autorisation ; `429` et `5xx` doivent
-  lever `DestinationError` *sans* le créer. Confondre les deux ferait clignoter une demande
-  de ré-autorisation à chaque incident passager chez le fournisseur.
+  absentes des journaux en niveau `debug`, au même titre que les jetons. Le compte de test vit
+  dans le domaine réservé `.test` (`camille.martin@exemple.test`).
+- **Les codes d'erreur HTTP sont testés un par un** : ceux qui n'ont d'issue qu'une nouvelle
+  autorisation (`401` chez Google, `401` et `403` chez Dropbox) doivent lever
+  `DestinationAuthError` *et* créer le problème de ré-autorisation ; les échecs passagers ou
+  corrigeables ailleurs (`403 accessNotConfigured` chez Google, `429` et `5xx`) doivent lever
+  une `DestinationError` *sans* le créer. Confondre les deux ferait clignoter une demande de
+  ré-autorisation à chaque incident passager chez le fournisseur. Un échec de l'API se simule
+  par son corps d'erreur habituel :
+
+  ```python
+  aioclient_mock.get(
+      URL_ABOUT, status=403, json=erreur_google(403, "accessNotConfigured")
+  )
+  ```
+
+- **Les crochets du flux d'ajout sont joués sur une seule destination provisoire** : un test du
+  parcours complet vérifie qu'un **unique** appel au point « compte » sert le nom proposé et les
+  données persistées, et qu'un échec de ce crochet **interrompt** l'ajout (abandon
+  `echec_fournisseur`) sans laisser de problème de ré-authentification orphelin.
+
+## Compatibilité Python
+
+Le dépôt se développe et se teste sur l'interpréteur exigé par la dernière version de Home
+Assistant (`requires-python` dans `pyproject.toml`, aujourd'hui **3.14**). L'intégration est en
+revanche **installée** chez des utilisateurs dont le plancher annoncé est celui de `hacs.json` :
+**Home Assistant 2025.1, qui tourne sous Python 3.12**.
+
+**Règle : tout ce qui vit sous `custom_components/auto_backup/` doit rester analysable par
+Python 3.12.** Une syntaxe plus récente ne casse rien en développement, mais lève une
+`SyntaxError` au chargement de l'intégration chez ces utilisateurs, avant l'exécution de la
+moindre ligne de logique. La règle ne s'applique qu'au code livré : `tests/` et les scripts du
+dépôt ne tournent que sur l'interpréteur de développement.
+
+Le piège rencontré sur l'issue #13 est la PEP 758 : `except A, B:` sans parenthèses, valide à
+partir de Python 3.14 seulement. On écrit donc :
+
+```python
+except (ClientError, ValueError, UnicodeDecodeError) as err:
+    ...
+```
+
+Les parenthèses sont **obligatoires**, et le `as err` doit être réellement utilisé (ici un
+journal `debug`) : la cible de `ruff format` est l'interpréteur de développement
+(`target-version = "py314"` dans `pyproject.toml`), et le formateur retirerait des parenthèses
+qu'il juge superflues sur une clause sans `as`.
+
+Le garde-fou est [`tests/test_compatibilite_python.py`](../tests/test_compatibilite_python.py) :
+il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 12))` et
+échoue en nommant le fichier, la ligne et la construction fautive. Deux tests l'accompagnent :
+l'un vérifie que le garde-fou refuse bien un extrait écrit en PEP 758 (sans quoi il pourrait
+passer à côté de ce qu'il surveille), l'autre relie le plancher testé à `hacs.json` — monter la
+version minimale de Home Assistant annoncée oblige à revoir `PLANCHER_UTILISATEUR` et cette
+section plutôt qu'à les laisser diverger en silence.
+
+Limite assumée : `feature_version` est donnée pour « best effort » par CPython et ne couvre pas
+l'intégralité des évolutions de syntaxe. Ce garde-fou ne remplace pas une exécution réelle sur
+le plancher, mais il est instantané et bloque la régression la plus probable.
 
 ## Modifier l'intégration importée
 
@@ -288,7 +353,9 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
 entités), le socle des destinations distantes (contrat, registre, persistance), leur
-autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression) et le
-téléversement après création (lecture en flux, événements, échecs, délai maximum). Les
-fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
+autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression), le
+téléversement après création (lecture en flux, événements, échecs, délai maximum) et la
+connexion d'un compte Google Drive (issue #13). Le téléversement vers Google Drive (#14) et la
+purge distante (#15) sont testés par leurs issues respectives, comme le fournisseur Dropbox
+(#10 à #12).
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

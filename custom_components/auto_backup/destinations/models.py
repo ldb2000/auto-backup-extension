@@ -27,9 +27,9 @@ from ..const import (
 from .errors import DestinationConfigError
 from .schema import (
     DESTINATION_SCHEMA,
-    PROVIDER_DATA_SCHEMA,
     TOKEN_SCHEMA,
     chemin_de_dossier,
+    donnees_de_fournisseur,
 )
 
 # Remplace toute valeur secrète dans une représentation journalisable. La valeur
@@ -110,7 +110,11 @@ def _valide_donnees_du_fournisseur(valeur: Any) -> dict[str, Any] | None:
     """Valide les données de compte renvoyées par le fournisseur, ou `None`.
 
     Un dictionnaire vide vaut `None` : un fournisseur qui ne décrit pas le compte
-    autorisé ne doit pas faire apparaître une clé creuse dans les options.
+    autorisé ne doit pas faire apparaître une clé creuse dans les options. Comme
+    pour le jeton, la copie est délibérée : la configuration est immuable et ne
+    doit pas partager son dictionnaire avec les options de l'entrée. Les bornes
+    (nombre de clés, longueur des valeurs, scalaires JSON) vivent dans
+    `donnees_de_fournisseur()`, partagée avec le schéma.
     """
     if valeur is None:
         return None
@@ -121,7 +125,7 @@ def _valide_donnees_du_fournisseur(valeur: Any) -> dict[str, Any] | None:
     if not valeur:
         return None
     try:
-        return dict(PROVIDER_DATA_SCHEMA(dict(valeur)))
+        return donnees_de_fournisseur(dict(valeur))
     except (vol.Invalid, TypeError, ValueError) as err:
         raise DestinationConfigError(f"provider_data invalide : {err}") from err
 
@@ -137,8 +141,9 @@ def _cles_sans_valeurs(
     """Réduit un dictionnaire à ses clés : la structure sans aucune valeur.
 
     Savoir qu'un `refresh_token` existe aide au diagnostic ; sa valeur, jamais.
-    La même règle s'applique aux données de compte du fournisseur : un
-    `account_id` identifie une personne, il n'a pas à figurer dans un journal.
+    La même règle s'applique aux données de compte du fournisseur : elles ne
+    portent pas de secret, mais un `account_id` Dropbox comme l'adresse d'un
+    compte Google identifie une personne, il n'a pas à figurer dans un journal.
     """
     if donnees is None:
         return None
@@ -169,10 +174,13 @@ class DestinationConfig:
     quel pour bâtir un chemin distant. La règle unique vit dans
     `chemin_de_dossier()`.
 
-    `provider_data` (issue #10) décrit le compte autorisé tel que le fournisseur
-    l'a renvoyé — `{"account_id": "dbid:..."}` pour Dropbox. Ce ne sont pas des
-    secrets d'authentification, mais des identifiants de personne : ils sont
-    persistés en clair et masqués dans les journaux, comme le jeton.
+    `provider_data` (issues #10 et #13) décrit le compte autorisé tel que le
+    fournisseur l'a renvoyé — `{"account_id": "dbid:..."}` pour Dropbox,
+    `{"account_email": "..."}` pour Google Drive. Ce ne sont pas des secrets
+    d'authentification, mais des identifiants de personne : ils sont persistés
+    en clair et masqués dans les journaux, comme le jeton. Le champ est
+    facultatif et borné (cf. `donnees_de_fournisseur()`) : il n'est pas persisté
+    quand il est absent ou vide.
     """
 
     destination_id: str

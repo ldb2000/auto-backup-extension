@@ -356,6 +356,9 @@ async def test_le_parcours_complet_connecte_un_compte_dropbox(
     # Critère : le nom du compte est proposé par défaut.
     assert resultat["step_id"] == "destination"
     assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
+    # Le placeholder `{fournisseur}` de cette étape affiche aussi le libellé
+    # lisible, comme celui de l'étape « identifiants ».
+    assert resultat["description_placeholders"]["fournisseur"] == LIBELLE_DROPBOX
 
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"],
@@ -396,40 +399,53 @@ async def test_un_compte_sans_nom_affiche_propose_le_libelle(
     assert _valeur_suggeree(resultat, CONF_NAME) == LIBELLE_DROPBOX
 
 
-async def test_un_compte_injoignable_n_empeche_pas_la_creation(
+async def test_un_compte_injoignable_interrompt_l_ajout(
     hass: HomeAssistant,
     entree: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Une autorisation accordée n'est pas perdue parce que Dropbox bafouille."""
+    """Un fournisseur qui ne répond pas interrompt l'ajout, en disant pourquoi.
+
+    La convergence des issues #10 et #13 a tranché pour l'interruption : une
+    destination que Dropbox refuse déjà d'identifier ne fonctionnerait pas
+    davantage une fois créée, et l'utilisateur relance le flux d'un clic une
+    fois le service rétabli, sans hériter d'une destination muette.
+    """
     aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
     aioclient_mock.post(URL_COMPTE, status=500, text="service indisponible")
 
     resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
     resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
 
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
+    assert "500" in resultat["description_placeholders"]["detail"]
+    assert CONF_DESTINATIONS not in entree.options
+
+    # Le service rétabli, le flux repart sans redémarrer Home Assistant.
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.post(URL_COMPTE, json=reponse_de_compte())
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
+
     assert resultat["step_id"] == "destination"
-    assert _valeur_suggeree(resultat, CONF_NAME) is None
-
-    resultat = await hass.config_entries.options.async_configure(
-        resultat["flow_id"], {CONF_NAME: "Mon Dropbox", CONF_FOLDER: "Sauvegardes"}
-    )
-    await hass.async_block_till_done()
-
-    assert resultat["type"] is FlowResultType.CREATE_ENTRY
-    (persistee,) = entree.options[CONF_DESTINATIONS]
-    assert persistee[CONF_TOKEN]["access_token"] == ACCES_INITIAL
-    assert CONF_PROVIDER_DATA not in persistee
+    assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
 
 
-async def test_un_fournisseur_devenu_inutilisable_ne_bloque_pas_le_nommage(
+async def test_un_fournisseur_devenu_inutilisable_interrompt_l_ajout(
     hass: HomeAssistant,
     entree: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Un fournisseur retiré du registre pendant le parcours n'efface rien."""
+    """Un fournisseur retiré du registre pendant le parcours arrête l'ajout.
+
+    `UnknownProviderError` est une `DestinationError` : elle emprunte le même
+    chemin que les échecs réseau, plutôt que de laisser l'utilisateur nommer une
+    destination que plus personne ne sait instancier.
+    """
     aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
 
     resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
@@ -439,8 +455,10 @@ async def test_un_fournisseur_devenu_inutilisable_ne_bloque_pas_le_nommage(
     ):
         resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
 
-    assert resultat["step_id"] == "destination"
-    assert _valeur_suggeree(resultat, CONF_NAME) is None
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
+    assert "fournisseur retiré" in resultat["description_placeholders"]["detail"]
+    assert CONF_DESTINATIONS not in entree.options
 
 
 async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orphelin(
@@ -449,7 +467,13 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Une portée oubliée ne crée pas un problème nommant une destination fictive."""
+    """Une portée oubliée ne crée pas un problème nommant une destination fictive.
+
+    L'ajout s'interrompt (`echec_fournisseur`), mais le signalement porté par la
+    destination provisoire est effacé dans tous les cas — c'est le rôle du
+    `finally` du flux : un problème survivant nommerait « Autorisation en
+    cours », que l'utilisateur ne pourrait ni ré-autoriser ni supprimer.
+    """
     aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
     aioclient_mock.post(
         URL_COMPTE, status=401, json={"error_summary": "missing_scope/..."}
@@ -459,7 +483,8 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
     resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
     await hass.async_block_till_done()
 
-    assert resultat["step_id"] == "destination"
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
     registre = ir.async_get(hass)
     assert not [
         probleme
@@ -467,7 +492,12 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
         if probleme[0] == DOMAIN and IDENTIFIANT_PROVISOIRE in probleme[1]
     ]
 
-    # Et la destination reste créable : l'autorisation accordée n'est pas perdue.
+    # La portée corrigée chez Dropbox, l'ajout aboutit sans rien nettoyer à la main.
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.post(URL_COMPTE, json=reponse_de_compte())
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"], {CONF_NAME: "Mon Dropbox", CONF_FOLDER: "Sauvegardes"}
     )
@@ -500,7 +530,8 @@ async def test_un_acces_refuse_pendant_l_ajout_n_alerte_pas_sur_la_destination_f
         resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
         await hass.async_block_till_done()
 
-    assert resultat["step_id"] == "destination"
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
 
     # Le signalement de ré-authentification a bien eu lieu, mais en `debug`.
     signalements = [
@@ -523,10 +554,10 @@ async def test_un_acces_refuse_pendant_l_ajout_n_alerte_pas_sur_la_destination_f
         if enregistrement.levelno >= logging.WARNING
     ]
     # Aucun avertissement n'invite à ré-autoriser quoi que ce soit : le seul qui
-    # subsiste dit ce qui s'est réellement passé, et nomme le fournisseur.
+    # subsiste dit ce qui s'est réellement passé, et sert le message d'abandon.
     assert not [message for message in avertissements if "ré-autorisée" in message]
     assert [
-        message for message in avertissements if "n'a pas pu être identifié" in message
+        message for message in avertissements if "refusé la première requête" in message
     ]
 
 

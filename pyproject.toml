@@ -40,6 +40,14 @@ markers = [
 ]
 
 [tool.ruff]
+# `target-version` décrit l'interpréteur de **développement** (cf. `requires-python`),
+# pas celui des utilisateurs. Le plancher annoncé dans `hacs.json` (Home Assistant
+# 2025.1) tourne sous Python 3.12 : le code livré dans `custom_components/` doit
+# rester analysable par un interpréteur 3.12, sans quoi l'intégration lèverait une
+# `SyntaxError` au chargement chez ces utilisateurs. En particulier, un `except`
+# multiple garde ses parenthèses — la forme PEP 758 `except A, B:` n'existe qu'à
+# partir de 3.14. `tests/test_compatibilite_python.py` veille sur cette règle,
+# documentée dans `docs/tests.md` (section « Compatibilité Python »).
 target-version = "py314"
 line-length = 88
 # Racines d'imports du dépôt. `tests/` en fait partie : pytest l'ajoute à
