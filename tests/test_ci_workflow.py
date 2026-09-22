@@ -138,6 +138,33 @@ def test_toutes_les_actions_sont_epinglees_a_une_version() -> None:
         )
 
 
+def test_aucune_etape_n_ignore_ses_erreurs() -> None:
+    """Critère : une erreur de lint ou un test en échec doit rendre le workflow rouge.
+
+    Ni `continue-on-error`, ni un `|| true` (ou équivalent `; true` en fin de commande)
+    qui masquerait un code de sortie non nul ne doivent être présents.
+    """
+    workflow = _workflow()
+    for nom_job, job in _jobs(workflow).items():
+        assert job.get("continue-on-error") is not True, (
+            f"le job {nom_job} ignore ses erreurs (continue-on-error)"
+        )
+        for etape in job["steps"]:
+            assert etape.get("continue-on-error") is not True, (
+                f"une étape du job {nom_job} ignore ses erreurs (continue-on-error)"
+            )
+            if commande := etape.get("run"):
+                commande_normalisee = commande.strip()
+                assert not commande_normalisee.endswith("|| true"), (
+                    f"une commande du job {nom_job} masque son code de sortie : "
+                    f"{commande_normalisee!r}"
+                )
+                assert not commande_normalisee.endswith("; true"), (
+                    f"une commande du job {nom_job} masque son code de sortie : "
+                    f"{commande_normalisee!r}"
+                )
+
+
 def test_le_cache_des_dependances_python_est_actif() -> None:
     """Critère : les dépendances Python sont mises en cache."""
     jobs = _jobs(_workflow())
