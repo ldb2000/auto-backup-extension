@@ -18,14 +18,30 @@ lignes du code importé de l'upstream, ce que le fork s'interdit
 (cf. `docs/UPSTREAM.md`). L'événement upstream porte déjà le nom et le slug de
 la sauvegarde créée : il suffit de corréler.
 
-La corrélation se fait **par le nom de la sauvegarde** : quand l'appel de
-service n'en fournit pas, `async_prepare_upload()` calcule celui que l'upstream
-aurait généré (`AutoBackup.generate_backup_name()`) et le pose dans les données
-de l'appel. `validate_backup_config()` ne le remplace alors plus : le nom est
-connu des deux côtés, sans changement de comportement. Les deux événements
-upstream portent ce même nom — `backup_start` le lit dans les données de
-l'appel, `backup_successful` le reprend du résultat ou, à défaut, de ces mêmes
-données.
+La corrélation ne repose **pas** sur le seul nom de la sauvegarde, qui n'est pas
+discriminant : sur une installation Core, `generate_backup_name()` renvoie
+toujours `Core <version>`, donc toutes les sauvegardes sans nom explicite sont
+homonymes. Elle repose sur deux conditions cumulées :
+
+1. une **fenêtre d'armement** bornée par l'appel de service :
+   `async_prepare_upload()` enregistre la demande « en cours », et
+   `async_release_upload()` — appelé dans le `finally` du gestionnaire de
+   service, donc y compris quand la création lève — la désarme, en la
+   supprimant sur-le-champ si aucune création ne l'a confirmée. Une demande ne
+   survit ainsi jamais à l'appel de service qui l'a créée, et une sauvegarde
+   homonyme lancée ensuite ne peut plus la réclamer ;
+2. le **nom de la sauvegarde**, qui identifie la demande *à l'intérieur* de
+   cette fenêtre : quand l'appel de service n'en fournit pas,
+   `async_prepare_upload()` calcule celui que l'upstream aurait généré
+   (`AutoBackup.generate_backup_name()`) et le pose dans les données de
+   l'appel. `validate_backup_config()` ne le remplace alors plus : le nom est
+   connu des deux côtés, sans changement de comportement. Les trois événements
+   upstream portent ce même nom — `backup_start` et `backup_failed` le lisent
+   dans les données de l'appel, `backup_successful` le reprend du résultat ou, à
+   défaut, de ces mêmes données.
+
+`backup_failed` libère la demande confirmée d'une création qui a échoué, et
+l'expiration de `DELAI_CONFIRMATION_DEMANDE` reste comme dernier filet.
 
 Le contenu de la sauvegarde est lu **en flux** : rien n'est chargé en mémoire,
 ni copié sur le disque au passage. Les deux handlers upstream sont couverts,
@@ -48,6 +64,8 @@ from http import HTTPStatus
 from pathlib import Path
 from time import monotonic
 from typing import Any
+from urllib.parse import quote
+from uuid import uuid4
 
 import aiofiles
 import aiohttp
@@ -70,6 +88,7 @@ from ..const import (
     DATA_DESTINATIONS,
     DATA_UPLOADS,
     DEFAULT_UPLOAD_TIMEOUT,
+    EVENT_BACKUP_FAILED,
     EVENT_BACKUP_START,
     EVENT_BACKUP_SUCCESSFUL,
     EVENT_UPLOAD_FAILED,
@@ -171,7 +190,10 @@ async def _async_ouvrir_via_supervisor(
     méthode `download_backup()` écrit obligatoirement dans un fichier — ce que
     l'on veut justement éviter ici.
     """
-    commande = f"/backups/{slug}/download"
+    # Le slug vient d'un événement, donc d'une réponse du Supervisor ou du
+    # `BackupManager` : il est encodé avant d'entrer dans l'URL, pour qu'aucune
+    # valeur inattendue (« / », « ? », « .. ») ne puisse changer le chemin appelé.
+    commande = f"/backups/{quote(slug, safe='')}/download"
     url = f"http://{handler._ip}{commande}"
     try:
         reponse = await handler._session.get(
@@ -267,20 +289,31 @@ async def async_ouvrir_sauvegarde(
 class DemandeTeleversement:
     """Téléversement demandé par un appel de service, en attente de sa sauvegarde.
 
+    `identifiant` est unique : il ne sert pas à la corrélation — les événements
+    upstream ne le portent pas — mais à suivre une demande dans les journaux,
+    de son enregistrement à son téléversement ou à son abandon.
+
     `nom` est le nom de la sauvegarde attendue : c'est la clé de corrélation
-    avec les événements `auto_backup.backup_start` puis `backup_successful`.
+    avec les événements `auto_backup.backup_start`, `backup_successful` et
+    `backup_failed`. Il n'est pas discriminant à lui seul (voir l'en-tête du
+    module), d'où les deux drapeaux ci-dessous.
+
+    `en_cours` vaut `True` tant que l'appel de service qui a enregistré la
+    demande n'est pas terminé, c'est-à-dire entre `async_prepare_upload()` et
+    `async_release_upload()`. Une demande ne peut être confirmée que pendant
+    cette fenêtre : passé l'appel de service, elle est soit confirmée, soit
+    supprimée, jamais disponible pour une sauvegarde homonyme ultérieure.
 
     `confirmee` passe à `True` quand `auto_backup.backup_start` annonce une
     sauvegarde portant ce nom, c'est-à-dire quand la création a réellement
-    commencé. Seule une demande confirmée peut donner lieu à un téléversement :
-    une demande qu'aucune création n'a réclamée (configuration refusée par
-    `validate_backup_config()`, par exemple) expire sans jamais pouvoir être
-    récupérée par une sauvegarde homonyme ultérieure.
+    commencé. Seule une demande confirmée peut donner lieu à un téléversement.
     """
 
+    identifiant: str
     nom: str
     destinations: tuple[str, ...]
     expire_a: float
+    en_cours: bool = True
     confirmee: bool = False
 
 
@@ -304,6 +337,7 @@ class CoordinateurTeleversement:
         for evenement, ecouteur in (
             (EVENT_BACKUP_START, self._async_sauvegarde_demarree),
             (EVENT_BACKUP_SUCCESSFUL, self._async_sauvegarde_creee),
+            (EVENT_BACKUP_FAILED, self._async_sauvegarde_echouee),
         ):
             self._entry.async_on_unload(
                 self._hass.bus.async_listen(evenement, ecouteur)
@@ -318,19 +352,54 @@ class CoordinateurTeleversement:
     def async_enregistrer(
         self, nom: str, destinations: Sequence[str]
     ) -> DemandeTeleversement:
-        """Enregistre une demande pour la prochaine sauvegarde nommée `nom`."""
+        """Enregistre une demande armée pour la prochaine sauvegarde nommée `nom`.
+
+        La demande naît « en cours » : elle n'est confirmable que jusqu'à
+        `async_liberer()`, qui referme la fenêtre à la fin de l'appel de
+        service.
+        """
         self._purger_les_demandes_expirees()
         demande = DemandeTeleversement(
+            identifiant=uuid4().hex,
             nom=nom,
             destinations=tuple(destinations),
             expire_a=monotonic() + DELAI_CONFIRMATION_DEMANDE,
         )
         self._demandes.append(demande)
+        _LOGGER.debug(
+            "Demande de téléversement %s enregistrée pour « %s » vers : %s",
+            demande.identifiant,
+            nom,
+            ", ".join(demande.destinations),
+        )
         return demande
 
     @callback
-    def async_oublier(self, demande: DemandeTeleversement) -> None:
-        """Retire une demande restée en attente (création échouée ou refusée)."""
+    def async_liberer(self, demande: DemandeTeleversement) -> None:
+        """Referme la fenêtre d'armement d'une demande, à la fin de son service.
+
+        La demande cesse d'être confirmable. Si aucune création ne l'a
+        confirmée entre-temps (configuration refusée par
+        `validate_backup_config()`, appel interrompu), elle est oubliée
+        sur-le-champ, sans attendre son expiration : une sauvegarde homonyme
+        créée ensuite ne peut donc plus la réclamer.
+        """
+        demande.en_cours = False
+        if demande.confirmee:
+            # La création a démarré : `backup_successful` ou `backup_failed`
+            # viendra la consommer, éventuellement après cet appel de service.
+            return
+
+        self._retirer(demande)
+        _LOGGER.debug(
+            "Demande de téléversement %s abandonnée : la création de « %s » n'a "
+            "jamais démarré",
+            demande.identifiant,
+            demande.nom,
+        )
+
+    def _retirer(self, demande: DemandeTeleversement) -> None:
+        """Retire une demande de la liste, si elle s'y trouve encore."""
         for index, candidate in enumerate(self._demandes):
             if candidate is demande:
                 del self._demandes[index]
@@ -341,7 +410,10 @@ class CoordinateurTeleversement:
 
         Une demande confirmée n'expire pas : la création qu'elle accompagne a
         son propre délai (`backup_timeout`) et se terminera, en succès comme en
-        échec.
+        échec — `backup_successful` ou `backup_failed` la consomme alors.
+
+        L'expiration n'est plus qu'un filet : `async_liberer()` supprime déjà
+        toute demande non confirmée à la fin de son appel de service.
         """
         maintenant = monotonic()
         self._demandes = [
@@ -352,15 +424,45 @@ class CoordinateurTeleversement:
 
     @callback
     def _async_sauvegarde_demarree(self, event: Event) -> None:
-        """Confirme la demande correspondant à la sauvegarde qui démarre."""
+        """Confirme la demande correspondant à la sauvegarde qui démarre.
+
+        Seule une demande **en cours** est confirmable : l'événement doit
+        provenir de l'appel de service qui a enregistré la demande, pas d'une
+        sauvegarde homonyme créée plus tard.
+        """
         self._purger_les_demandes_expirees()
         nom = event.data.get(ATTR_NAME)
         if nom is None:
             return
         for demande in self._demandes:
-            if demande.nom == nom and not demande.confirmee:
+            if demande.nom == nom and demande.en_cours and not demande.confirmee:
                 demande.confirmee = True
+                _LOGGER.debug(
+                    "Demande de téléversement %s confirmée : la sauvegarde "
+                    "« %s » démarre",
+                    demande.identifiant,
+                    nom,
+                )
                 return
+
+    @callback
+    def _async_sauvegarde_echouee(self, event: Event) -> None:
+        """Libère la demande d'une création confirmée qui a fini en échec.
+
+        Sans cela, une demande confirmée resterait en attente indéfiniment —
+        l'expiration ne les purge pas — et la sauvegarde suivante portant le
+        même nom la consommerait.
+        """
+        demande = self._async_reclamer(event.data.get(ATTR_NAME))
+        if demande is None:
+            return
+        _LOGGER.debug(
+            "Demande de téléversement %s abandonnée : la création de « %s » a "
+            "échoué (%s)",
+            demande.identifiant,
+            demande.nom,
+            event.data.get(ATTR_ERROR) or "cause inconnue",
+        )
 
     @callback
     def _async_reclamer(self, nom: str | None) -> DemandeTeleversement | None:
@@ -653,6 +755,10 @@ def async_prepare_upload(
     l'intégralité de ce dictionnaire au Supervisor ou au `BackupManager`.
     Renvoie `None` quand aucune destination n'est demandée — le déroulement est
     alors exactement celui de l'upstream.
+
+    La demande renvoyée est **armée** : l'appelant doit impérativement la
+    rendre par `async_release_upload()` dans un `finally`, faute de quoi elle
+    resterait confirmable par une sauvegarde homonyme jusqu'à son expiration.
     """
     demandees = data.pop(ATTR_UPLOAD_TO, None)
     if not demandees:
@@ -687,12 +793,18 @@ def async_prepare_upload(
 def async_release_upload(
     hass: HomeAssistant, demande: DemandeTeleversement | None
 ) -> None:
-    """Oublie une demande que la création de sauvegarde n'a pas honorée."""
+    """Referme la fenêtre d'armement de la demande, à la fin de l'appel de service.
+
+    À appeler dans un `finally` : la création peut lever (configuration refusée,
+    Supervisor injoignable) et une demande jamais confirmée doit disparaître
+    avec l'appel qui l'a produite. Une demande déjà confirmée est conservée, le
+    temps que `backup_successful` ou `backup_failed` la consomme.
+    """
     if demande is None:
         return
     coordinateur = hass.data.get(DATA_UPLOADS)
     if coordinateur is not None:
-        coordinateur.async_oublier(demande)
+        coordinateur.async_liberer(demande)
 
 
 def _nom_de_sauvegarde_par_defaut(hass: HomeAssistant) -> str:

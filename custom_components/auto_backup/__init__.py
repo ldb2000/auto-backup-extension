@@ -174,10 +174,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     }
 
             # Fork (#8) : `upload_to` est validé et retiré des données avant la
-            # création ; la demande est corrélée à la sauvegarde par son nom.
+            # création ; la demande n'est corrélable à une sauvegarde que le
+            # temps de cet appel de service. Le `finally` la rend donc même
+            # quand la création lève — sans quoi elle resterait en attente et
+            # une sauvegarde homonyme ultérieure la réclamerait. Seule entorse
+            # du fork au code upstream : la ligne d'appel ci-dessous est
+            # ré-indentée, sans autre changement (cf. docs/UPSTREAM.md).
             demande_televersement = async_prepare_upload(hass, data)
-            await auto_backup.async_create_backup(data)
-            async_release_upload(hass, demande_televersement)
+            try:
+                await auto_backup.async_create_backup(data)
+            finally:
+                async_release_upload(hass, demande_televersement)
 
     for service, schema in MAP_SERVICES.items():
         hass.services.async_register(DOMAIN, service, async_service_handler, schema)
