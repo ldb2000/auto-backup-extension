@@ -49,6 +49,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
+| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
@@ -232,6 +233,36 @@ Cinq points méritent l'attention en écrivant un nouveau test :
    ```
 
    `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
+
+## Tester un fournisseur réel
+
+Depuis l'issue #10, un fournisseur est livré : Dropbox
+([`tests/test_provider_dropbox.py`](../tests/test_provider_dropbox.py)). Il est enregistré
+automatiquement au chargement de l'entrée (`async_setup_destinations()` appelle
+`enregistrer_les_fournisseurs()`), donc **présent dans le registre dès qu'une instance de
+test démarre l'intégration** : un test qui énumère les fournisseurs doit s'y attendre, et
+un test qui veut éprouver le cas « aucun fournisseur » doit simuler un registre vide
+(`patch` sur `destinations.flow.list_providers`).
+
+Comme pour le fournisseur factice, tout passe par `aioclient_mock` :
+
+```python
+async def test_la_verification_d_acces(hass, entree_dropbox, aioclient_mock):
+    aioclient_mock.post(URL_COMPTE, json=reponse_de_compte())
+
+    await _destination(hass, entree_dropbox).async_check_connection()
+```
+
+Les règles du fournisseur factice s'appliquent telles quelles — aucune valeur réelle,
+instance joignable, options upstream complétées — et deux s'y ajoutent :
+
+- **Le compte est une donnée personnelle.** L'identifiant de compte (`account_id`), le nom
+  affiché et l'adresse de courriel figurent dans la liste des valeurs qu'un test vérifie
+  absentes des journaux en niveau `debug`, au même titre que les jetons.
+- **Les codes d'erreur HTTP sont testés un par un** : `401` et `403` doivent lever
+  `DestinationAuthError` *et* créer le problème de ré-autorisation ; `429` et `5xx` doivent
+  lever `DestinationError` *sans* le créer. Confondre les deux ferait clignoter une demande
+  de ré-autorisation à chaque incident passager chez le fournisseur.
 
 ## Modifier l'intégration importée
 

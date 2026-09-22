@@ -36,8 +36,10 @@ absent de l'upstream : contrat commun des destinations distantes, types de donn�
 typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis autorisation
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
 d'interface du flux d'options (`flow.py`, issue #7), enfin l'orchestration du téléversement
-après création (`destinations/upload.py`, issue #8). Les fournisseurs Dropbox et Google Drive
-viendront s'y greffer sans toucher au code upstream.
+après création (`destinations/upload.py`, issue #8). Les fournisseurs réellement livrés vivent
+dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10 — et sont
+enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé par
+`async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
 
 `handlers.py` et `manager.py` ne sont, eux, **pas modifiés du tout** : `destinations/upload.py`
 lit une sauvegarde en flux en s'appuyant sur `isinstance(handler, SupervisorHandler |
@@ -65,13 +67,16 @@ caractère près.
   d'un bloc de constantes du fork — `DATA_DESTINATIONS`, `CONF_DESTINATIONS`,
   `CONF_DESTINATION_ID`, `CONF_PROVIDER`, `CONF_FOLDER`, `CONF_RETENTION_DAYS`,
   `CONF_RETENTION_COUNT`, `DEFAULT_DESTINATION_FOLDER`, `EVENT_UPLOAD_START`,
-  `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`. Aucune constante
-  upstream n'est renommée ni modifiée, et les noms d'événements suivent la convention upstream
-  `<domaine>.<événement>`. Le téléversement (#8) ajoute à la fin de ce même bloc l'import de
-  type `CoordinateurTeleversement`, la clé `DATA_UPLOADS`, l'option de service
-  `ATTR_UPLOAD_TO`, les champs d'événement `ATTR_DESTINATION`, `ATTR_DESTINATION_NAME`,
-  `ATTR_SIZE`, `ATTR_REMOTE_ID`, `CONF_UPLOAD_TIMEOUT` et `DEFAULT_UPLOAD_TIMEOUT`, enfin
-  `CLES_DU_FORK` — la liste des options d'entrée propres au fork, décrite plus bas.
+  `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`. Le téléversement
+  (#8) ajoute à la suite l'import de type `CoordinateurTeleversement`, la clé `DATA_UPLOADS`,
+  l'option de service `ATTR_UPLOAD_TO`, les champs d'événement `ATTR_DESTINATION`,
+  `ATTR_DESTINATION_NAME`, `ATTR_SIZE`, `ATTR_REMOTE_ID`, `CONF_UPLOAD_TIMEOUT` et
+  `DEFAULT_UPLOAD_TIMEOUT`, enfin `CLES_DU_FORK` — la liste des options d'entrée propres au
+  fork, décrite plus bas. Viennent ensuite les constantes d'autorisation OAuth2 de l'issue #7 —
+  dont `IDENTIFIANT_PROVISOIRE`, partagé par le flux d'ajout et le signalement de
+  ré-authentification — et, à la fin du bloc, `CONF_PROVIDER_DATA` (issue #10).
+  Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
+  convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
   `async_setup_destinations` et son appel dans `async_setup_entry`, qui charge les destinations
   configurées et les expose dans `hass.data[DATA_DESTINATIONS]`. Le nettoyage au déchargement
@@ -111,7 +116,8 @@ caractère près.
   étapes `menu`, `ajouter_destination`, `identifiants`, `autorisation`, `destination`,
   `reautoriser_destination`, `supprimer_destination`, plus un `title` pour l'étape `init`.
   L'issue #8 y ajoute l'étape `reglages_televersement`, son entrée de menu et l'erreur
-  `options.error.delai_invalide`.
+  `options.error.delai_invalide` ; l'issue #10 y ajoute `options.abort.autorisation_annulee`,
+  en **fin** du bloc du fork.
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,

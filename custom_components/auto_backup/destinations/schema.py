@@ -26,6 +26,7 @@ from ..const import (
     CONF_DESTINATION_ID,
     CONF_FOLDER,
     CONF_PROVIDER,
+    CONF_PROVIDER_DATA,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     DEFAULT_DESTINATION_FOLDER,
@@ -205,6 +206,15 @@ TOKEN_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+# Données non secrètes décrivant le compte autorisé, telles que le fournisseur les a
+# renvoyées (issue #10) : `{"account_id": "dbid:..."}` pour Dropbox. Les valeurs sont
+# limitées aux scalaires JSON, et les clés à du texte non vide : ces données sont
+# persistées dans l'entrée de configuration, elles ne doivent y porter ni structure
+# imbriquée ni objet non sérialisable.
+PROVIDER_DATA_SCHEMA = vol.Schema(
+    {texte_non_vide: vol.Any(None, str, bool, int, float)}
+)
+
 DESTINATION_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_DESTINATION_ID): texte_non_vide,
@@ -223,6 +233,9 @@ DESTINATION_SCHEMA = vol.Schema(
         vol.Optional(CONF_CLIENT_ID): vol.Any(None, texte_non_vide),
         vol.Optional(CONF_CLIENT_SECRET): vol.Any(None, texte_non_vide),
         vol.Optional(CONF_TOKEN): vol.Any(None, TOKEN_SCHEMA),
+        # Description du compte autorisé (issue #10), facultative et sans valeur
+        # par défaut pour la même raison que les champs ci-dessus.
+        vol.Optional(CONF_PROVIDER_DATA): vol.Any(None, PROVIDER_DATA_SCHEMA),
     }
 )
 
