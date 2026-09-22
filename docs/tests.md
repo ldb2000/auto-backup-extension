@@ -199,7 +199,7 @@ await hass.services.async_call(
 await hass.async_block_till_done(wait_background_tasks=True)
 ```
 
-Quatre points méritent l'attention en écrivant un nouveau test :
+Cinq points méritent l'attention en écrivant un nouveau test :
 
 1. **`wait_background_tasks=True` est obligatoire.** Le téléversement s'exécute dans une tâche
    de fond (`entry.async_create_background_task`) ; sans cet argument, `async_block_till_done()`
@@ -218,6 +218,20 @@ Quatre points méritent l'attention en écrivant un nouveau test :
    confirmée disparaît sur-le-champ et plus aucun événement ne peut la réclamer. C'est voulu :
    c'est ce qui empêche une sauvegarde homonyme, créée sans `upload_to`, d'être téléversée (voir
    [`adr/0001-destinations-distantes.md`](adr/0001-destinations-distantes.md)).
+5. **Le délai maximum se règle par l'interface**, à l'étape `reglages_televersement` du flux
+   d'options (fixture `ouvrir_les_options`). Pour prouver que la valeur saisie est bien celle
+   qui borne l'envoi, sans attendre la fin d'un délai réel, `asyncio.timeout` est observé le
+   temps du téléversement :
+
+   ```python
+   with patch(
+       "custom_components.auto_backup.destinations.upload.asyncio.timeout",
+       wraps=asyncio.timeout,
+   ) as chronometre:
+       ...
+   ```
+
+   `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
 
 ## Modifier l'intégration importée
 

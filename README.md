@@ -28,8 +28,9 @@ La configuration des destinations se fait depuis l'interface de Home Assistant, 
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
 
 Les options de l'intégration s'ouvrent sur un menu : **Ajouter une destination**,
-**Ré-autoriser une destination**, **Supprimer une destination**, et les **réglages des
-sauvegardes** d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
+**Ré-autoriser une destination**, **Supprimer une destination**, **Réglages du téléversement**
+(délai maximum accordé à l'envoi d'une sauvegarde, 1800 secondes par défaut), et les **réglages
+des sauvegardes** d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
 d'une application OAuth2 créée par vos soins chez le fournisseur, dans laquelle vous déclarez
 l'URL de redirection affichée par le formulaire — de la forme
 `https://votre-instance/auth/auto_backup/callback`. 

@@ -39,12 +39,22 @@ d'interface du flux d'options (`flow.py`, issue #7), enfin l'orchestration du t�
 après création (`destinations/upload.py`, issue #8). Les fournisseurs Dropbox et Google Drive
 viendront s'y greffer sans toucher au code upstream.
 
-`handlers.py` n'est, lui, **pas modifié du tout** : `destinations/upload.py` lit une sauvegarde
-en flux en s'appuyant sur `isinstance(handler, SupervisorHandler | BackupHandler)` et sur les
-attributs de ces handlers (`_session`, `_ip`, `_headers` ; `_manager`). Leur méthode
-`download_backup()` écrit obligatoirement dans un fichier, ce que le téléversement veut
-justement éviter. C'est le point de couplage à revérifier lors d'une resynchronisation : si
-l'upstream renomme ces attributs, `tests/test_televersement.py` échoue immédiatement.
+`handlers.py` et `manager.py` ne sont, eux, **pas modifiés du tout** : `destinations/upload.py`
+lit une sauvegarde en flux en s'appuyant sur `isinstance(handler, SupervisorHandler |
+BackupHandler)` et sur des attributs privés de l'upstream. Leur méthode `download_backup()`
+écrit obligatoirement dans un fichier, ce que le téléversement veut justement éviter.
+
+Ce sont les points de couplage à revérifier lors d'une resynchronisation :
+
+| Attribut ou méthode privée | Porté par | Ce que le fork en fait |
+| --- | --- | --- |
+| `AutoBackup._handler` | `manager.py` | retrouver le handler choisi au démarrage, pour lire la sauvegarde |
+| `SupervisorHandler._session`, `._ip`, `._headers` | `handlers.py` | appeler `GET /backups/<slug>/download` en streaming |
+| `BackupHandler._manager` | `handlers.py` | atteindre l'agent de sauvegarde local et son fichier |
+
+`AutoBackup.generate_backup_name()` est également appelée, mais c'est une méthode **publique**.
+Si l'upstream renomme l'un de ces attributs, `tests/test_televersement.py` échoue
+immédiatement.
 
 Les modules upstream ne sont, eux, **que complétés** : aucune ligne upstream n'est supprimée ni
 modifiée, ce qui garde la resynchronisation en simple report de diff. Une seule exception, décrite
@@ -60,7 +70,8 @@ caractère près.
   `<domaine>.<événement>`. Le téléversement (#8) ajoute à la fin de ce même bloc l'import de
   type `CoordinateurTeleversement`, la clé `DATA_UPLOADS`, l'option de service
   `ATTR_UPLOAD_TO`, les champs d'événement `ATTR_DESTINATION`, `ATTR_DESTINATION_NAME`,
-  `ATTR_SIZE`, `ATTR_REMOTE_ID`, ainsi que `CONF_UPLOAD_TIMEOUT` et `DEFAULT_UPLOAD_TIMEOUT`.
+  `ATTR_SIZE`, `ATTR_REMOTE_ID`, `CONF_UPLOAD_TIMEOUT` et `DEFAULT_UPLOAD_TIMEOUT`, enfin
+  `CLES_DU_FORK` — la liste des options d'entrée propres au fork, décrite plus bas.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
   `async_setup_destinations` et son appel dans `async_setup_entry`, qui charge les destinations
   configurées et les expose dans `hass.data[DATA_DESTINATIONS]`. Le nettoyage au déchargement
@@ -79,10 +90,15 @@ caractère près.
   traductions françaises vivent dans `translations/fr.json`, qui n'a pas encore de section
   `services`. Traduire ce seul champ rendrait le formulaire bilingue pour tout le monde.
 - `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées par l'issue #6 —
-  l'import de `preserve_destinations` et son appel dans `OptionsFlowHandler.async_step_init`.
+  l'import de `preserve_fork_options()` et son appel dans `OptionsFlowHandler.async_step_init`.
   Le flux d'options upstream remplace l'intégralité des options par le contenu de son
-  formulaire, qui ignore les destinations : sans ce report, enregistrer les options effacerait
-  les destinations configurées. L'issue #7 ajoute deux lignes **à la fin du fichier** :
+  formulaire, qui ignore les options du fork : sans ce report, enregistrer les réglages de
+  sauvegarde effacerait les destinations configurées et le délai de téléversement. Ces deux
+  lignes sont propres au fork : l'issue #8 les a récrites pour passer de
+  `preserve_destinations()`, qui ne reportait que les destinations, à `preserve_fork_options()`,
+  qui reporte **toutes** les clés de `CLES_DU_FORK` — une option ajoutée demain est donc
+  protégée du seul fait d'y être inscrite, sans nouvelle retouche ici. L'issue #7 ajoute deux
+  lignes **à la fin du fichier** :
   l'import de `etendre_le_flux_d_options()` et la réaffectation
   `OptionsFlowHandler = etendre_le_flux_d_options(OptionsFlowHandler)`. La méthode upstream
   `ConfigFlow.async_get_options_flow()` résout ce nom au moment de l'appel : lui substituer une
@@ -94,6 +110,8 @@ caractère près.
   `issues.reauthentification_requise` et, sous `options`, les sections `abort`, `error` et les
   étapes `menu`, `ajouter_destination`, `identifiants`, `autorisation`, `destination`,
   `reautoriser_destination`, `supprimer_destination`, plus un `title` pour l'étape `init`.
+  L'issue #8 y ajoute l'étape `reglages_televersement`, son entrée de menu et l'erreur
+  `options.error.delai_invalide`.
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
@@ -147,14 +165,25 @@ ligne upstream n'est pas reprise telle quelle, et c'est assumé :
   la main dans le `try`. Le diff reste lisible (`diff -w` l'ignore même complètement) et
   `tests/test_conformite_upstream.py` en fait un cas nommé, pas une exemption silencieuse.
 
-#### Option `upload_timeout` : pas de champ dans le formulaire d'options
+#### Option `upload_timeout` : une étape du fork, pas un champ du formulaire upstream
 
 Le délai maximum d'un téléversement est lu dans `entry.options[CONF_UPLOAD_TIMEOUT]`, avec
-`DEFAULT_UPLOAD_TIMEOUT` (1800 s) comme valeur de repli. Le formulaire d'options upstream
-(`config_flow.py`) n'expose pas ce champ : l'y ajouter reviendrait à modifier le schéma
-upstream, et l'interface de configuration des destinations fait l'objet de l'issue #7. En
-attendant, la valeur se règle en éditant les options de l'entrée (par exemple depuis une
-restauration de configuration), et la valeur par défaut couvre les sauvegardes volumineuses.
+`DEFAULT_UPLOAD_TIMEOUT` (1800 s) comme valeur de repli. Il se règle depuis l'interface, par
+l'entrée de menu « Réglages du téléversement » (étape `reglages_televersement` de
+`destinations/flow.py`), et **non** par un champ ajouté au formulaire upstream : `OPTIONS_SCHEMA`
+et l'étape `init` de `config_flow.py` restent intacts, ce qui garde la resynchronisation en
+simple report de diff. Le coordinateur relit l'option à chaque téléversement : elle s'applique
+sans redémarrage.
+
+Deux conséquences, valables pour toute option que le fork ajoutera :
+
+- l'écriture passe par `options_avec_reglage()` (`destinations/config_entry.py`), qui complète
+  au passage les options upstream manquantes — l'écouteur de mise à jour upstream lit
+  `entry.options["auto_purge"]` et `["backup_timeout"]` **sans valeur de repli** et lèverait sur
+  une entrée qui n'a jamais visité son formulaire ;
+- la clé doit figurer dans `CLES_DU_FORK` (`const.py`), sans quoi le premier enregistrement du
+  formulaire upstream l'effacerait en silence — c'est exactement ce qui arrivait à
+  `upload_timeout` avant l'issue #8.
 
 ### Comment ces écarts sont contrôlés
 

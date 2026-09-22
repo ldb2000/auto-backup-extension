@@ -78,8 +78,9 @@ Conséquences pratiques :
   upstream existantes et **complète** celles qui manquent par leurs valeurs par défaut :
   l'écouteur de mise à jour upstream lit `entry.options["auto_purge"]` sans valeur de repli et
   échouerait sur une entrée n'ayant jamais visité le flux d'options ;
-- `preserve_destinations()` est appelé par le flux d'options upstream pour reporter les
-  destinations que son formulaire ignore ;
+- `preserve_fork_options()` est appelé par le flux d'options upstream pour reporter les clés
+  que son formulaire ignore — les destinations, et depuis l'issue #8 toute option du fork
+  inscrite dans `CLES_DU_FORK` ;
 - les secrets d'autorisation vivent dans cette même liste depuis l'issue #7 : le support de
   persistance retenu étant `entry.options`, il n'existe pas d'autre endroit propre où mettre le
   jeton d'une destination (voir la décision 4 ci-dessous).
@@ -384,6 +385,22 @@ locales ne sont pas touchées. Le nom explicite reste donc le seul mode où la c
 tromper — lever cette limite exigerait un identifiant porté par les événements upstream, donc une
 modification du code importé.
 
+#### Vigilance de resynchronisation : le nom doit rester celui qui a été demandé
+
+La corrélation suppose que `auto_backup.backup_successful` porte **exactement** le `name` inscrit
+dans les données de l'appel de service. C'est vrai de la révision importée : l'upstream reprend le
+nom du résultat de la création ou, à défaut, des données de l'appel, et `validate_backup_config()`
+ne nomme que les sauvegardes qui n'ont pas de nom — d'où le nom calculé à l'avance par
+`async_prepare_upload()`.
+
+Si une version ultérieure de l'upstream **normalisait** ce nom (passage par `slugify()`, troncature,
+horodatage ajouté, remplacement par le nom renvoyé par le Supervisor), l'événement ne
+correspondrait plus à la demande : celle-ci, déjà confirmée par `backup_start`, ne serait réclamée
+ni par `backup_successful` ni par `backup_failed`. Elle resterait en attente — l'expiration ne
+purge pas les demandes confirmées — et la sauvegarde ne partirait pas, en silence. Il faut donc,
+à chaque resynchronisation, vérifier que les trois événements portent toujours le nom demandé ;
+`tests/test_televersement.py` l'éprouve, en particulier pour une sauvegarde sans nom explicite.
+
 ### Téléversement en tâche de fond, avec un délai maximum
 
 Le téléversement est lancé par `entry.async_create_background_task()` : l'appel de service rend
@@ -398,9 +415,27 @@ n'interrompt jamais les suivantes : chaque destination a son propre `auto_backup
 et la sauvegarde locale n'est jamais touchée.
 
 Le délai maximum est `entry.options["upload_timeout"]`, en secondes, avec **1800 s** par défaut.
-Il est relu à chaque téléversement, donc modifiable sans redémarrage. Le formulaire d'options
-upstream ne l'expose pas encore : l'y ajouter modifierait le schéma upstream, et l'interface de
-configuration des destinations relève de l'issue #7.
+Il est relu à chaque téléversement, donc modifiable sans redémarrage.
+
+Il se règle depuis l'interface, par l'entrée « Réglages du téléversement » du menu d'options, et
+non par un champ ajouté au formulaire upstream (`OPTIONS_SCHEMA`) : ce formulaire reste
+l'étape `init`, inchangée, et le réglage du fork vit dans une étape à lui
+(`destinations/flow.py`). Le schéma upstream n'est donc pas modifié, conformément à la règle du
+fork (cf. [`../UPSTREAM.md`](../UPSTREAM.md)).
+
+| Option étudiée | Pourquoi elle n'a pas été retenue |
+| --- | --- |
+| Ajouter le champ à `OPTIONS_SCHEMA` | modifie une ligne upstream, à reporter à chaque resynchronisation |
+| Laisser l'option non exposée | le critère d'acceptation exige un délai **configurable dans les options** ; l'éditer à la main n'est pas une configuration |
+| Une étape propre au fork dans le menu d'options | **retenue** : le formulaire upstream reste intact, et le réglage est accessible sans quitter l'interface |
+
+Une option du fork vivant dans `entry.options`, elle disparaîtrait au premier enregistrement du
+formulaire upstream, qui remplace l'intégralité des options par son contenu. `CLES_DU_FORK`
+(`const.py`) énumère donc ces clés — `destinations`, `upload_timeout` — et
+`preserve_fork_options()` les reporte toutes : inscrire une option future dans cette liste suffit
+à la protéger. La saisie est validée en un seul endroit (`_delai_de_televersement()`) : seul un
+nombre entier de secondes strictement positif est accepté, un délai nul ou négatif coupant tout
+téléversement avant même qu'il commence.
 
 ### Lecture en flux, jamais en mémoire
 
@@ -439,6 +474,13 @@ distincte de `DestinationError` : l'échec vient d'ici, pas du fournisseur dista
 | `auto_backup.upload_start` | `name`, `slug`, `destination`, `destination_name` |
 | `auto_backup.upload_successful` | les précédents, plus `size` et `remote_id` |
 | `auto_backup.upload_failed` | les champs de `upload_start`, plus `error` |
+
+**`size` peut valoir `null`.** Sous Supervisor, la taille vient de l'en-tête `Content-Length` de
+`GET /backups/<slug>/download` ; s'il manque, la sauvegarde est téléversée quand même, mais sa
+taille reste inconnue, et le fournisseur n'en renvoie pas toujours une non plus. Une automatisation
+qui affiche ou additionne `size` doit donc tolérer l'absence de valeur (`{{ trigger.event.data.size
+| default(0) }}`, par exemple), et les entités d'état de l'issue #16 ne doivent pas se mettre en
+`unavailable` pour autant : « taille inconnue » n'est pas un échec de téléversement.
 
 Une destination inconnue est refusée **avant** la création de la sauvegarde, par une
 `ServiceValidationError` en français qui liste les destinations configurées : mieux vaut ne rien
