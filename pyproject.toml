@@ -3,8 +3,8 @@ name = "auto-backup-extension"
 version = "0.0.0"
 description = "Intégration Home Assistant « Auto Backup », étendue aux destinations Dropbox et Google Drive."
 readme = "README.md"
-# 3.13.2 est le plancher réel : Home Assistant >= 2025.5 l'exige.
-requires-python = ">=3.13.2"
+# 3.14.2 est le plancher réel : Home Assistant >= 2026.3 exige Python >= 3.14.2.
+requires-python = ">=3.14.2"
 # Dépendances utilisées par l'intégration `custom_components/auto_backup`.
 # `homeassistant` fournit aussi aiohttp, voluptuous et slugify, importés par l'intégration.
 dependencies = [
@@ -19,7 +19,7 @@ dev = [
     "pytest-cov>=7.0.0",
     # Épingle `homeassistant` et la boîte à outils de test du cœur de Home Assistant :
     # c'est cette dépendance qui fixe la version de Home Assistant testée.
-    "pytest-homeassistant-custom-component>=0.13.316",
+    "pytest-homeassistant-custom-component>=0.13.363",
     "ruff>=0.16.8",
 ]
 
@@ -34,7 +34,7 @@ testpaths = ["tests"]
 addopts = "-p no:cacheprovider"
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 88
 
 [tool.ruff.lint]
