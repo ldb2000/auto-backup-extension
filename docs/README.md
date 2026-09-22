@@ -9,6 +9,12 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
   Couvre la persistance (entry.options), le registre de fournisseurs, la hiérarchie d'erreurs,
   et la validation sécurisée des chemins distants en POSIX normalisé.
 
+## Destinations distantes
+
+- **[Connecter un compte Dropbox](destinations/dropbox.md)** : création de l'application
+  Dropbox (type d'accès, portées à cocher), URI de redirection à déclarer, récupération de
+  la clé et du secret, connexion depuis les options, limites connues.
+
 ## Maintenance
 
 - **[Suivi de l'upstream](UPSTREAM.md)** : Révision importée de jcwillox/hass-auto-backup,
