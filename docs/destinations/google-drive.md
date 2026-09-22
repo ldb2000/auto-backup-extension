@@ -11,6 +11,13 @@ avec l'intégration.
 > Google refusera l'URI de redirection au moment où vous l'enregistrez. Voir
 > [Prérequis : une URL externe publique](#prérequis--une-url-externe-publique).
 
+> **Attention : la console Google Cloud a changé en 2025.** Les noms des écrans et des onglets
+> ont été renommés — ce qui s'appelait auparavant les écrans du projet s'appelle désormais
+> « Google Auth Platform », avec de nouveaux onglets (Branding, Audience, Clients). Si les
+> libellés de cette page ne correspondent pas exactement à votre écran, consultez la structure
+> générale (cherchez Identifiants, Écran de consentement OAuth) et adaptez à la terminologie
+> actuelle. Les étapes restent identiques, seuls les noms ont changé.
+
 ## Ce qu'Auto Backup demande à Google, et pourquoi
 
 | Demande | Valeur | Raison |

@@ -527,6 +527,10 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   est ajoutée pour les destinations en défaut d'accès, elle ne doit pas doubler le problème
   Home Assistant — la faire disparaître en même temps que le problème, une fois la destination
   ré-autorisée ou supprimée.
+  Résidu à traiter : la ré-autorisation d'une destination doit détecter un changement de compte
+  (dans `provider_data`) sans réécrire le reste de la configuration ; le code porte
+  `provider_data=self._provider_data or config.provider_data` qu'il faudra évaluer pour s'assurer
+  que les données du fournisseur sont bien rafraîchies lors de la ré-autorisation sur un autre compte.
 
 - **Convergence des API entre fournisseurs lors de la fusion de #13 (Google Drive)** : l'issue
   #10 (Dropbox) a ajouté plusieurs crochets facultatifs à la classe de base `RemoteDestination`
@@ -536,7 +540,7 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   - Consacrer une table explicite dans `destinations/providers/__init__.py` pour que le sélecteur
     du flux d'options bascule sur un mécanisme plus robuste qu'une méthode `provider_label()`
     importée du registre.
-  - Uniformiser le message de refus d'autorisation (`options.abort.autorisation_annulea`) et la
+  - Uniformiser le message de refus d'autorisation (`options.abort.autorisation_annulee`) et la
     politique d'échec gracieux des crochets (actuellement : l'ajout ne s'interrompt pas si
     `async_nom_par_defaut()` ou `async_donnees_du_fournisseur()` lèvent une exception).
 
@@ -544,6 +548,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   l'absence de sous-entrées de configuration — choix retenu en #6 — a imposé de repousser des
   mécanismes robustes vers le flux d'options. Le plancher sera aligné sur **2026.3** par
   l'issue #28 pour lever cette limitation et migrer vers le modèle standard de Home Assistant.
+  **Traité en #28** : le `hacs.json` est mis à jour et le garde-fou `tests/test_compatibilite_python.py`
+  doit dériver de ce nouveau plancher, et non plus de 2025.1.0, pour que le plancher d'analyse
+  reste aligné avec la version minimale déclarée aux utilisateurs.
 
 ## Conséquences
 

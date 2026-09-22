@@ -19,11 +19,15 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 ### Ce que ce fork ajoute
 
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
-capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud :
+capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-- **Dropbox** : téléversement de la sauvegarde créée et rétention distante dédiée.
-- **Google Drive** : téléversement de la sauvegarde créée et rétention distante dédiée.
-  La **connexion du compte est disponible** — voir le guide
+**Actuellement disponible : connexion des comptes cloud.** Le téléversement et la rétention
+distante arrivent dans les versions suivantes.
+
+- **Dropbox** : la **connexion du compte est disponible** — voir le guide
+  [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; le téléversement et la purge
+  distante arrivent avec les issues #11 et #12.
+- **Google Drive** : la **connexion du compte est disponible** — voir le guide
   [Connecter Google Drive](docs/destinations/google-drive.md) ; le téléversement et la purge
   distante arrivent avec les issues #14 et #15.
 
@@ -46,21 +50,6 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
 
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
-
-**Dropbox** et **Google Drive** sont les deux fournisseurs livrés : l'ajout d'une destination
-les propose directement.
-
-- **Dropbox** : création de l'application Dropbox, type d'accès conseillé, portées à cocher et
-  URI de redirection à déclarer sont décrits dans
-  [`docs/destinations/dropbox.md`](docs/destinations/dropbox.md).
-- **Google Drive** : projet Google Cloud, activation de l'API Drive, écran de consentement,
-  identifiants « Application Web » et URI de redirection sont décrits dans
-  [Connecter Google Drive](docs/destinations/google-drive.md). Le fournisseur ne demande que la
-  portée `drive.file`, qui limite son accès aux seuls fichiers qu'il a créés. Google exigeant une
-  URI de redirection HTTPS sur un domaine public, une instance sans URL externe publique ne peut
-  pas le connecter.
-
-Le téléversement et la purge distante suivront.
 
 ## Développement
 
