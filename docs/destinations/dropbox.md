@@ -143,6 +143,83 @@ au premier appel : un problème apparaît dans **Paramètres → Système → R�
 la destination concernée. Les autres destinations continuent de fonctionner. Pour la remettre
 en service : **Configurer → Ré-autoriser une destination**.
 
+## Téléverser une sauvegarde
+
+Une fois la destination créée, ajoutez `upload_to` à votre appel de service (ou à votre
+automatisation) : la sauvegarde part chez Dropbox dès qu'elle est créée, en tâche de fond.
+
+```yaml
+service: auto_backup.backup
+data:
+  name: Sauvegarde du soir
+  upload_to: Dropbox de Jeanne
+```
+
+### Où le fichier arrive, et sous quel nom
+
+Le fichier est déposé dans le **dossier distant** que vous avez choisi à l'ajout de la
+destination, sous un nom de la forme :
+
+```text
+Sauvegarde du soir [a1b2c3d4].tar
+```
+
+Le nom de la sauvegarde seul ne suffirait pas à s'y retrouver : sur une installation Home
+Assistant Core, les sauvegardes automatiques s'appellent toutes `Core <version>`. Le **slug**
+— l'identifiant unique que Home Assistant donne à chaque sauvegarde — est donc accolé entre
+crochets. Les caractères que Dropbox refuse dans un nom de fichier (`/ \ : ? * < > " |`) sont
+remplacés par `_`, et un nom très long est raccourci, le slug et le `.tar` étant conservés.
+
+> **Avec « App folder »**, tout cela se passe à l'intérieur de
+> `Applications/<nom de votre app>/` : le dossier distant y est créé, et vous n'avez rien à
+> changer dans Auto Backup.
+
+**Le dossier est créé s'il n'existe pas**, y compris ses niveaux intermédiaires. Aucun réglage
+n'est nécessaire, et un dossier déjà présent n'est jamais un problème.
+
+**Aucun fichier n'est jamais écrasé.** Si le dossier contient déjà un fichier portant exactement
+ce nom, Auto Backup ne le remplace pas et ne dépose pas non plus une copie sous un nom voisin :
+le téléversement échoue avec un message le disant. Le cas ne se produit en pratique que si vous
+relancez une sauvegarde portant le même nom *et* le même slug, ou si vous avez déposé le fichier
+à la main.
+
+### Les grosses sauvegardes
+
+L'API Dropbox refuse d'un seul tenant un fichier de **150 Mo ou plus**, ce qu'une sauvegarde
+complète dépasse très souvent. Auto Backup choisit donc tout seul :
+
+| Taille de la sauvegarde | Comment elle part |
+| --- | --- |
+| Moins de 150 Mo | Une seule requête. |
+| 150 Mo et plus, ou taille inconnue | Une **session d'envoi** : la sauvegarde est découpée en fragments de 8 Mio, envoyés l'un après l'autre, puis validés en bloc. |
+
+Dans les deux cas la sauvegarde n'est **jamais chargée entièrement en mémoire** : elle est lue
+et envoyée au fil de l'eau. À la fin d'une session, la taille enregistrée par Dropbox est
+comparée à ce qui a été envoyé ; en cas d'écart, le téléversement est déclaré en échec plutôt
+que de laisser passer une archive tronquée.
+
+La taille est « inconnue » sur une installation supervisée quand le Supervisor n'annonce pas la
+taille du téléchargement : la session d'envoi est alors utilisée par précaution.
+
+### Si Dropbox refuse ou tarde
+
+| Situation | Ce que fait Auto Backup |
+| --- | --- |
+| Limitation de débit (`429`) ou panne passagère (`5xx`) | Jusqu'à **trois tentatives**, en respectant le délai demandé par Dropbox, sans jamais attendre plus d'une minute. |
+| Espace de stockage saturé | Échec immédiat, avec un message invitant à libérer de la place ou à réduire la rétention. Inutile de réessayer : c'est à vous de jouer. |
+| Nom déjà pris dans le dossier | Échec immédiat : rien n'est écrasé. |
+| Accès révoqué ou portée manquante | Échec, et la destination est signalée **à ré-autoriser** dans Réparations. |
+
+Un échec émet l'événement `auto_backup.upload_failed`, dont le champ `error` porte le message.
+**La sauvegarde locale n'est jamais supprimée ni altérée** par un échec de téléversement, et les
+autres destinations de la même sauvegarde sont traitées normalement.
+
+Une nuance utile : les nouvelles tentatives ne s'appliquent qu'aux envois **fragmentés**, dont
+chaque morceau est encore disponible. Une sauvegarde de moins de 150 Mo est lue une seule fois,
+au fil de l'eau : si Dropbox la refuse en cours de route, l'envoi est abandonné et c'est la
+sauvegarde suivante qui repartira. Le délai maximum global (« Réglages du téléversement »,
+30 minutes par défaut) s'applique par-dessus tout cela.
+
 ## En cas de problème
 
 | Message | Cause la plus fréquente |
@@ -153,6 +230,10 @@ en service : **Configurer → Ré-autoriser une destination**.
 | « Le fournisseur a refusé la première requête : … » | Juste après l'autorisation, Auto Backup demande à Dropbox qui est le compte connecté. Si cet appel échoue, **l'ajout s'arrête et rien n'est enregistré** : le message cite la cause renvoyée par Dropbox (portée manquante, service indisponible). Corrigez-la, puis relancez **Ajouter une destination** — vous n'avez rien à nettoyer. |
 | `missing_scope` dans le message ou le journal | Une portée n'a pas été cochée (ou l'a été après l'autorisation). Cochez-la dans l'onglet *Permissions*, puis recommencez l'ajout — ou, si la destination existe déjà, **Ré-autoriser une destination**. |
 | Dropbox ouvre une page « invalid redirect_uri » | L'URI déclarée ne correspond pas exactement (protocole, port, `/` final). |
+| « un fichier nommé … existe déjà chez Dropbox » | Le dossier contient déjà une sauvegarde portant ce nom et ce slug. Auto Backup n'écrase rien : supprimez ou renommez le fichier chez Dropbox si vous voulez le remplacer. |
+| « l'espace de stockage Dropbox … est saturé » | Votre compte Dropbox est plein. Libérez de la place, ou réduisez la rétention distante de la destination. |
+| « le dépôt de … est incomplet » | La taille enregistrée par Dropbox ne correspond pas à ce qui a été envoyé (transfert interrompu). Le fichier partiel reste chez Dropbox : supprimez-le avant de relancer. |
+| « délai de téléversement dépassé » | La sauvegarde n'a pas fini de partir dans le temps imparti. Augmentez-le dans **Configurer → Réglages du téléversement**. |
 
 Le journal détaillé s'active avec :
 
@@ -163,7 +244,7 @@ logger:
 ```
 
 Aucun secret n'y figure : ni clé, ni secret d'application, ni jeton, ni identifiant de
-compte.
+compte, ni en-tête d'autorisation — y compris pendant un téléversement.
 
 **Pourquoi l'ajout s'arrête-t-il au lieu de continuer ?** Une destination que Dropbox refuse
 déjà d'identifier ne fonctionnerait pas davantage une fois créée : elle échouerait à chaque
@@ -179,6 +260,12 @@ un clic — que diagnostiquer plus tard une destination muette.
   d'équipe (`team_*`) ne sont pas demandées et les chemins d'espace partagé ne sont pas gérés.
 - **Une application Dropbox non publiée est limitée** à un petit nombre de comptes connectés
   (le vôtre suffit) ; cela n'a aucune incidence sur le volume de fichiers déposés.
-- **L'envoi, le listage et la purge distante des sauvegardes arrivent dans les versions
-  suivantes** : cette page décrit la connexion du compte. Ajouter la destination dès
-  maintenant ne fait donc encore rien remonter chez Dropbox.
+- **Le listage et la purge distante des sauvegardes arrivent dans une version suivante** : les
+  sauvegardes déposées chez Dropbox ne sont pas encore supprimées automatiquement, même si vous
+  avez renseigné une rétention pour la destination. Supprimez-les à la main d'ici là.
+- **Un téléversement interrompu ne reprend pas** : un redémarrage de Home Assistant en plein
+  envoi abandonne le transfert, et la sauvegarde suivante repartira de zéro. Rien n'apparaît
+  dans votre dossier tant qu'une session d'envoi n'a pas été validée : une session inachevée ne
+  laisse pas de fichier partiel derrière elle.
+- **Une sauvegarde de moins de 150 Mo n'est pas renvoyée** si Dropbox la refuse en cours de
+  route (voir « Si Dropbox refuse ou tarde » ci-dessus).

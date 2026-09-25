@@ -21,14 +21,14 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
 capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-**Actuellement disponible : connexion des comptes cloud et mécanique de téléversement.**
-L'option `upload_to` des services de sauvegarde envoie la sauvegarde créée vers les destinations
-configurées (voir « Téléversement des sauvegardes » ci-dessous) ; l'envoi effectif chez chaque
-fournisseur et la rétention distante arrivent dans les versions suivantes.
+**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement, et envoi
+réel des sauvegardes vers Dropbox.** L'option `upload_to` des services de sauvegarde envoie la
+sauvegarde créée vers les destinations configurées (voir « Téléversement des sauvegardes »
+ci-dessous) ; la rétention distante arrive dans une version suivante.
 
-- **Dropbox** : la **connexion du compte est disponible** — voir le guide
-  [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; le téléversement et la purge
-  distante arrivent avec les issues #11 et #12.
+- **Dropbox** : la **connexion du compte et le dépôt des sauvegardes sont disponibles** — voir le
+  guide [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; la purge distante arrive
+  avec l'issue #12.
 - **Google Drive** : la **connexion du compte est disponible** — voir le guide
   [Connecter Google Drive](docs/destinations/google-drive.md) ; le téléversement et la purge
   distante arrivent avec les issues #14 et #15.
@@ -83,6 +83,11 @@ téléversement » du menu d'options de l'intégration (délai par défaut : 180
   `destination`, `destination_name`, `size`, `remote_id`) ;
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`).
+
+Chez **Dropbox**, la sauvegarde est déposée dans le dossier de la destination sous le nom
+`<nom de la sauvegarde> [<slug>].tar`. Un fichier de même nom n'est **jamais** remplacé : le
+téléversement échoue en le disant. Le détail (dossier, fragmentation des grosses sauvegardes,
+limites) est dans [le guide Dropbox](docs/destinations/dropbox.md).
 
 ## Développement
 
