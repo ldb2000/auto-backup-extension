@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import patch
 
@@ -869,20 +869,13 @@ async def test_une_absence_de_reponse_est_signalee(
 async def test_le_cycle_de_vie_des_sauvegardes_reste_a_implementer(
     hass: HomeAssistant, entree_dropbox: MockConfigEntry
 ) -> None:
-    """Téléversement (#11), listage et suppression (#12) sont hors périmètre."""
+    """Listage et suppression (#12) restent hors périmètre.
+
+    Le dépôt d'une sauvegarde, lui, est implémenté depuis l'issue #11 :
+    `tests/test_provider_dropbox_upload.py` le couvre de bout en bout.
+    """
     destination = _destination(hass, entree_dropbox)
 
-    with pytest.raises(NotImplementedError, match="#11"):
-        await destination.async_upload("/backup/ha.tar", name="ha")
-
-    async def flux() -> AsyncIterator[bytes]:
-        yield b""
-
-    # Forme d'appel du coordinateur de téléversement (issue #8).
-    with pytest.raises(NotImplementedError, match="#11"):
-        await destination.async_upload(
-            None, name="ha", slug="abc", stream=flux(), size=0, filename="ha.tar"
-        )
     with pytest.raises(NotImplementedError, match="#12"):
         await destination.async_list_backups()
     with pytest.raises(NotImplementedError, match="#12"):
