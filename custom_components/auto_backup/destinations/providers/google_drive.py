@@ -230,12 +230,14 @@ async def async_appel_drive(
                 charge = await reponse.json()
             except (ClientError, ValueError, UnicodeDecodeError) as err:
                 # Une réponse vide ou non JSON reste exploitable : seul le statut
-                # décide alors du succès ou de l'échec. Les parenthèses sont
-                # obligatoires : la forme sans parenthèses (PEP 758) n'existe qu'à
-                # partir de Python 3.14 et lèverait une SyntaxError au chargement
-                # de l'intégration chez les utilisateurs de Home Assistant 2025.1
-                # (Python 3.12). Le `as err` maintient ces parenthèses en place
-                # face à `ruff format`, dont la cible est py314.
+                # décide alors du succès ou de l'échec. Les parenthèses restent la
+                # forme retenue par le dépôt : valides sur toutes les versions,
+                # alors que la forme sans parenthèses (PEP 758) exige Python 3.14
+                # — le plancher annoncé depuis Home Assistant 2026.3 (issue #28),
+                # qui retombera en retard sur l'interpréteur du dépôt dès la
+                # prochaine version de Python, cf.
+                # tests/test_compatibilite_python.py. Le `as err` maintient ces
+                # parenthèses en place face à `ruff format`, dont la cible est py314.
                 _LOGGER.debug(
                     "Réponse Drive %s %s non décodable en JSON (%s) : "
                     "seul le statut sera exploité",
