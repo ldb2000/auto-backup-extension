@@ -94,9 +94,9 @@ côte à côte dans un tableau de bord.
 | « *Destination* : sauvegardes distantes » | `sensor`, mesure | nombre de sauvegardes présentes chez le fournisseur | — |
 | « *Destination* : problème de téléversement » | `binary_sensor`, `problem` | actif tant qu'aucun envoi n'a réussi depuis le dernier échec | `last_error`, `last_failed_slug`, `last_failed_at` |
 
-Un téléversement réussi horodate le capteur de succès, incrémente le compteur et éteint le
+Un téléversement réussi horodate le capteur de succès, met à jour le compte et éteint le
 capteur de problème ; un échec l'allume et renseigne `last_error` avec un message lisible, dont
-les jetons et les secrets sont masqués avant tout affichage. Le capteur de problème se prête
+les jetons, les secrets et les adresses électroniques sont masqués avant tout affichage. Le capteur de problème se prête
 directement à une automatisation — l'identifiant d'entité exact est construit à partir du nom de
 la destination, relevez-le dans les outils de développement :
 
@@ -116,12 +116,13 @@ action:
 
 L'identifiant unique d'une entité vaut `<entrée>_<destination>_<type>` : ajouter une destination
 crée ses entités sans redémarrage, en supprimer une retire les siennes. Le dernier succès, le
-compteur et la dernière erreur sont restaurés après un redémarrage de Home Assistant.
+nombre de sauvegardes distantes et la dernière erreur sont retrouvés après un redémarrage de
+Home Assistant — et une erreur résolue juste avant le redémarrage ne réapparaît pas.
 
-Le nombre de sauvegardes distantes est aujourd'hui un **compteur** : il suit les téléversements
-réussis et les purges distantes annoncées par l'événement `auto_backup.remote_purge`. La
-rétention distante (issue #9) tiendra l'inventaire réel des sauvegardes déposées et deviendra
-alors la source de vérité de ce capteur.
+Le nombre de sauvegardes distantes est lu dans l'inventaire tenu par la rétention distante
+(issue #9), qui connaît les sauvegardes réellement déposées chez le fournisseur. Tant que cette
+fonction n'est pas livrée, le capteur suit les téléversements réussis et les purges annoncées
+par l'événement `auto_backup.remote_purge`.
 
 ## Développement
 

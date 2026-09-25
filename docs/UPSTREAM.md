@@ -78,8 +78,10 @@ caractère près.
   ré-authentification — puis `CONF_PROVIDER_DATA` (issue #10) et, à la fin du bloc, les
   constantes des entités d'état (issue #16) : l'import de type
   `CoordinateurEntitesDestinations`, la clé `DATA_DESTINATION_ENTITIES`, les attributs
-  `ATTR_LAST_ERROR`, `ATTR_LAST_FAILED_SLUG` et `ATTR_LAST_FAILED_AT`, et les champs
-  `ATTR_DELETED` et `ATTR_REMAINING` lus dans l'événement `auto_backup.remote_purge`.
+  `ATTR_LAST_ERROR`, `ATTR_LAST_FAILED_SLUG` et `ATTR_LAST_FAILED_AT`, la clé
+  `DATA_REMOTE_BACKUPS` du registre des sauvegardes distantes tenu par l'issue #9, et les champs
+  `ATTR_REMOTE_IDS`, `ATTR_DELETED` et `ATTR_REMAINING` lus dans l'événement
+  `auto_backup.remote_purge`.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de

@@ -634,32 +634,68 @@ qui avait échoué, et quand », pas à « y a-t-il un problème maintenant ».
 
 Un attribut d'entité est lisible par toute personne ayant accès à l'instance, et l'enregistreur
 le conserve dans son historique. Or le message d'erreur d'un fournisseur recopie parfois la
-requête refusée, en-tête `Authorization` compris. `assainir_le_message()` masque donc, avant
-toute exposition, les valeurs de `Bearer`/`Basic` et celles des clés sensibles
-(`access_token`, `refresh_token`, `client_secret`, `token`, `code`...), par la même valeur
-constante `***` que `DestinationConfig.as_dict(masquer=True)`, puis borne le message à 255
-caractères. Le masquage est volontairement **large** : masquer un code d'erreur HTTP coûte
-moins cher que laisser fuir un jeton de rafraîchissement.
+requête refusée, en-tête `Authorization` compris — et il n'écrit pas toujours le jeton derrière
+une clé reconnaissable. `assainir_le_message()` procède donc par passes successives, de la plus
+précise à la plus générale, avant toute exposition :
 
-### Compteur persisté plutôt qu'inventaire distant
+1. **adresses électroniques** : « compte jean.dupont@example.com non autorisé » est une donnée
+   personnelle, masquée entièrement ;
+2. **en-têtes** `Bearer` et `Basic` ;
+3. **affectations d'une clé sensible** (`access_token`, `refresh_token`, `client_secret`,
+   `upload_id`, `token`, `code`...), quel que soit le séparateur : `=`, `:` ou une simple espace
+   (« invalid token sl.… »). `upload_id` en fait partie parce que l'URL d'une session de
+   téléversement reprenable **vaut jeton de reprise** : qui la connaît écrit dans le compte. Les
+   bornes de mot-clé ne sont pas `\b` — `_` est un caractère de mot, et `authorization_code=…`
+   doit être reconnu sur sa clé `code` ;
+4. **formes connues de jetons**, masquées même nues : Dropbox (`sl.`), Google (`ya29.`, `1//`) ;
+5. **suites opaques** d'au moins vingt caractères qui ne ressemblent pas à un mot (chiffres,
+   casses mêlées, `_` ou `+`).
+
+La valeur de remplacement est la même constante `***` que
+`DestinationConfig.as_dict(masquer=True)`, et le message est enfin borné à 255 caractères.
+
+Le masquage est volontairement **large** : masquer un code d'erreur HTTP coûte moins cher que
+laisser fuir un jeton de rafraîchissement. Il s'arrête néanmoins là où il détruirait le message
+sans rien protéger, car cet attribut est **affiché à l'utilisateur** :
+
+- un **mot ordinaire** qui suit un mot-clé séparé par une espace n'est pas masqué (« token
+  expiré », « code de la sauvegarde ») : sans cette réserve, les messages en français
+  deviendraient illisibles ;
+- le filtre générique **coupe aux `/`, `=` et `.`**, de sorte qu'un chemin d'URL reste entier
+  (`…googleapis.com/upload/drive/v3/files` est conservé, `upload_id=…` est masqué). La
+  contrepartie est assumée : un secret en base64 *standard* contenant un `/` n'est masqué que
+  par tronçons — les jetons des fournisseurs visés sont en base64url (`-`, `_`), où le cas ne se
+  présente pas, et leurs formes connues sont déjà couvertes par la passe 4.
+
+### Le registre de la rétention distante fait autorité sur le compte
 
 Le nombre de sauvegardes distantes pourrait être obtenu en appelant `async_list_backups()` sur
 la destination. Ce serait un appel réseau à chaque rafraîchissement, sur un chemin que rien ne
-rend indispensable — et impossible pour une destination en attente de ré-autorisation. Le
-capteur tient donc un **compteur** : `+1` sur `upload_successful`, `−n` sur `remote_purge`,
-restauré au redémarrage par `RestoreSensor`.
+rend indispensable — et impossible pour une destination en attente de ré-autorisation.
 
-La rétention distante (issue #9) tiendra, elle, un registre persistant des sauvegardes
-déposées. Plutôt que d'attendre cette issue — développée en parallèle —,
-`destinations/entities.py` expose `async_enregistrer_source_des_comptes(hass, source)` : la
-source enregistrée fait autorité quand elle sait répondre, sinon le compteur interne sert de
-repli. Aucune des deux issues n'a donc besoin de l'autre pour être livrée, et le branchement
-se fera en une ligne.
+La rétention distante (issue #9) tient, elle, un **registre persistant** des sauvegardes
+réellement déposées chez chaque fournisseur, exposé dans `hass.data[DATA_REMOTE_BACKUPS]` et
+interrogeable par `entrees(destination_id)`. Le capteur en compte les entrées : c'est la seule
+source qui ne dérive pas, et les événements ne sont plus que des **déclencheurs de relecture**.
+
+Un compteur incrémental a été écarté pour une raison de fond : `auto_backup.remote_purge` n'est
+émis que **lorsqu'une suppression a réellement eu lieu**. Sans rétention configurée, avec une
+ré-authentification en attente, sur un listage en échec, ou quand la rétention est déjà
+respectée, aucun événement ne part. Un compteur piloté par ces seuls événements — et *a
+fortiori* par un champ `remaining` — resterait figé sur une valeur fausse.
+
+Le registre étant persistant, il est aussi la source de la **restauration** du compte après un
+redémarrage (critère 5 de l'issue) : il n'a besoin de personne pour survivre.
+
+L'issue #9 n'étant pas encore fusionnée, la lecture est **défensive** : clé absente, ou registre
+qui lève, et le capteur retombe sur un compteur interne, alimenté par les événements
+(`remote_ids`, `deleted`, `remaining`) et restauré par `RestoreSensor`. `RestoreSensor` est donc
+conservé pour ce repli, et les deux chemins sont testés.
 
 ### Restauration après redémarrage
 
-`RestoreSensor` et `RestoreEntity` suffisent : le dernier succès, le compteur et l'état du
-capteur binaire — avec ses trois attributs — sont restitués sans magasin de données propre.
+`RestoreSensor` et `RestoreEntity` suffisent : le dernier succès, le compteur de repli et l'état
+du capteur binaire — avec ses trois attributs — sont restitués sans magasin de données propre.
 Un `Store` dédié aurait ajouté un fichier de stockage, sa migration et son nettoyage pour une
 information que Home Assistant sait déjà conserver.
 
@@ -667,6 +703,21 @@ La valeur restaurée ne s'impose pas : un événement traité entre le démarrag
 l'ajout des entités l'emporte. L'écouteur d'options s'exécute en effet sans attente, donc le
 coordinateur connaît une destination — et traite ses événements — avant que Home Assistant
 n'ait fini de monter ses entités.
+
+Encore faut-il pouvoir dire si l'état a *déjà été renseigné*. `EtatDestination` porte pour cela
+deux marqueurs, `erreur_initialisee` et `compteur_initialise`, posés par les seuls chemins
+d'écriture (`definir_l_erreur()`, `definir_le_compte()`). Ils ne sont pas cosmétiques :
+`derniere_erreur is None` signifie à la fois « aucun événement depuis le démarrage » et « un
+téléversement vient de réussir et a effacé l'erreur » ; `0` sauvegardes signifie à la fois
+« jamais compté » et « une purge vient de tout supprimer ». S'appuyer sur ces valeurs
+réinstallerait un état périmé — capteur repassé en « problème » alors que la destination va
+bien, compte ressuscité après une purge légitime.
+
+`dernier_slug_echec` et `dernier_echec` n'ont pas besoin de marqueur : rien ne les efface
+jamais, `None` y veut donc bien dire « inconnu ».
+
+Le message restauré est repassé par `assainir_le_message()` au chargement : un historique écrit
+par une version au masquage plus étroit est nettoyé au lieu d'être republié tel quel.
 
 ### Suivre l'ajout et la suppression d'une destination
 
@@ -715,11 +766,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   ici pour laisser le schéma de constantes stable et lisible, et pour que les issues suivantes
   n'aient qu'à les émettre sans les déclarer. **#16 les consomme** : les entités d'état d'une
   destination se mettent à jour sur `upload_successful`, `upload_failed` et `remote_purge`.
-  De cet événement-là, #16 lit deux champs qu'elle a dû nommer avant #9 : `deleted` (nombre de
-  sauvegardes supprimées, ou la liste de leurs identifiants) et `remaining` (nombre restant,
-  facultatif, qui fait alors autorité sur le compteur). **#9 doit les émettre sous ces noms**,
-  aux côtés de `destination` et `destination_name` ; à défaut, le compteur de sauvegardes
-  distantes ne redescendra pas après une purge.
+  **Arbitrage du métier** : `auto_backup.remote_purge` porte `destination`, `destination_name`
+  et `remote_ids` (les identifiants distants supprimés), et **n'émet ni `deleted` ni
+  `remaining`** — l'événement n'étant émis que lorsqu'une suppression a réellement eu lieu, un
+  nombre restant serait structurellement faux. Le compte de sauvegardes distantes ne vient donc
+  pas de cet événement, mais du registre persistant de #9
+  (`hass.data[DATA_REMOTE_BACKUPS]`, méthode `entrees(destination_id)`) ; l'événement n'est
+  qu'un déclencheur de relecture. **#9 doit exposer ce registre sous cette clé** ; à défaut,
+  #16 retombe sur son compteur interne, qui lit alors `remote_ids`, `deleted` et `remaining`.
 
 - **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
   doit être déclarée chez le fournisseur. **Traité pour Dropbox en #10**
@@ -824,10 +878,15 @@ Ajouts de l'issue #16 :
   marqueur (`{destination}`).
 - `sensor.py` et `binary_sensor.py` ne gagnent qu'un import et un appel chacun : toute la
   logique vit dans `destinations/entities.py`.
-- Le nombre de sauvegardes distantes est un compteur persisté, que la rétention distante (#9)
-  pourra remplacer par son registre en appelant `async_enregistrer_source_des_comptes()`.
+- Le nombre de sauvegardes distantes est lu dans le registre persistant de la rétention
+  distante (#9), `hass.data[DATA_REMOTE_BACKUPS]` ; en son absence, un compteur interne
+  alimenté par les événements et restauré au redémarrage sert de repli.
 - Les messages d'erreur exposés en attribut sont masqués et bornés par
-  `assainir_le_message()` : aucun jeton ne peut atteindre l'historique d'états.
+  `assainir_le_message()` : ni jeton — même nu, sans clé adjacente — ni adresse électronique ne
+  peut atteindre l'historique d'états.
+- L'état d'une destination distingue « jamais renseigné » de « remis à sa valeur neutre » par
+  des marqueurs explicites : une restauration ne peut pas réinstaller une erreur résolue ni un
+  compte purgé.
 
 Ajouts de l'issue #7 :
 

@@ -264,7 +264,7 @@ assert probleme.state == STATE_ON
 assert FAUX_JETON not in probleme.attributes[ATTR_LAST_ERROR]
 ```
 
-Cinq points méritent l'attention en écrivant un nouveau test :
+Sept points méritent l'attention en écrivant un nouveau test :
 
 1. **`await hass.async_block_till_done()` après chaque émission.** Le coordinateur prévient les
    entités par un signal de dispatcher ; sans cette attente, l'état lu est celui d'avant
@@ -280,16 +280,35 @@ Cinq points méritent l'attention en écrivant un nouveau test :
 4. **Le redémarrage se simule par `hass.config_entries.async_reload()`** : `RestoreSensor` et
    `RestoreEntity` retrouvent le dernier état publié, l'horodatage du dernier succès, le
    compteur et les attributs d'erreur compris.
-5. **Aucune valeur réelle dans les tests de masquage.** Le jeton employé est la constante
-   inventée `FAUX_JETON` ; un test vérifie qu'il ne ressort ni dans l'état, ni dans ses
-   attributs, et `assainir_le_message()` est éprouvée séparément sur chaque forme
-   (`Bearer ...`, `access_token=...`, `"client_secret": "..."`).
+5. **Aucune valeur réelle dans les tests de masquage.** Les jetons employés sont les constantes
+   inventées `FAUX_JETON`, `FAUX_JETON_GOOGLE`, `FAUX_RAFRAICHISSEMENT_GOOGLE`,
+   `FAUX_UPLOAD_ID` et `FAUX_JETON_BASE64` ; un test vérifie qu'aucun ne ressort dans l'état ni
+   dans ses attributs, et `assainir_le_message()` est éprouvée séparément sur chaque forme — clé
+   et valeur (`access_token=...`, `"client_secret": "..."`), en-tête (`Bearer ...`), **jeton nu**
+   (sans mot-clé adjacent, ou séparé par une simple espace), URL de session reprenable, et
+   adresse électronique. Un test symétrique vérifie que le français ordinaire n'est **pas**
+   masqué (« token expiré ») et qu'une URL reste lisible : un attribut affiché à l'utilisateur
+   doit rester diagnosticable.
+6. **Un ordre de montage déterministe se force en montant l'entité à la main.** Home Assistant
+   ajoute les entités d'une destination *après* que le coordinateur a commencé à traiter ses
+   événements ; un test de bout en bout laisse la boucle d'événements décider lequel passe en
+   premier, et ne prouverait donc rien. `_preparer_une_entite_montee_apres_coup()` construit
+   l'entité, lui donne un `entity_id`, inscrit son état à restaurer, puis le test émet ses
+   événements avant d'appeler lui-même `async_added_to_hass()`. C'est ainsi que sont éprouvés
+   les deux marqueurs d'état (une erreur effacée par un succès, un compteur vidé par une purge)
+   qui ne doivent pas être écrasés par la valeur restaurée.
+7. **Le cache de restauration ne se remplace pas en cours de test.**
+   `mock_restore_cache()` substitue tout le cache, et les entités déjà montées ne s'y
+   retrouvent plus au démontage (`KeyError` bruyant). `_inscrire_au_cache_de_restauration()`
+   ajoute au contraire un état au cache en place ; son argument `donnees` porte le
+   `native_value` que `RestoreSensor` relit, que l'état seul ne contient pas.
 
-Le nombre de sauvegardes distantes est un compteur alimenté par les événements. La rétention
-distante (#9) fournira la source de vérité : elle s'enregistre par
-`async_enregistrer_source_des_comptes(hass, source)`, et les tests couvrent les trois cas —
-source absente (repli sur le compteur), source prioritaire, source défaillante (repli sans
-casser le capteur).
+Le nombre de sauvegardes distantes vient du **registre persistant** de la rétention distante
+(#9), lu dans `hass.data[DATA_REMOTE_BACKUPS]` par `entrees(destination_id)`. Les tests
+utilisent `RegistreFactice`, qui n'implémente que cette méthode, et couvrent les trois cas —
+registre absent (repli sur le compteur interne, alimenté par `remote_ids`, `deleted` ou
+`remaining`), registre prioritaire (l'événement n'est plus qu'un déclencheur de relecture) et
+registre défaillant (repli sans casser le capteur).
 
 ## Tester un fournisseur réel
 
