@@ -38,8 +38,9 @@ identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké d
 
 Les options de l'intégration s'ouvrent sur un menu : **Ajouter une destination**,
 **Ré-autoriser une destination**, **Supprimer une destination**, **Réglages du téléversement**
-(délai maximum accordé à l'envoi d'une sauvegarde, 1800 secondes par défaut), et les **réglages
-des sauvegardes** d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
+(délai maximum accordé à l'envoi d'une sauvegarde, 1800 secondes par défaut), **Réglages des
+notifications** (voir « Notifications » ci-dessous), et les **réglages des sauvegardes**
+d'origine. L'ajout d'une destination cloud demande l'identifiant et le secret
 d'une application OAuth2 créée par vos soins chez le fournisseur, dans laquelle vous déclarez
 l'URL de redirection affichée par le formulaire — de la forme
 `https://votre-instance/auth/auto_backup/callback`. 
@@ -52,7 +53,14 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
   URI locales ou privées.
 
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
-destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
+destination et invitant à la ré-autoriser, et une **notification persistante** le rappelle à
+l'écran d'accueil ; les autres destinations continuent de fonctionner. Les deux disparaissent
+ensemble une fois la destination ré-autorisée ou supprimée.
+
+Si la ré-autorisation porte sur un **autre compte** que celui enregistré, l'interface le dit
+avant d'enregistrer quoi que ce soit : elle nomme le compte précédent et le nouveau, et prévient
+que les sauvegardes déjà déposées sur l'ancien compte ne seront plus ni listées ni purgées par
+Auto Backup. Sans confirmation, rien n'est modifié.
 
 ### Téléversement des sauvegardes
 
@@ -83,6 +91,26 @@ téléversement » du menu d'options de l'intégration (délai par défaut : 180
   `destination`, `destination_name`, `size`, `remote_id`) ;
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`).
+
+### Notifications
+
+Quand l'envoi d'une sauvegarde vers une destination distante échoue **définitivement** (après
+les nouvelles tentatives), Auto Backup affiche une **notification persistante** en français qui
+nomme la destination, la sauvegarde et la cause de l'échec.
+
+- **Une notification par destination**, jamais une par sauvegarde : les échecs suivants mettent
+  la même notification à jour et affichent le nombre d'échecs consécutifs.
+- **Retrait automatique** : dès qu'un envoi vers cette destination aboutit, la notification
+  disparaît.
+- **Accès révoqué** : la notification invite à relancer « Ré-autoriser une destination » et
+  accompagne le problème affiché dans l'interface des intégrations, sans le doubler.
+- **Aucun secret affiché** : jetons, valeurs de `access_token` / `refresh_token` et chemins de
+  fichiers absolus sont masqués (`***`) avant affichage.
+
+L'entrée de menu **Réglages des notifications** permet de les désactiver (option
+`notify_on_failure`, activée par défaut). Désactivées, l'événement
+`auto_backup.upload_failed`, le journal d'erreur et le problème signalant une destination à
+ré-autoriser restent émis : seules les notifications persistantes s'arrêtent.
 
 ## Développement
 

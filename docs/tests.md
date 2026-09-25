@@ -49,6 +49,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
+| `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, masquage des secrets. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
@@ -237,6 +238,60 @@ Cinq points méritent l'attention en écrivant un nouveau test :
 
    `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
 
+## Tester les notifications d'échec
+
+`tests/test_notifications.py` couvre l'issue #17. Les tests partent des **événements publics**
+du fork plutôt que du coordinateur de téléversement : c'est le contrat qu'écoute
+`destinations/notifications.py`, et cela garde ces tests indépendants de la mécanique d'envoi,
+déjà couverte par `tests/test_televersement.py`.
+
+```python
+hass.bus.async_fire(
+    EVENT_UPLOAD_FAILED,
+    {"name": ..., "slug": ..., "destination": ..., "destination_name": ..., "error": ...},
+)
+await hass.async_block_till_done()
+```
+
+Quatre points à connaître :
+
+1. **Lire les notifications affichées.** Home Assistant ne les expose qu'au travers de son API
+   WebSocket ; le stock lui-même est un dictionnaire de `hass.data`, que les tests lisent par
+   `persistent_notification._async_get_or_create_notifications(hass)`. Les identifiants sont
+   ceux du fork : `auto_backup_upload_<destination_id>` et `auto_backup_reauth_<id>`.
+2. **Prouver que l'option ne coupe que l'affichage.** Le test de `notify_on_failure` désactivée
+   passe, lui, par le coordinateur (`hass.data[DATA_UPLOADS]._async_signaler_echec(...)`) :
+   c'est la seule façon de vérifier d'un même geste qu'aucune notification n'est créée, que
+   l'événement est bien émis et que la ligne d'erreur est bien journalisée.
+3. **Les écritures directes dans `entry.options` portent les options upstream.** La règle
+   générale des tests de destinations s'applique ici aussi : un test qui bascule
+   `notify_on_failure` par `async_update_entry()` doit conserver `auto_purge` et
+   `backup_timeout`, que l'écouteur upstream lit sans valeur de repli.
+4. **Le masquage se teste avec de faux secrets.** La cause d'échec employée contient un jeton
+   porteur, un `refresh_token` et un chemin `/config/...` inventés ; le test vérifie qu'aucun
+   n'apparaît dans la notification, que `***` y figure, et que la phrase reste lisible.
+
+## Tester un changement de compte à la ré-autorisation
+
+Le changement de compte (issue #17) se teste dans `tests/test_destinations_flux_options.py`
+pour le fournisseur factice et dans `tests/test_provider_google_drive.py` pour un fournisseur
+réel. Le compte renvoyé par le fournisseur se pilote en remplaçant le crochet :
+
+```python
+with patch.object(
+    DestinationOAuthEnMemoire,
+    "async_donnees_du_fournisseur",
+    AsyncMock(return_value={"account_id": "compte-factice-9999"}),
+):
+    ...
+```
+
+Le flux s'arrête alors sur l'étape `confirmer_changement_de_compte`, dont les placeholders
+nomment les deux comptes. **Avant de répondre, rien ne doit être écrit** : un test le vérifie en
+relisant `entry.options` à ce moment précis. La réponse se donne par `{"confirmer": True}` ou
+`{"confirmer": False}` — le refus doit produire l'abandon `changement_de_compte_annule` et
+laisser les options à l'identique.
+
 ## Tester un fournisseur réel
 
 Deux fournisseurs sont livrés : Dropbox
@@ -354,8 +409,9 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
 entités), le socle des destinations distantes (contrat, registre, persistance), leur
 autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression), le
-téléversement après création (lecture en flux, événements, échecs, délai maximum) et la
-connexion d'un compte Google Drive (issue #13). Le téléversement vers Google Drive (#14) et la
+téléversement après création (lecture en flux, événements, échecs, délai maximum), la
+connexion d'un compte Google Drive (issue #13) et les notifications d'échec, de
+ré-authentification et de changement de compte (issue #17). Le téléversement vers Google Drive (#14) et la
 purge distante (#15) sont testés par leurs issues respectives, comme le fournisseur Dropbox
 (#10 à #12).
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

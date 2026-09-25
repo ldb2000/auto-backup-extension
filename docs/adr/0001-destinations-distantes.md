@@ -6,8 +6,10 @@
   [#7](https://github.com/ldb2000/auto-backup-extension/issues/7) (autorisation OAuth2 et
   interface), [#10](https://github.com/ldb2000/auto-backup-extension/issues/10) (fournisseur
   Dropbox), [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement
-  après création) et [#13](https://github.com/ldb2000/auto-backup-extension/issues/13)
-  (fournisseur Google Drive) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+  après création), [#13](https://github.com/ldb2000/auto-backup-extension/issues/13)
+  (fournisseur Google Drive) et
+  [#17](https://github.com/ldb2000/auto-backup-extension/issues/17) (notifications et
+  changement de compte) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -667,6 +669,103 @@ HTTP ne peut pas connecter Google Drive — ce n'est pas un défaut du fork, et 
 n'est possible côté intégration. La procédure complète est dans
 [`docs/destinations/google-drive.md`](../destinations/google-drive.md).
 
+## Notifications des échecs et des accès révoqués (issue #17)
+
+Un téléversement qui échoue émettait déjà `auto_backup.upload_failed` et une ligne d'erreur dans
+le journal, et un accès révoqué créait déjà un problème Home Assistant (décision 4). Ni l'un ni
+l'autre ne se voient sans les chercher : une sauvegarde cloud silencieusement cassée donne une
+fausse impression de sécurité. L'issue #17 ajoute une couche **d'affichage**, dans
+`destinations/notifications.py`, et ne touche ni à l'orchestration (`upload.py`) ni aux
+fournisseurs.
+
+### Écouter les événements plutôt qu'appeler depuis le téléversement
+
+Le module s'abonne à `auto_backup.upload_failed` et `auto_backup.upload_successful` au démarrage
+de l'entrée (`async_setup_notifications()`, appelé comme `async_setup_upload()`). Le
+coordinateur de téléversement n'appelle rien : il émet, comme avant. Trois conséquences :
+
+- l'affichage se branche et se débranche avec l'entrée, sans que la mécanique d'envoi en sache
+  quoi que ce soit — la rétention distante (#9) ou un futur émetteur seront notifiés du seul
+  fait d'émettre les mêmes événements ;
+- les événements restent le contrat public : une automatisation de l'utilisateur les écoute
+  exactement comme le fork le fait ;
+- l'événement `upload_failed` n'étant émis qu'une fois les tentatives épuisées, une notification
+  décrit toujours un échec **définitif**, jamais une tentative.
+
+### Un identifiant de notification par destination, pas par sauvegarde
+
+`auto_backup_upload_<destination_id>` et `auto_backup_reauth_<destination_id>` : l'identifiant
+est stable, donc Home Assistant **met à jour** la notification existante au lieu d'en empiler
+une par sauvegarde ratée. Le nombre d'échecs consécutifs y est affiché — c'est lui qui distingue
+un incident passager d'une destination durablement cassée — et le premier succès vers cette
+destination retire la notification et remet le compteur à zéro. Le compteur vit dans le
+gestionnaire, en mémoire : il n'a pas à survivre à un redémarrage, où un cycle de sauvegarde
+suivant le reconstruira.
+
+### Jamais deux signalements pour la même cause
+
+Un accès révoqué produit déjà un problème Home Assistant. La notification qui l'accompagne le
+**complète** (le problème vit dans l'interface des intégrations, la notification à l'écran
+d'accueil) et disparaît avec lui : `async_effacer_la_reauthentification()` efface les deux, à la
+ré-autorisation comme à la suppression de la destination — une notification qui survivrait à la
+destination qu'elle nomme serait impossible à faire disparaître.
+
+L'échec de téléversement qui **découle** d'un accès révoqué ne crée pas de seconde
+notification : le gestionnaire interroge `DestinationManager.reauthentification_requise()` avant
+d'afficher quoi que ce soit. Dans l'ordre inverse — un échec générique, puis la révocation — la
+notification d'échec est retirée au profit de celle qui dit quoi faire. C'est le point ouvert
+laissé par #7, désormais clos.
+
+### L'option `notify_on_failure` ne coupe que l'affichage
+
+Vraie par défaut, réglable par l'étape « Réglages des notifications » du flux d'options et
+inscrite dans `CLES_DU_FORK`. Désactivée, plus aucune notification persistante n'est créée —
+échec comme ré-authentification — mais **l'événement, le journal d'erreur et le problème Home
+Assistant restent émis** : l'utilisateur qui coupe les notifications pilote ses alertes
+autrement, il ne renonce pas au signalement. Le choix est relu dans l'entrée à chaque échec : il
+s'applique sans redémarrage, comme `upload_timeout`.
+
+### Masquage défensif, parce que le texte vient du fournisseur
+
+Le fork ne met aucun secret dans ses propres messages (décision 4), mais la cause d'un échec est
+souvent une phrase renvoyée par une API. `masquer_les_secrets()` remplace donc par `***`, avant
+affichage : un jeton porteur (`Bearer ...`), la valeur d'une clé dont le nom contient `token`,
+`secret`, `password` ou `api_key`, et les chemins de fichiers absolus (`/config/...`,
+`/backup/...`). Le nom de la clé est conservé : il aide à comprendre l'échec sans rien
+divulguer. Le masquage porte aussi sur les noms affichés, et épargne les URL, qui ne sont pas
+des chemins locaux.
+
+**Textes en français dans le code.** Une notification persistante n'a pas de clé de traduction
+côté Home Assistant, contrairement aux problèmes et aux étapes du flux d'options : ses libellés
+sont écrits dans `notifications.py`. C'est une limite de la plateforme, pas un choix ; si Home
+Assistant ouvre la traduction des notifications, elles rejoindront `translations/`.
+
+## Changement de compte à la ré-autorisation (issue #17)
+
+Ré-autoriser une destination sur un **autre** compte est légitime (compte professionnel devenu
+personnel, organisation migrée), mais ce n'est pas anodin : la destination garde son nom et son
+dossier, tandis que les sauvegardes déposées sur l'ancien compte cessent d'exister pour Auto
+Backup — ni listées, ni purgées par la rétention distante (#9). Jusqu'ici, `provider_data` était
+remplacé sans un mot.
+
+L'étape `confirmer_changement_de_compte` s'intercale donc entre l'échange du jeton et l'écriture
+des options. Elle nomme l'ancien et le nouveau compte, dit ce que le changement entraîne, et
+n'écrit **rien** tant qu'elle n'est pas confirmée ; refusée, la ré-autorisation est abandonnée
+(`options.abort.changement_de_compte_annule`), jeton et compte d'origine intacts.
+
+La détection ne porte que sur les clés **identifiantes** de `provider_data` — `account_id`
+(Dropbox), `account_email` (Google Drive), `email` — et sur leurs clés **communes** aux deux
+relevés. Trois situations ne sont donc pas des changements de compte : un fournisseur qui ne
+renvoie aucune donnée, une destination qui n'en avait pas encore, et une réponse enrichie d'une
+clé de plus sur le même compte. Sans aucune clé comparable, la question est posée plutôt que
+tranchée : mieux vaut une confirmation de trop qu'un compte remplacé en silence.
+
+Le résidu laissé par #10 est levé au passage : `_terminer_la_reautorisation()` teste
+explicitement `self._provider_data is not None` au lieu de s'en remettre à une vérité booléenne.
+Le comportement voulu est écrit tel quel — fournisseur muet, on conserve ; fournisseur qui
+répond, on remplace — sans dépendre du fait qu'un dictionnaire vide soit déjà ramené à `None` en
+amont.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -721,14 +820,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 
 - **Cohérence de la ré-authentification** : un problème Home Assistant (repair issue) est créé
   pour une destination en attente de ré-autorisation, mais il n'est pas réparable automatiquement.
-  **À traiter en #17** (notifications et ré-authentification) : si une notification persistante
-  est ajoutée pour les destinations en défaut d'accès, elle ne doit pas doubler le problème
-  Home Assistant — la faire disparaître en même temps que le problème, une fois la destination
-  ré-autorisée ou supprimée.
-  Résidu à traiter : la ré-autorisation d'une destination doit détecter un changement de compte
-  (dans `provider_data`) sans réécrire le reste de la configuration ; le code porte
-  `provider_data=self._provider_data or config.provider_data` qu'il faudra évaluer pour s'assurer
-  que les données du fournisseur sont bien rafraîchies lors de la ré-autorisation sur un autre compte.
+  **Traité en #17** (voir « Notifications des échecs et des accès révoqués » ci-dessus) : la
+  notification persistante ajoutée pour ces destinations ne double pas le problème — elle le
+  complète, l'échec de téléversement qui en découle n'en crée pas une troisième, et les deux
+  signalements disparaissent ensemble, à la ré-autorisation comme à la suppression.
+  Le résidu est levé lui aussi : la ré-autorisation détecte désormais un changement de compte
+  (clés identifiantes de `provider_data`), le fait confirmer avant d'écrire, et
+  `_terminer_la_reautorisation()` remplace explicitement les données du compte quand le
+  fournisseur en renvoie — voir « Changement de compte à la ré-autorisation » ci-dessus.
 
 - **Convergence des API entre fournisseurs** : **traitée en #13** lors de la fusion avec #10.
   Convention retenue : crochets déclarés comme méthodes d'instance sur `RemoteDestination`
@@ -787,6 +886,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   qui suit les options de l'entrée et disparaît à son déchargement.
 - Le téléversement lui-même est branché par `#8` (section « Téléversement après création »
   ci-dessus) ; `#9` y ajoutera la rétention distante.
+- L'affichage des échecs est isolé dans `destinations/notifications.py` (#17), branché sur les
+  seuls événements publics : ni `upload.py` ni les fournisseurs n'en savent rien, et une option
+  du fork de plus (`notify_on_failure`) est protégée par `CLES_DU_FORK`.
 
 Ajouts de l'issue #7 :
 
