@@ -7,6 +7,7 @@ from homeassistant.util.hass_dict import HassKey
 if TYPE_CHECKING:
     from .manager import AutoBackup
     from .destinations import DestinationManager
+    from .destinations.notifications import GestionnaireDeNotifications
     from .destinations.oauth import EtatOAuth
     from .destinations.upload import CoordinateurTeleversement
 
@@ -159,3 +160,35 @@ IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
 # détecter qu'une ré-autorisation a changé de compte. Facultatif : une destination qui
 # n'en a pas est persistée exactement comme avant.
 CONF_PROVIDER_DATA = "provider_data"
+
+### NOTIFICATIONS PERSISTANTES (issue #17) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Une sauvegarde cloud silencieusement cassée
+# donne une fausse impression de sécurité : `destinations/notifications.py` transforme
+# les événements `auto_backup.upload_*` et le signalement de ré-authentification
+# (`destinations/reauth.py`) en notifications persistantes lisibles.
+
+# Gestionnaire de notifications de l'entrée, exposé dans `hass.data`.
+DATA_NOTIFICATIONS: HassKey[GestionnaireDeNotifications] = HassKey(
+    f"{DOMAIN}_notifications"
+)
+
+# Préfixes des identifiants de notification. Ils sont **stables par destination** :
+# des échecs successifs mettent la même notification à jour au lieu d'en empiler une
+# par sauvegarde, et un succès (ou une ré-autorisation) sait laquelle retirer.
+NOTIFICATION_UPLOAD_PREFIX = f"{DOMAIN}_upload_"
+NOTIFICATION_REAUTH_PREFIX = f"{DOMAIN}_reauth_"
+
+# Option de l'entrée : les notifications persistantes du fork sont-elles créées ?
+# Désactivée, l'intégration continue d'émettre ses événements et ses journaux
+# d'erreur, et le problème Home Assistant de ré-authentification reste créé : seule
+# la notification disparaît. Elle se règle par l'étape « Réglages des notifications »
+# du flux d'options (cf. `destinations/flow.py`).
+CONF_NOTIFY_ON_FAILURE = "notify_on_failure"
+DEFAULT_NOTIFY_ON_FAILURE = True
+
+# `notify_on_failure` est une option portée par le fork : elle doit être reportée par
+# `preserve_fork_options()` comme les autres, sans quoi le premier enregistrement du
+# formulaire upstream l'effacerait en silence. La constante étant définie ici, à la
+# fin du bloc du fork, la liste des clés du fork est complétée ici aussi plutôt que
+# récrite plus haut.
+CLES_DU_FORK = (*CLES_DU_FORK, CONF_NOTIFY_ON_FAILURE)

@@ -7,7 +7,8 @@ Ce sous-paquet est propre à ce fork : il n'existe pas dans l'upstream
 gestionnaire qui charge les destinations d'une entrée de configuration, et —
 depuis l'issue #7 — l'autorisation OAuth2 (`oauth`), le signalement des
 destinations à ré-autoriser (`reauth`) et les étapes d'interface qui étendent
-le flux d'options upstream (`flow`).
+le flux d'options upstream (`flow`). L'issue #17 y ajoute les notifications
+persistantes d'échec et de ré-authentification (`notifications`).
 
 Les fournisseurs concrets vivent dans le sous-paquet `providers` — Google Drive
 depuis l'issue #13 — et sont chargés par `enregistrer_les_fournisseurs()` au
@@ -39,6 +40,15 @@ from .errors import (
 )
 from .manager import DestinationManager
 from .models import VALEUR_MASQUEE, DestinationConfig, RemoteBackup
+from .notifications import (
+    GestionnaireDeNotifications,
+    async_effacer_les_notifications,
+    async_notifier_la_reauthentification,
+    async_setup_notifications,
+    identifiant_de_notification_d_echec,
+    identifiant_de_notification_de_reauthentification,
+    masquer_les_secrets,
+)
 from .oauth import (
     DestinationOAuth2Implementation,
     DestinationOAuth2Session,
@@ -85,26 +95,33 @@ __all__ = [
     "DestinationOAuth2Session",
     "DestinationQuotaError",
     "DuplicateProviderError",
+    "GestionnaireDeNotifications",
     "OAuth2ProviderSpec",
     "RemoteBackup",
     "RemoteDestination",
     "UnknownProviderError",
     "async_destination_configs",
     "async_effacer_la_reauthentification",
+    "async_effacer_les_notifications",
     "async_enregistrer_la_vue_de_retour",
     "async_entree_auto_backup",
+    "async_notifier_la_reauthentification",
     "async_persist_destinations",
     "async_persist_token",
     "async_session_de_la_destination",
     "async_setup_destinations",
+    "async_setup_notifications",
     "async_signaler_la_reauthentification",
     "create_destination",
     "enregistrer_les_fournisseurs",
     "get_provider",
+    "identifiant_de_notification_d_echec",
+    "identifiant_de_notification_de_reauthentification",
     "identifiant_du_probleme",
     "jeton_persiste",
     "jeton_valide",
     "list_providers",
+    "masquer_les_secrets",
     "normaliser_le_jeton",
     "options_avec_destinations",
     "options_avec_reglage",
