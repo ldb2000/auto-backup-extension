@@ -84,6 +84,12 @@ installation qui fonctionne aujourd'hui pour une commodité d'implémentation. S
 chaque ligne modifiée dans le code upstream se paie à chaque resynchronisation, et que
 l'option B en demande deux fois moins.
 
+> **Note du 2026-09-25 (issue #28)** : l'argument du plancher, qui ouvre ce paragraphe, est caduc.
+> Le plancher annoncé est passé à Home Assistant 2026.3.0, bien au-delà du 2025.3 qu'exigent les
+> sous-entrées de configuration : plus aucune installation n'est exclue par ce choix. La décision
+> reste `entry.options`, mais pour ses seules autres raisons — divergence minimale avec le code
+> upstream, persistance déjà assurée par le cœur, tests simples.
+
 Conséquences pratiques :
 
 - l'écriture passe toujours par `async_persist_destinations()`, qui conserve les options
@@ -99,11 +105,13 @@ Conséquences pratiques :
 
 ### Révision possible
 
-Quand le plancher passera à 2025.3 ou au-delà, migrer vers les sous-entrées redeviendra
-pertinent, en particulier pour la gestion des jetons OAuth par compte. La migration consistera à
-transformer chaque élément de la liste en sous-entrée dans `async_migrate_entry` : le format
-persisté (identifiant stable, fournisseur, nom, dossier, rétentions) est déjà celui qu'une
-sous-entrée porterait.
+La condition posée ici est remplie depuis l'issue #28 : le plancher annoncé vaut 2026.3.0, donc
+au-delà du 2025.3 qu'exigent les sous-entrées. Migrer est désormais possible, et intéressant pour
+la gestion des jetons OAuth par compte, mais reste hors périmètre : c'est une re-décision à
+prendre explicitement, pas une conséquence automatique. La migration consisterait à transformer
+chaque élément de la liste en sous-entrée dans `async_migrate_entry` : le format persisté
+(identifiant stable, fournisseur, nom, dossier, rétentions) est déjà celui qu'une sous-entrée
+porterait.
 
 ## Décision 2 — un registre de fournisseurs, pas d'import en dur
 
