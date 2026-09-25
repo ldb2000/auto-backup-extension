@@ -42,6 +42,12 @@ Les messages d'erreur exposés en attribut passent tous par
 d'apparaître dans une réponse de fournisseur : un attribut d'entité est lisible
 par toute personne ayant accès à l'instance, et il est journalisé par
 l'enregistreur.
+
+Enfin, `EtatDestination` distingue « jamais renseigné » de « remis à sa valeur
+neutre » par des marqueurs explicites (`erreur_initialisee`,
+`compteur_initialise`). Sans eux, la restauration au démarrage réintroduirait
+une erreur qu'un succès venait d'effacer, ou un compte qu'une purge venait de
+ramener à zéro : `None` et `0` ne peuvent pas porter les deux sens à la fois.
 """
 
 from __future__ import annotations
@@ -280,6 +286,13 @@ class EtatDestination:
     `dernier_slug_echec` et `dernier_echec` gardent en revanche la trace du
     dernier échec connu, même après un succès : ils servent à comprendre *ce
     qui* avait échoué, pas à signaler un problème en cours.
+
+    Deux marqueurs disent si l'état a déjà été renseigné depuis le démarrage.
+    Ils sont indispensables : `derniere_erreur is None` signifierait aussi bien
+    « aucun événement reçu » que « un succès vient d'effacer l'erreur », et
+    `sauvegardes_distantes == 0` aussi bien « jamais compté » que « une purge
+    vient de tout supprimer ». Sans eux, la restauration au démarrage
+    réinstallerait une erreur résolue ou un compte périmé.
     """
 
     dernier_succes: datetime | None = None
@@ -287,6 +300,18 @@ class EtatDestination:
     derniere_erreur: str | None = None
     dernier_slug_echec: str | None = None
     dernier_echec: datetime | None = None
+    erreur_initialisee: bool = False
+    compteur_initialise: bool = False
+
+    def definir_l_erreur(self, message: str | None) -> None:
+        """Fixe l'erreur active — `None` pour « aucune » — et la marque connue."""
+        self.derniere_erreur = message
+        self.erreur_initialisee = True
+
+    def definir_le_compte(self, nombre: int) -> None:
+        """Fixe le compteur de repli, jamais négatif, et le marque connu."""
+        self.sauvegardes_distantes = max(nombre, 0)
+        self.compteur_initialise = True
 
 
 # Source faisant autorité sur le nombre de sauvegardes distantes : elle reçoit
@@ -476,8 +501,8 @@ class CoordinateurEntitesDestinations:
             return
         destination_id, etat = suivi
         etat.dernier_succes = event.time_fired
-        etat.sauvegardes_distantes += 1
-        etat.derniere_erreur = None
+        etat.definir_le_compte(etat.sauvegardes_distantes + 1)
+        etat.definir_l_erreur(None)
         self._async_notifier(destination_id)
 
     @callback
@@ -487,7 +512,7 @@ class CoordinateurEntitesDestinations:
         if suivi is None:
             return
         destination_id, etat = suivi
-        etat.derniere_erreur = assainir_le_message(event.data.get(ATTR_ERROR))
+        etat.definir_l_erreur(assainir_le_message(event.data.get(ATTR_ERROR)))
         slug = event.data.get(ATTR_SLUG)
         etat.dernier_slug_echec = slug if isinstance(slug, str) else None
         etat.dernier_echec = event.time_fired
@@ -510,9 +535,9 @@ class CoordinateurEntitesDestinations:
         restantes = _nombre(event.data.get(ATTR_REMAINING))
         supprimees = _nombre(event.data.get(ATTR_DELETED))
         if restantes is not None:
-            etat.sauvegardes_distantes = restantes
+            etat.definir_le_compte(restantes)
         elif supprimees:
-            etat.sauvegardes_distantes = max(etat.sauvegardes_distantes - supprimees, 0)
+            etat.definir_le_compte(etat.sauvegardes_distantes - supprimees)
         else:
             return
         self._async_notifier(destination_id)
@@ -702,16 +727,22 @@ class CapteurSauvegardesDistantes(_EntiteDestination, RestoreSensor):
         return self._coordinateur.nombre_de_sauvegardes(self._destination_id)
 
     async def async_added_to_hass(self) -> None:
-        """Restaure le compteur tel qu'il était avant le redémarrage.
+        """Restaure le compteur de repli tel qu'il était avant le redémarrage.
 
-        Un téléversement comptabilisé avant l'ajout de cette entité l'emporte :
-        la valeur restaurée ne s'applique qu'à un compteur encore vierge.
+        La restauration ne concerne que le compteur de repli : quand le registre
+        persistant de la rétention distante (#9) répond, c'est lui qui fait
+        autorité, et il a déjà survécu au redémarrage par lui-même.
+
+        Un événement traité avant l'ajout de cette entité l'emporte sur la
+        valeur restaurée, même s'il a ramené le compteur à zéro — d'où le
+        marqueur `compteur_initialise` plutôt qu'un test sur la valeur : une
+        purge légitime ne doit pas se faire écraser par un compte périmé.
         """
         await super().async_added_to_hass()
         donnees = await self.async_get_last_sensor_data()
         restaure = _nombre(donnees.native_value) if donnees is not None else None
-        if restaure is not None and not self._etat.sauvegardes_distantes:
-            self._etat.sauvegardes_distantes = restaure
+        if restaure is not None and not self._etat.compteur_initialise:
+            self._etat.definir_le_compte(restaure)
 
 
 class CapteurBinaireProblemeDestination(
@@ -752,16 +783,34 @@ class CapteurBinaireProblemeDestination(
         }
 
     async def async_added_to_hass(self) -> None:
-        """Restaure l'erreur active et la trace du dernier échec."""
+        """Restaure l'erreur active et la trace du dernier échec.
+
+        L'erreur restaurée ne s'applique qu'à un état **jamais renseigné**. Le
+        test porte donc sur `erreur_initialisee`, et non sur
+        `derniere_erreur is None` : cette nullité signifie aussi « un
+        téléversement vient de réussir et a effacé l'erreur », et un événement
+        peut parfaitement être traité entre le démarrage du coordinateur et
+        l'ajout de cette entité. S'y fier ferait repasser le capteur en
+        « problème » sur la foi d'un état périmé, alors que la destination va
+        bien.
+
+        Le message restauré est réassaini au passage : il a été écrit par une
+        version antérieure du masquage, dont les règles ont pu s'élargir depuis.
+
+        `dernier_slug_echec` et `dernier_echec` n'ont pas besoin de marqueur :
+        rien ne les efface jamais, `None` y veut donc bien dire « inconnu ».
+        """
         await super().async_added_to_hass()
         dernier = await self.async_get_last_state()
         if dernier is None:
             return
 
         etat = self._etat
-        if etat.derniere_erreur is None and dernier.state == STATE_ON:
-            etat.derniere_erreur = (
-                _texte(dernier.attributes.get(ATTR_LAST_ERROR)) or ERREUR_INCONNUE
+        if not etat.erreur_initialisee:
+            etat.definir_l_erreur(
+                assainir_le_message(_texte(dernier.attributes.get(ATTR_LAST_ERROR)))
+                if dernier.state == STATE_ON
+                else None
             )
         if etat.dernier_slug_echec is None:
             etat.dernier_slug_echec = _texte(

@@ -26,9 +26,10 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import restore_state
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -61,6 +62,8 @@ from custom_components.auto_backup.destinations.entities import (
     SUFFIXE_DERNIER_TELEVERSEMENT,
     SUFFIXE_PROBLEME,
     SUFFIXE_SAUVEGARDES_DISTANTES,
+    CapteurBinaireProblemeDestination,
+    CapteurSauvegardesDistantes,
     assainir_le_message,
     async_enregistrer_source_des_comptes,
     identifiant_unique,
@@ -852,6 +855,190 @@ async def test_le_dernier_succes_et_l_erreur_survivent_au_redemarrage(
     assert probleme.attributes[ATTR_LAST_ERROR] == "quota dépassé"
     assert probleme.attributes[ATTR_LAST_FAILED_SLUG] == "slug-echoue"
     assert probleme.attributes[ATTR_LAST_FAILED_AT] is not None
+
+
+def _inscrire_au_cache_de_restauration(
+    hass: HomeAssistant,
+    etat: State,
+    donnees: dict[str, Any] | None = None,
+) -> None:
+    """Inscrit un état à restaurer dans le cache déjà en place.
+
+    `mock_restore_cache()` remplacerait le cache entier, et les entités déjà
+    montées ne s'y retrouveraient plus au démontage. `donnees` porte les données
+    propres à un `RestoreSensor` (`native_value`), que l'état seul ne contient
+    pas.
+    """
+    restore_state.async_get(hass).last_states[etat.entity_id] = (
+        restore_state.StoredState(
+            etat,
+            restore_state.RestoredExtraData(donnees) if donnees is not None else None,
+            dt_util.utcnow(),
+        )
+    )
+
+
+def _preparer_une_entite_montee_apres_coup(
+    hass: HomeAssistant,
+    capteur: Any,
+    entity_id: str,
+    restaure: State,
+    donnees: dict[str, Any] | None = None,
+) -> Any:
+    """Prépare une entité que le test montera lui-même, après les événements.
+
+    Home Assistant ajoute les entités d'une destination *après* que le
+    coordinateur a commencé à traiter ses événements : l'écouteur d'options
+    s'exécute sans attente. Monter l'entité à la main rend cet ordre
+    déterministe, là où un test de bout en bout laisse la boucle d'événements
+    décider lequel des deux passe en premier.
+    """
+    capteur.hass = hass
+    capteur.entity_id = entity_id
+    _inscrire_au_cache_de_restauration(hass, restaure, donnees)
+    return capteur
+
+
+async def test_une_erreur_resolue_n_est_pas_reintroduite_par_la_restauration(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+) -> None:
+    """Un succès reçu avant le montage l'emporte sur l'état « problème » restauré.
+
+    `derniere_erreur is None` ne suffit pas à décider : cette nullité signifie
+    aussi bien « aucun événement depuis le démarrage » que « un téléversement
+    vient de réussir et a effacé l'erreur ». S'y fier ferait repasser le capteur
+    en « problème » sur la foi d'un état périmé (audit sécurité, MAJEUR 1).
+    """
+    capteur = _preparer_une_entite_montee_apres_coup(
+        hass,
+        CapteurBinaireProblemeDestination(
+            entree_avec_destination,
+            hass.data[DATA_DESTINATION_ENTITIES],
+            DestinationConfig.from_dict(config_factice()),
+        ),
+        "binary_sensor.probleme_monte_apres_coup",
+        State(
+            "binary_sensor.probleme_monte_apres_coup",
+            STATE_ON,
+            {ATTR_LAST_ERROR: "vieille erreur résolue"},
+        ),
+    )
+
+    # Le téléversement réussit avant que l'entité n'ait fini d'être montée.
+    _emettre_succes(hass)
+    await hass.async_block_till_done()
+
+    await capteur.async_added_to_hass()
+
+    assert capteur.is_on is False
+    assert capteur.extra_state_attributes[ATTR_LAST_ERROR] is None
+
+
+async def test_un_compteur_purge_n_est_pas_ecrase_par_la_restauration(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+) -> None:
+    """Une purge ramenant le compteur à zéro résiste à la valeur restaurée.
+
+    `not sauvegardes_distantes` confondrait « jamais compté » et « purgé » : le
+    compte périmé se réinstallerait (audit sécurité, MINEUR 4).
+    """
+    capteur = _preparer_une_entite_montee_apres_coup(
+        hass,
+        CapteurSauvegardesDistantes(
+            entree_avec_destination,
+            hass.data[DATA_DESTINATION_ENTITIES],
+            DestinationConfig.from_dict(config_factice()),
+        ),
+        "sensor.compteur_monte_apres_coup",
+        State("sensor.compteur_monte_apres_coup", "5"),
+        {"native_value": 5, "native_unit_of_measurement": None},
+    )
+
+    # La purge vide la destination avant que le capteur ne soit monté.
+    hass.bus.async_fire(
+        EVENT_REMOTE_PURGE,
+        {ATTR_DESTINATION: "destination_test", ATTR_REMAINING: 0},
+    )
+    await hass.async_block_till_done()
+
+    await capteur.async_added_to_hass()
+
+    assert capteur.native_value == 0
+
+
+async def test_un_compteur_vierge_accepte_la_valeur_restauree(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+) -> None:
+    """Sans événement reçu, la valeur restaurée réarme bien le compteur."""
+    capteur = _preparer_une_entite_montee_apres_coup(
+        hass,
+        CapteurSauvegardesDistantes(
+            entree_avec_destination,
+            hass.data[DATA_DESTINATION_ENTITIES],
+            DestinationConfig.from_dict(config_factice()),
+        ),
+        "sensor.compteur_vierge",
+        State("sensor.compteur_vierge", "5"),
+        {"native_value": 5, "native_unit_of_measurement": None},
+    )
+
+    await capteur.async_added_to_hass()
+
+    assert capteur.native_value == 5
+
+
+async def test_l_erreur_restauree_est_reassainie(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+) -> None:
+    """Un historique écrit par une version au masquage plus étroit est nettoyé."""
+    capteur = _preparer_une_entite_montee_apres_coup(
+        hass,
+        CapteurBinaireProblemeDestination(
+            entree_avec_destination,
+            hass.data[DATA_DESTINATION_ENTITIES],
+            DestinationConfig.from_dict(config_factice()),
+        ),
+        "binary_sensor.probleme_a_reassainir",
+        State(
+            "binary_sensor.probleme_a_reassainir",
+            STATE_ON,
+            {ATTR_LAST_ERROR: f"invalid token {FAUX_JETON}"},
+        ),
+    )
+
+    await capteur.async_added_to_hass()
+
+    message = capteur.extra_state_attributes[ATTR_LAST_ERROR]
+    assert capteur.is_on is True
+    assert FAUX_JETON not in message
+    assert "***" in message
+
+
+async def test_un_capteur_binaire_restaure_sans_probleme_reste_au_repos(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+) -> None:
+    """Un état restauré « pas de problème » n'invente aucune erreur active."""
+    capteur = _preparer_une_entite_montee_apres_coup(
+        hass,
+        CapteurBinaireProblemeDestination(
+            entree_avec_destination,
+            hass.data[DATA_DESTINATION_ENTITIES],
+            DestinationConfig.from_dict(config_factice()),
+        ),
+        "binary_sensor.probleme_au_repos",
+        State(
+            "binary_sensor.probleme_au_repos",
+            STATE_OFF,
+            {ATTR_LAST_FAILED_SLUG: "slug-ancien"},
+        ),
+    )
+
+    await capteur.async_added_to_hass()
+
+    attributs = capteur.extra_state_attributes
+    assert capteur.is_on is False
+    assert attributs[ATTR_LAST_ERROR] is None
+    assert attributs[ATTR_LAST_FAILED_SLUG] == "slug-ancien"
 
 
 ### AJOUT ET SUPPRESSION À CHAUD ###
