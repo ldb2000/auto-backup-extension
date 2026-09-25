@@ -5,6 +5,21 @@
             "description": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {nom} » : l'autorisation a expiré ou a été révoquée. Les autres destinations continuent de fonctionner.\n\nPour la remettre en service, ouvrez les options de l'intégration Auto Backup, choisissez « Ré-autoriser une destination » puis « {nom} »."
         }
     },
+    "entity": {
+        "sensor": {
+            "destination_dernier_televersement": {
+                "name": "{destination} : dernier téléversement réussi"
+            },
+            "destination_sauvegardes_distantes": {
+                "name": "{destination} : sauvegardes distantes"
+            }
+        },
+        "binary_sensor": {
+            "destination_probleme": {
+                "name": "{destination} : problème de téléversement"
+            }
+        }
+    },
     "title": "Auto Backup",
     "config": {
         "step": {

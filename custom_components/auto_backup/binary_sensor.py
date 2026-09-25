@@ -17,6 +17,9 @@ from .const import (
     EVENT_BACKUP_FAILED,
 )
 from .helpers import get_device_info
+from .destinations.entities import (  # entités des destinations distantes (fork)
+    async_setup_destination_binary_sensors,
+)
 
 
 async def async_setup_entry(
@@ -30,6 +33,8 @@ async def async_setup_entry(
             AutoBackupProblemSensor(entry, auto_backup),
         ]
     )
+    # Fork (#16) : un capteur binaire « problème » par destination distante.
+    await async_setup_destination_binary_sensors(hass, entry, async_add_entities)
 
 
 class AutoBackupBaseBinarySensor(BinarySensorEntity):

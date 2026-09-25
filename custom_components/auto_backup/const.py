@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from .destinations import DestinationManager
     from .destinations.oauth import EtatOAuth
     from .destinations.upload import CoordinateurTeleversement
+    from .destinations.entities import CoordinateurEntitesDestinations
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -157,3 +158,28 @@ IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
 # exemple. Elles évitent de rappeler l'API pour savoir à quel compte une destination
 # est rattachée, et servent à détecter qu'une ré-autorisation a changé de compte.
 CONF_PROVIDER_DATA = "provider_data"
+
+### ENTITÉS D'ÉTAT DES DESTINATIONS (issue #16) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Chaque destination configurée expose
+# deux capteurs et un capteur binaire, créés par `destinations/entities.py` et
+# branchés à la fin de l'`async_setup_entry()` de `sensor.py` et de
+# `binary_sensor.py`.
+
+# Coordinateur qui tient l'état de chaque destination et fait vivre ses entités.
+DATA_DESTINATION_ENTITIES: HassKey[CoordinateurEntitesDestinations] = HassKey(
+    f"{DOMAIN}_destination_entities"
+)
+
+# Attributs du capteur binaire « problème » d'une destination. `last_error` est
+# l'erreur **active** (effacée au premier téléversement réussi) ; les deux
+# autres gardent la trace du dernier échec connu.
+ATTR_LAST_ERROR = "last_error"
+ATTR_LAST_FAILED_SLUG = "last_failed_slug"
+ATTR_LAST_FAILED_AT = "last_failed_at"
+
+# Champs lus dans l'événement `auto_backup.remote_purge`, émis par la rétention
+# distante (issue #9) : nombre de sauvegardes supprimées, et — quand le
+# fournisseur sait le dire — nombre de sauvegardes restantes, qui fait alors
+# autorité sur le compteur.
+ATTR_DELETED = "deleted"
+ATTR_REMAINING = "remaining"
