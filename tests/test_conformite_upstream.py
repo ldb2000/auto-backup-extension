@@ -55,6 +55,8 @@ FICHIERS_UPSTREAM_ETENDUS = (
     "__init__.py",
     "const.py",
     "config_flow.py",
+    "sensor.py",
+    "binary_sensor.py",
     "services.yaml",
     "translations/fr.json",
     "translations/en.json",
