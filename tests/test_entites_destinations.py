@@ -71,8 +71,13 @@ from destinations_factices import config_factice
 DESTINATION_DEUX = "destination_deux"
 NOM_DESTINATION_DEUX = "Destination secondaire"
 
-# Jeton inventé : il ne doit jamais ressortir dans un attribut d'entité.
+# Jetons inventés, dans les formes réellement émises par les fournisseurs :
+# aucun ne doit ressortir dans un attribut d'entité. Aucune valeur réelle ici.
 FAUX_JETON = "sl.FAUX-JETON-a1b2c3d4e5f6"
+FAUX_JETON_GOOGLE = "ya29.FAUX-JETON-a1b2c3d4e5f6"
+FAUX_RAFRAICHISSEMENT_GOOGLE = "1//FAUX-JETON-a1b2c3d4e5f6"
+FAUX_UPLOAD_ID = "AEnB2UoFAUXident1f1antDeSess10n"
+FAUX_JETON_BASE64 = "ZXlKaGJHY2lPaUpJVXpJMU5pSjk"
 
 
 def config_deux(**surcharges: Any) -> dict[str, Any]:
@@ -428,22 +433,77 @@ async def test_le_message_d_erreur_ne_laisse_pas_fuir_de_jeton(
 
 
 @pytest.mark.parametrize(
-    "message",
+    ("message", "secret"),
     [
-        f"access_token={FAUX_JETON}",
-        f'{{"refresh_token": "{FAUX_JETON}"}}',
-        f"Authorization: Bearer {FAUX_JETON}",
-        f"client_secret='{FAUX_JETON}'",
-        f"token: {FAUX_JETON}",
-        f"Autorisation refusée (code={FAUX_JETON})",
+        (f"access_token={FAUX_JETON}", FAUX_JETON),
+        (f'{{"refresh_token": "{FAUX_JETON}"}}', FAUX_JETON),
+        (f"Authorization: Bearer {FAUX_JETON}", FAUX_JETON),
+        (f"client_secret='{FAUX_JETON}'", FAUX_JETON),
+        (f"token: {FAUX_JETON}", FAUX_JETON),
+        (f"Autorisation refusée (code={FAUX_JETON})", FAUX_JETON),
+        # `\b` ne verrait pas cette clé : `_` est un caractère de mot.
+        (f"authorization_code={FAUX_JETON}", FAUX_JETON),
     ],
 )
-def test_assainir_le_message_masque_toutes_les_formes(message: str) -> None:
+def test_assainir_le_message_masque_toutes_les_formes(
+    message: str, secret: str
+) -> None:
     """Le masquage couvre les écritures usuelles d'un secret dans un message."""
     assaini = assainir_le_message(message)
 
-    assert FAUX_JETON not in assaini
+    assert secret not in assaini
     assert "***" in assaini
+
+
+@pytest.mark.parametrize(
+    ("message", "secret"),
+    [
+        # Jeton Dropbox nu : aucune clé, aucun en-tête autour de lui.
+        (FAUX_JETON, FAUX_JETON),
+        # Mot-clé séparé du jeton par une simple espace.
+        (f"invalid token {FAUX_JETON}", FAUX_JETON),
+        # URL de session reprenable Google : elle vaut jeton de reprise.
+        (
+            "HTTP 400 sur https://www.googleapis.com/upload/drive/v3/files"
+            f"?uploadType=resumable&upload_id={FAUX_UPLOAD_ID}",
+            FAUX_UPLOAD_ID,
+        ),
+        # Jeton encodé, sans mot-clé ni forme reconnaissable.
+        (f"le fournisseur a refusé {FAUX_JETON_BASE64}", FAUX_JETON_BASE64),
+        # Formes propres à Google, nues elles aussi.
+        (f"credentials {FAUX_JETON_GOOGLE} rejected", FAUX_JETON_GOOGLE),
+        (
+            f"bad refresh token {FAUX_RAFRAICHISSEMENT_GOOGLE}",
+            FAUX_RAFRAICHISSEMENT_GOOGLE,
+        ),
+    ],
+)
+def test_assainir_le_message_masque_un_jeton_nu(message: str, secret: str) -> None:
+    """Un jeton sans clé adjacente est masqué par sa forme (audit sécurité)."""
+    assaini = assainir_le_message(message)
+
+    assert secret not in assaini
+    assert "***" in assaini
+
+
+def test_assainir_le_message_masque_une_adresse_electronique() -> None:
+    """Une adresse citée par le fournisseur n'entre pas dans l'historique."""
+    assaini = assainir_le_message("compte jean.dupont@example.com non autorisé")
+
+    assert "jean.dupont" not in assaini
+    assert "example.com" not in assaini
+    assert assaini == "compte *** non autorisé"
+
+
+def test_assainir_le_message_garde_une_url_lisible() -> None:
+    """Le filtre générique coupe aux `/` et `=` : l'URL reste diagnosticable."""
+    assaini = assainir_le_message(
+        "HTTP 400 sur https://www.googleapis.com/upload/drive/v3/files"
+        f"?uploadType=resumable&upload_id={FAUX_UPLOAD_ID}"
+    )
+
+    assert "www.googleapis.com/upload/drive/v3/files" in assaini
+    assert "uploadType=resumable" in assaini
 
 
 def test_assainir_le_message_borne_la_longueur() -> None:
@@ -451,6 +511,24 @@ def test_assainir_le_message_borne_la_longueur() -> None:
     assaini = assainir_le_message("x" * (LONGUEUR_MAX_ERREUR * 3))
 
     assert len(assaini) == LONGUEUR_MAX_ERREUR
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Un mot ordinaire derrière un mot-clé : le masquer ne protégerait rien
+        # et rendrait les messages français illisibles.
+        "le token a expiré",
+        "le code de la sauvegarde est invalide",
+        # Suites longues d'une seule casse et sans chiffre : des mots, pas des
+        # secrets — le filtre générique ne doit pas les toucher.
+        "anticonstitutionnellement impossible",
+        "ERREUR IRRECUPERABLE COTE FOURNISSEUR",
+    ],
+)
+def test_assainir_le_message_ne_masque_pas_le_francais(message: str) -> None:
+    """Le masquage large s'arrête aux mots : le message reste lisible."""
+    assert assainir_le_message(message) == message
 
 
 def test_assainir_le_message_conserve_un_message_ordinaire() -> None:

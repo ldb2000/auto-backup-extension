@@ -114,34 +114,78 @@ LONGUEUR_MAX_ERREUR = 255
 # Message de repli quand un échec est signalé sans cause exploitable.
 ERREUR_INCONNUE = "cause inconnue"
 
+# Longueur à partir de laquelle une suite de caractères sans espace est tenue
+# pour un secret potentiel plutôt que pour un mot : aucun mot de la langue
+# courante n'atteint cette longueur en mêlant chiffres, casses ou `_+/=`.
+LONGUEUR_MIN_SUITE_OPAQUE = 20
+
 # Clés dont la valeur est masquée dans un message d'erreur. Les plus longues
 # viennent en premier : l'alternative d'une expression régulière est évaluée de
 # gauche à droite, et `token` ne doit pas l'emporter sur `refresh_token`.
+# `upload_id` en fait partie : l'identifiant d'une session de téléversement
+# reprenable (Google Drive) vaut jeton de reprise pour qui le connaît — l'URL de
+# session suffit à écrire dans le compte, sans autre justificatif.
 _CLES_SENSIBLES = (
     "refresh_token",
-    "access_token",
-    "id_token",
     "client_secret",
+    "authorization",
+    "access_token",
     "client_id",
+    "upload_id",
+    "id_token",
+    "password",
     "api_key",
     "apikey",
-    "authorization",
-    "password",
     "secret",
     "token",
     "code",
 )
 
+# Bornes d'un mot-clé sensible. `\b` ne conviendrait pas : `_` est un caractère
+# de mot, et `authorization_code=...` doit être reconnu sur sa clé `code`.
+_DEBUT_DE_CLE = r"(?<![A-Za-z0-9])"
+_FIN_DE_CLE = r"(?![A-Za-z0-9])"
+
+# Caractères qu'on ne trouve pas dans un mot, mais bien dans un jeton encodé.
+_CARACTERES_DE_JETON = "_+"
+
+# Une adresse électronique dans un message de fournisseur (« compte
+# jean.dupont@example.com non autorisé ») est une donnée personnelle : elle n'a
+# pas sa place dans l'historique d'états.
+_MOTIF_EMAIL = re.compile(r"(?i)[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+
 # « Bearer <jeton> », « Basic <identifiants> » : l'en-tête d'autorisation tel
 # qu'un fournisseur le renvoie parfois dans son message d'erreur.
 _MOTIF_PORTEUR = re.compile(r"(?i)\b(bearer|basic)\s+\S+")
 
-# `access_token=...`, `"client_secret": "..."`, `token: ...` : la valeur est
-# masquée, la clé conservée pour que le message reste diagnosticable.
+# `access_token=...`, `"client_secret": "..."`, `token: ...`, mais aussi
+# `invalid token sl.xxx` : la valeur est masquée, la clé conservée pour que le
+# message reste diagnosticable.
 _MOTIF_AFFECTATION = re.compile(
-    r"(?i)(?P<cle>\b(?:" + "|".join(_CLES_SENSIBLES) + r")\b)"
-    r"(?P<separateur>\"?\s*[:=]\s*)"
+    r"(?i)(?P<cle>" + _DEBUT_DE_CLE + r"(?:" + "|".join(_CLES_SENSIBLES) + r")"
+    r"" + _FIN_DE_CLE + r")"
+    r"(?P<separateur>\"?\s*[:=]\s*|\s+)"
     r"(?P<valeur>\"[^\"]*\"|'[^']*'|[^\s,;&)\]}]+)"
+)
+
+# Jetons reconnaissables à leur seule forme, donc masqués même nus, sans clé ni
+# en-tête autour : un fournisseur écrit volontiers « invalid access token
+# sl.B1a2… » ou recopie l'URL de session qui porte le jeton.
+_MOTIFS_DE_JETON = (
+    re.compile(r"sl\.[A-Za-z0-9_-]{15,}"),  # Dropbox, jeton court ou durable
+    re.compile(r"ya29\.[A-Za-z0-9_-]{10,}"),  # Google, jeton d'accès
+    re.compile(r"1//[A-Za-z0-9_-]{10,}"),  # Google, jeton de rafraîchissement
+)
+
+# Dernier filet : toute suite opaque assez longue pour être un secret. `/`, `=`
+# et `.` sont exclus du jeu de caractères, donc coupent la suite : sans quoi un
+# chemin d'URL entier (« …googleapis.com/upload/drive/v3/files ») serait masqué
+# et le message perdrait tout intérêt de diagnostic. Un secret en base64
+# *standard* qui contiendrait un `/` n'est donc masqué que par tronçons ; les
+# jetons des fournisseurs visés sont en base64url (`-` et `_`), où le cas ne se
+# présente pas, et les formes connues sont déjà couvertes plus haut.
+_MOTIF_SUITE_OPAQUE = re.compile(
+    r"[A-Za-z0-9_+-]{" + str(LONGUEUR_MIN_SUITE_OPAQUE) + r",}"
 )
 
 
@@ -149,36 +193,82 @@ _MOTIF_AFFECTATION = re.compile(
 def assainir_le_message(message: object) -> str:
     """Rend un message d'erreur publiable en attribut d'entité.
 
-    Deux traitements, dans cet ordre :
+    Le masquage procède par passes successives, de la plus précise à la plus
+    générale — un fournisseur peut recopier la requête refusée, en-tête
+    `Authorization` compris, dans son message d'erreur, et l'attribut est
+    visible de toute personne ayant accès à l'instance, puis conservé par
+    l'enregistreur :
 
-    1. **masquage** des jetons et secrets — un fournisseur peut recopier la
-       requête refusée, en-tête `Authorization` compris, dans son message
-       d'erreur ; l'attribut est visible de toute personne ayant accès à
-       l'instance et l'enregistreur le conserve ;
-    2. **troncature** à `LONGUEUR_MAX_ERREUR` caractères, pour qu'un message
-       verbeux n'alourdisse pas chaque état historisé.
+    1. **adresses électroniques** : donnée personnelle, masquée entièrement ;
+    2. **en-têtes** `Bearer` et `Basic` ;
+    3. **affectations** d'une clé sensible (`access_token=…`,
+       `"client_secret": "…"`, `upload_id=…`), y compris quand le fournisseur
+       écrit simplement « invalid token sl.xxx », séparateur espace ;
+    4. **formes connues** de jetons, masqués même nus : Dropbox (`sl.`), Google
+       (`ya29.`, `1//`) ;
+    5. **suites opaques** d'au moins `LONGUEUR_MIN_SUITE_OPAQUE` caractères qui
+       ne ressemblent pas à un mot (chiffres, casses mêlées, `_+/=`).
+
+    Vient enfin la **troncature** à `LONGUEUR_MAX_ERREUR` caractères, pour qu'un
+    message verbeux n'alourdisse pas chaque état historisé.
 
     Le masquage est volontairement large : il vaut mieux masquer un code
     d'erreur HTTP (« code=500 » devient « code=*** ») que laisser fuir un jeton
-    de rafraîchissement.
+    de rafraîchissement. Il épargne en revanche le mot ordinaire qui suit un
+    mot-clé séparé par une simple espace (« token expiré », « code de la
+    sauvegarde ») : le masquer n'aurait rien protégé et aurait rendu illisibles
+    les messages en français.
     """
     texte = (str(message).strip() if message is not None else "") or ERREUR_INCONNUE
+    texte = _MOTIF_EMAIL.sub(VALEUR_MASQUEE, texte)
     texte = _MOTIF_PORTEUR.sub(
         lambda trouve: f"{trouve.group(1)} {VALEUR_MASQUEE}", texte
     )
     texte = _MOTIF_AFFECTATION.sub(_masquer_l_affectation, texte)
+    for motif in _MOTIFS_DE_JETON:
+        texte = motif.sub(VALEUR_MASQUEE, texte)
+    texte = _MOTIF_SUITE_OPAQUE.sub(_masquer_la_suite_opaque, texte)
     if len(texte) > LONGUEUR_MAX_ERREUR:
         texte = texte[: LONGUEUR_MAX_ERREUR - 1].rstrip() + "…"
     return texte
 
 
+def _est_un_mot_ordinaire(valeur: str) -> bool:
+    """Vrai si la valeur est un mot de la langue, jamais un secret."""
+    return valeur.isalpha() and len(valeur) < LONGUEUR_MIN_SUITE_OPAQUE
+
+
+def _ressemble_a_un_secret(valeur: str) -> bool:
+    """Vrai si une suite longue a l'allure d'un secret plutôt que d'un mot.
+
+    Un mot, même long et composé, reste d'une seule casse et sans chiffre ;
+    un jeton encodé mêle presque toujours chiffres, majuscules et minuscules,
+    ou porte les caractères propres au base64 (`_`, `+`, `/`, `=`).
+    """
+    return (
+        any(caractere.isdigit() for caractere in valeur)
+        or any(caractere in _CARACTERES_DE_JETON for caractere in valeur)
+        or (not valeur.islower() and not valeur.isupper())
+    )
+
+
 def _masquer_l_affectation(trouve: re.Match[str]) -> str:
     """Remplace la valeur d'une clé sensible, en gardant la forme du message."""
     valeur = trouve["valeur"]
+    if trouve["separateur"].isspace() and _est_un_mot_ordinaire(valeur):
+        # « token expiré », « code de la sauvegarde » : le mot qui suit le
+        # mot-clé n'est pas la valeur d'un secret, seulement du français.
+        return trouve[0]
     guillemet = valeur[0] if valeur[:1] in {'"', "'"} else ""
     return (
         f"{trouve['cle']}{trouve['separateur']}{guillemet}{VALEUR_MASQUEE}{guillemet}"
     )
+
+
+def _masquer_la_suite_opaque(trouve: re.Match[str]) -> str:
+    """Masque une suite longue, sauf si elle n'est qu'un mot interminable."""
+    valeur = trouve[0]
+    return VALEUR_MASQUEE if _ressemble_a_un_secret(valeur) else valeur
 
 
 @dataclass(slots=True)
