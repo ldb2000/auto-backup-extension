@@ -435,6 +435,28 @@ async def test_une_petite_sauvegarde_part_en_une_seule_requete(
     }
 
 
+async def test_un_nom_accentue_reste_transportable_par_un_en_tete(
+    destination: DropboxDestination, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """L'argument voyage dans un en-tête HTTP : il doit rester en ASCII pur.
+
+    Un nom de sauvegarde accentué est parfaitement légitime ; recopié tel quel
+    dans `Dropbox-API-Arg`, il produirait un en-tête non ASCII que le transport
+    refuse. Dropbox attend précisément un JSON échappé.
+    """
+    simuler_le_dossier(aioclient_mock)
+    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+
+    await televerser(destination, nom="Sauvegarde d'été")
+
+    brut = appels(aioclient_mock, URL_ENVOI)[0][3]["Dropbox-API-Arg"]
+    assert brut.isascii()
+    # Le nom reste pourtant intact une fois le JSON décodé.
+    assert (
+        json.loads(brut)["path"] == f"{DOSSIER_DISTANT}/Sauvegarde d'été [{SLUG}].tar"
+    )
+
+
 async def test_le_seuil_de_la_session_est_celui_de_l_api() -> None:
     """Le basculement se fait bien à 150 Mo, et le fragment est un multiple."""
     assert SEUIL_ENVOI_SIMPLE == 150 * 1024 * 1024
