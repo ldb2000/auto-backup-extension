@@ -133,6 +133,59 @@ Laissez le champ **Origines JavaScript autorisées** vide : Auto Backup n'en uti
 L'adresse du compte autorisé est conservée avec la destination, ce qui permet de savoir plus
 tard quel compte Google elle utilise.
 
+## Téléversement des sauvegardes
+
+Une fois la destination ajoutée, il suffit d'indiquer son nom (ou son identifiant) dans l'option
+`upload_to` d'un service de sauvegarde :
+
+```yaml
+service: auto_backup.backup
+data:
+  name: Sauvegarde quotidienne
+  upload_to: Google Drive – Camille Martin
+```
+
+La sauvegarde est créée localement, puis envoyée en tâche de fond. Elle n'est jamais chargée
+entière en mémoire, ni recopiée sur le disque : elle part par fragments de 8 Mio, en mode
+« resumable » — le mode d'envoi que Google prévoit pour les gros fichiers.
+
+### Où arrivent les fichiers
+
+Dans le **dossier distant** saisi au moment de l'ajout de la destination (`Sauvegardes/Home
+Assistant`, par exemple). Ce dossier est **créé par Auto Backup** au premier téléversement, puis
+réutilisé. C'est une conséquence directe de la portée `drive.file` : l'intégration ne voit que les
+fichiers qu'elle a créés elle-même.
+
+> **Un dossier du même nom que vous auriez créé à la main ne sera donc pas réutilisé** : Auto
+> Backup ne peut pas le voir, et créera le sien à côté. Si vous déplacez ou renommez le dossier
+> depuis Drive, il reste retrouvé (son identifiant, lui, ne change pas). Si vous le **supprimez**,
+> un nouveau dossier est créé au téléversement suivant.
+
+Chaque fichier est nommé `<nom de la sauvegarde> [<slug>].tar` — par exemple
+`Sauvegarde quotidienne [a1b2c3d4].tar`. Le slug est l'identifiant de la sauvegarde côté Home
+Assistant : il évite que deux sauvegardes portant le même nom ne se recouvrent, ce qui est le cas
+courant sur Home Assistant Core, où les sauvegardes sans nom explicite s'appellent toutes
+`Core <version>`.
+
+Les fichiers portent aussi un **marqueur d'origine** invisible (une propriété privée
+`auto_backup`), qui permettra au listage et à la purge distante de ne jamais toucher à vos propres
+documents.
+
+### Si le transfert rencontre un incident
+
+- **limitation de débit ou erreur passagère de Google** : l'envoi est retenté jusqu'à trois fois,
+  avec un délai croissant, et **reprend exactement là où il s'était arrêté** — les fragments déjà
+  reçus ne sont pas renvoyés ;
+- **espace de stockage épuisé** : l'envoi s'arrête immédiatement (réessayer n'y changerait rien) et
+  l'événement `auto_backup.upload_failed` porte le message correspondant ;
+- **autorisation révoquée** : la destination est signalée à ré-autoriser, comme décrit plus bas ;
+- **dans tous les cas, la sauvegarde locale reste intacte**, et les autres destinations demandées
+  sont traitées normalement.
+
+Le **délai maximum** accordé à un téléversement se règle dans les options de l'intégration, entrée
+« Réglages du téléversement » (1800 secondes par défaut). Un envoi interrompu par un redémarrage de
+Home Assistant n'est pas repris : la sauvegarde est simplement à renvoyer.
+
 ## En cas d'échec
 
 | Message | Cause probable | Correction |
@@ -173,13 +226,14 @@ supprimées** : retirez-les à la main si vous le souhaitez. Pensez aussi à ret
 
 ## Ce qui n'est pas encore disponible
 
-Cette page décrit la **connexion** du compte. Le dépôt effectif des sauvegardes et la rétention
-distante arrivent avec les issues suivantes :
+La connexion du compte et le **dépôt des sauvegardes** sont disponibles. Restent à venir :
 
-- [#14](https://github.com/ldb2000/auto-backup-extension/issues/14) — téléverser une sauvegarde
-  sur Google Drive ;
 - [#15](https://github.com/ldb2000/auto-backup-extension/issues/15) — lister et supprimer les
-  sauvegardes distantes.
+  sauvegardes déjà déposées sur Drive ;
+- [#9](https://github.com/ldb2000/auto-backup-extension/issues/9) — appliquer la rétention
+  distante (nombre de sauvegardes conservées, durée de conservation) configurée sur la destination.
 
-Une destination connectée aujourd'hui sera utilisée automatiquement dès que ces issues seront
-livrées : rien ne sera à reconfigurer.
+En attendant, les sauvegardes déposées s'accumulent dans le dossier distant : surveillez l'espace
+disponible de votre compte Google, ou faites le ménage à la main de temps en temps.
+
+Une destination configurée aujourd'hui profitera de ces ajouts sans rien reconfigurer.

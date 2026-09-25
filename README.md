@@ -21,17 +21,16 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
 capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-**Actuellement disponible : connexion des comptes cloud et mécanique de téléversement.**
-L'option `upload_to` des services de sauvegarde envoie la sauvegarde créée vers les destinations
-configurées (voir « Téléversement des sauvegardes » ci-dessous) ; l'envoi effectif chez chaque
-fournisseur et la rétention distante arrivent dans les versions suivantes.
+**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement et dépôt
+effectif sur Google Drive.** L'option `upload_to` des services de sauvegarde envoie la sauvegarde
+créée vers les destinations configurées (voir « Téléversement des sauvegardes » ci-dessous).
 
 - **Dropbox** : la **connexion du compte est disponible** — voir le guide
   [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; le téléversement et la purge
   distante arrivent avec les issues #11 et #12.
-- **Google Drive** : la **connexion du compte est disponible** — voir le guide
-  [Connecter Google Drive](docs/destinations/google-drive.md) ; le téléversement et la purge
-  distante arrivent avec les issues #14 et #15.
+- **Google Drive** : la **connexion du compte et le téléversement sont disponibles** — voir le
+  guide [Connecter Google Drive](docs/destinations/google-drive.md) ; le listage et la purge
+  distante arrivent avec les issues #15 et #9.
 
 La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
@@ -76,6 +75,12 @@ jamais la sauvegarde locale.
 Le **délai maximum d'un téléversement** est configurable par l'entrée « Réglages du
 téléversement » du menu d'options de l'intégration (délai par défaut : 1800 secondes, soit
 30 minutes). Cette valeur se relit à chaque envoi et s'applique donc sans redémarrage.
+
+**Google Drive.** Le dépôt utilise l'envoi « resumable » de l'API Drive : la sauvegarde part par
+fragments de 8 Mio, sans jamais être chargée entière en mémoire ni recopiée sur le disque, et une
+erreur passagère (limitation de débit, erreur serveur) est réessayée avec un délai croissant. Le
+dossier distant est créé par l'intégration au premier envoi, puis réutilisé ; chaque fichier est
+nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto Backup.
 
 **Événements** : trois événements sont émis pendant le téléversement :
 - `auto_backup.upload_start` : le téléversement vers une destination commence ;
