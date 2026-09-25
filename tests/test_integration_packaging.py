@@ -102,6 +102,7 @@ ETAPES_D_OPTIONS_DU_FORK = (
     "supprimer_destination",
     "reglages_televersement",
     "reglages_notifications",
+    "confirmer_changement_de_compte",
 )
 LANGUES_ETENDUES = ("fr", "en")
 
