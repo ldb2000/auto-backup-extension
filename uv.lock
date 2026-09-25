@@ -352,7 +352,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=24.1.0" },
-    { name = "homeassistant", specifier = ">=2025.1.0" },
+    { name = "homeassistant", specifier = ">=2026.3.0" },
 ]
 
 [package.metadata.requires-dev]
