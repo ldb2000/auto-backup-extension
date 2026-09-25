@@ -49,7 +49,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
-| `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs, déclenchements (téléversement et service `purge`), registre persistant. |
+| `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
@@ -271,6 +271,22 @@ Quatre points à connaître :
    remplace `gestionnaire._handler.remove_backup` par un `AsyncMock` : l'appel du service doit
    déclencher la suppression locale (et l'événement `auto_backup.purged_backups`) **et** la
    suppression distante.
+5. **Un appel qui ne revient pas se simule, il ne s'attend pas.** Les appels réseau de la purge
+   sont bornés par `DEFAULT_PURGE_TIMEOUT` (300 s). Pour éprouver ce filet de sécurité, le délai
+   est ramené à quelques millisecondes par l'aide `_delai_de_purge()` du fichier de tests, et
+   c'est le fournisseur factice qui simule le fournisseur muet — `attente_de_listage` pour le
+   listage, `attentes_de_suppression[remote_id]` pour une suppression précise :
+
+   ```python
+   destination.attentes_de_suppression["figee"] = 30
+
+   with _delai_de_purge(0.01):
+       supprimes = await _coordinateur(hass).async_purger_toutes()
+   ```
+
+   L'attente réelle est donc de quelques millisecondes, pas de 300 secondes. Le même principe
+   vaut pour le téléversement, où c'est l'option `upload_timeout` qui est réglée à `0.01` et
+   `attente_secondes` qui fait patienter.
 
 ## Tester un fournisseur réel
 

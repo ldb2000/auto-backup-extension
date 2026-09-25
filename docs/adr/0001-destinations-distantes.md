@@ -681,6 +681,33 @@ là — pour être retentée à la purge suivante. Une sauvegarde déjà absente
 entrée quitte le registre pour ne pas être retentée indéfiniment. L'événement
 `auto_backup.remote_purge` n'est émis que si quelque chose a réellement disparu.
 
+### Le filet de sécurité : borner les appels réseau de la purge
+
+Une clause `except` rattrape une erreur, pas une absence de réponse. Un appel qui **pend** —
+socket ouverte sans octet qui arrive, redirection en boucle, fournisseur en incident —
+n'atteindrait jamais le `except` : la purge de cette destination ne se terminerait pas, et le
+verrou `asyncio.Lock` qui sérialise les purges resterait pris. L'écouteur d'`upload_successful`
+comme le service `auto_backup.purge` s'arrêteraient alors sans erreur ni fin. Tant qu'aucun
+fournisseur réel n'existait, le fournisseur factice répondait toujours et le risque restait
+théorique ; il devient réel avec Dropbox (#12) et Google Drive (#15).
+
+**Décision : chaque appel réseau du coordinateur est enveloppé dans `asyncio.timeout()`**, comme
+l'est déjà le téléversement (`upload.py`) : le listage d'une destination, et **chaque**
+suppression prise séparément — une suppression qui pend ne consomme donc pas le budget des
+suivantes. Un dépassement est traité exactement comme les autres échecs décrits ci-dessus : il
+est journalisé, la destination est sautée si c'est le listage qui a expiré, l'entrée reste au
+registre si c'est une suppression, et la purge continue.
+
+La valeur, `DEFAULT_PURGE_TIMEOUT` (300 s), est **une constante et non une option**. Deux
+raisons : la purge n'a aucune étape de réglages dans l'interface — celle du fork ne règle que le
+téléversement (`upload_timeout`) et en ajouter une relève de #8/#17 —, et surtout ce délai n'est
+pas censé se déclencher. Le contrat de `RemoteDestination` (`async_list_backups`,
+`async_delete_backup`) demande désormais explicitement à **chaque fournisseur de borner
+lui-même ses appels**, bien plus finement : délai de la requête HTTP, nombre de pages
+parcourues, nombre de tentatives. Le coordinateur ne pose qu'un garde-fou grossier, dernier
+recours si un fournisseur a oublié le sien. Une valeur généreuse est donc la bonne : trop
+courte, elle couperait un listage légitimement lent sur un dossier bien rempli.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :

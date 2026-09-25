@@ -87,7 +87,9 @@ caractère près.
   ré-authentification — puis `CONF_PROVIDER_DATA` (issue #10) et, à la fin du bloc, les
   constantes de la rétention distante (issue #9) : l'import de type des deux classes de
   `destinations/retention.py`, `STORAGE_KEY_REMOTE_BACKUPS`, `STORAGE_VERSION_REMOTE_BACKUPS`,
-  `DATA_REMOTE_BACKUPS`, `DATA_REMOTE_PURGE`, `ATTR_CREATED_AT` et `ATTR_REMOTE_IDS`.
+  `DATA_REMOTE_BACKUPS`, `DATA_REMOTE_PURGE`, `ATTR_CREATED_AT`, `ATTR_REMOTE_IDS` et
+  `DEFAULT_PURGE_TIMEOUT` — ce dernier borne les appels réseau de la purge et n'est
+  **pas** inscrit dans `CLES_DU_FORK` : ce n'est pas une option d'entrée, rien ne le persiste.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
