@@ -81,6 +81,48 @@ téléversement » du menu d'options de l'intégration (délai par défaut : 180
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`).
 
+### Entités d'état des destinations
+
+Aux capteurs upstream, qui décrivent les sauvegardes **locales**, s'ajoutent **trois entités par
+destination configurée**. Elles sont rattachées au même appareil « Auto Backup » que les entités
+d'origine et portent le nom de leur destination, ce qui permet de suivre plusieurs destinations
+côte à côte dans un tableau de bord.
+
+| Entité | Type | Ce qu'elle montre | Attributs |
+| --- | --- | --- | --- |
+| « *Destination* : dernier téléversement réussi » | `sensor`, horodatage | date et heure du dernier envoi réussi vers cette destination | — |
+| « *Destination* : sauvegardes distantes » | `sensor`, mesure | nombre de sauvegardes présentes chez le fournisseur | — |
+| « *Destination* : problème de téléversement » | `binary_sensor`, `problem` | actif tant qu'aucun envoi n'a réussi depuis le dernier échec | `last_error`, `last_failed_slug`, `last_failed_at` |
+
+Un téléversement réussi horodate le capteur de succès, incrémente le compteur et éteint le
+capteur de problème ; un échec l'allume et renseigne `last_error` avec un message lisible, dont
+les jetons et les secrets sont masqués avant tout affichage. Le capteur de problème se prête
+directement à une automatisation — l'identifiant d'entité exact est construit à partir du nom de
+la destination, relevez-le dans les outils de développement :
+
+```yaml
+trigger:
+  - platform: state
+    entity_id: binary_sensor.auto_backup_dropbox_perso_probleme_de_televersement
+    to: "on"
+    for: "01:00:00"
+action:
+  - service: notify.persistent_notification
+    data:
+      message: >-
+        Sauvegarde distante en échec :
+        {{ state_attr(trigger.entity_id, 'last_error') }}
+```
+
+L'identifiant unique d'une entité vaut `<entrée>_<destination>_<type>` : ajouter une destination
+crée ses entités sans redémarrage, en supprimer une retire les siennes. Le dernier succès, le
+compteur et la dernière erreur sont restaurés après un redémarrage de Home Assistant.
+
+Le nombre de sauvegardes distantes est aujourd'hui un **compteur** : il suit les téléversements
+réussis et les purges distantes annoncées par l'événement `auto_backup.remote_purge`. La
+rétention distante (issue #9) tiendra l'inventaire réel des sauvegardes déposées et deviendra
+alors la source de vérité de ce capteur.
+
 ## Développement
 
 Le projet utilise [`uv`](https://docs.astral.sh/uv/) et Python 3.14 (version épinglée dans

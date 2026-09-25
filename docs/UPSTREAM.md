@@ -35,8 +35,9 @@ Le code propre au fork vit dans le sous-paquet `custom_components/auto_backup/de
 absent de l'upstream : contrat commun des destinations distantes, types de données, erreurs
 typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis autorisation
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
-d'interface du flux d'options (`flow.py`, issue #7), enfin l'orchestration du téléversement
-après création (`destinations/upload.py`, issue #8). Les fournisseurs réellement livrés vivent
+d'interface du flux d'options (`flow.py`, issue #7), l'orchestration du téléversement
+après création (`destinations/upload.py`, issue #8), enfin les entités d'état d'une
+destination (`destinations/entities.py`, issue #16). Les fournisseurs réellement livrés vivent
 dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10 — et sont
 enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé par
 `async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
@@ -74,7 +75,11 @@ caractère près.
   `DEFAULT_UPLOAD_TIMEOUT`, enfin `CLES_DU_FORK` — la liste des options d'entrée propres au
   fork, décrite plus bas. Viennent ensuite les constantes d'autorisation OAuth2 de l'issue #7 —
   dont `IDENTIFIANT_PROVISOIRE`, partagé par le flux d'ajout et le signalement de
-  ré-authentification — et, à la fin du bloc, `CONF_PROVIDER_DATA` (issue #10).
+  ré-authentification — puis `CONF_PROVIDER_DATA` (issue #10) et, à la fin du bloc, les
+  constantes des entités d'état (issue #16) : l'import de type
+  `CoordinateurEntitesDestinations`, la clé `DATA_DESTINATION_ENTITIES`, les attributs
+  `ATTR_LAST_ERROR`, `ATTR_LAST_FAILED_SLUG` et `ATTR_LAST_FAILED_AT`, et les champs
+  `ATTR_DELETED` et `ATTR_REMAINING` lus dans l'événement `auto_backup.remote_purge`.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
@@ -87,6 +92,15 @@ caractère près.
   gestionnaire de service, `async_prepare_upload()` **avant** la création de la sauvegarde puis
   `async_release_upload()` dans un `finally`. Tout cela est ajouté, à une ré-indentation près,
   décrite juste en dessous.
+- `custom_components/auto_backup/sensor.py` et
+  `custom_components/auto_backup/binary_sensor.py` : trois lignes ajoutées par l'issue #16 à
+  chacun — l'import d'`async_setup_destination_sensors()` (respectivement
+  `async_setup_destination_binary_sensors()`) et son appel **à la fin** de leur
+  `async_setup_entry()`, après `async_add_entities([...])`. Les entités upstream sont créées
+  en premier, celles du fork ensuite ; aucune ligne upstream n'est supprimée, modifiée ni
+  ré-indentée, et aucune classe upstream n'est touchée. Toute la logique — état par
+  destination, écoute des événements distants, création et retrait des entités quand les
+  options changent — vit dans `destinations/entities.py`.
 - `custom_components/auto_backup/services.yaml` : un champ `upload_to` ajouté aux services
   `backup`, `backup_full` et `backup_partial` (défini une fois avec l'ancre YAML `&upload_to`,
   référencé deux fois), à la fin de la liste des champs de chacun. Aucun champ upstream n'est
@@ -117,7 +131,13 @@ caractère près.
   `reautoriser_destination`, `supprimer_destination`, plus un `title` pour l'étape `init`.
   L'issue #8 y ajoute l'étape `reglages_televersement`, son entrée de menu et l'erreur
   `options.error.delai_invalide` ; l'issue #10 y ajoute `options.abort.autorisation_annulee`,
-  en **fin** du bloc du fork.
+  en **fin** du bloc du fork. L'issue #16 ajoute une section `entity` (clés
+  `entity.sensor.destination_dernier_televersement`,
+  `entity.sensor.destination_sauvegardes_distantes` et
+  `entity.binary_sensor.destination_probleme`), insérée elle aussi **avant** les clés
+  upstream. Chacun de ces noms porte le marqueur `{destination}`, remplacé à l'exécution par
+  le nom de la destination (`Entity.translation_placeholders`) : c'est ce qui distingue les
+  entités de deux destinations partageant le même device.
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
@@ -197,9 +217,9 @@ Deux conséquences, valables pour toute option que le fork ajoutera :
 
 - les fichiers réécrits (`manifest.json`) sortent de la comparaison ligne à ligne mais sont
   contrôlés par leurs propres tests ;
-- les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `services.yaml`,
-  `translations/fr.json`, `translations/en.json`) sont comparés à l'upstream : le test échoue
-  si une ligne upstream y a été supprimée ou modifiée ;
+- les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `sensor.py`,
+  `binary_sensor.py`, `services.yaml`, `translations/fr.json`, `translations/en.json`) sont
+  comparés à l'upstream : le test échoue si une ligne upstream y a été supprimée ou modifiée ;
 - les seules divergences tolérées dans ces fichiers sont les ré-indentations énumérées dans
   `REINDENTATIONS_TOLEREES` (aujourd'hui la seule ligne ci-dessus) : la ligne doit se retrouver
   telle quelle dans le fichier du fork, au décalage d'indentation près, et être citée mot pour

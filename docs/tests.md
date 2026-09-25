@@ -49,6 +49,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
+| `tests/test_entites_destinations.py` | Entités d'état d'une destination : création, succès, échec, masquage des secrets, compteur, restauration après redémarrage, ajout et suppression à chaud. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
@@ -94,8 +95,17 @@ Le fichier `tests/test_entities.py` valide que la liste complète des entités c
 l'intégration correspond à celle attendue. Celle-ci est définie en constante `ENTITES_ATTENDUES`
 au début du fichier, organisée par domaine de plateforme (`sensor`, `binary_sensor`, `button`).
 
-Quand des entités sont ajoutées ou supprimées à l'intégration, cette liste doit être mise à jour
-en conséquence, sinon les tests échoueront. Il en est de même pour l'ordre ou l'identifiant
+Depuis l'issue #16, cette liste est **déclinée en deux états**, car le fork ajoute des entités
+pour chaque destination distante configurée :
+
+- **sans destination**, seules les entités upstream d'`ENTITES_ATTENDUES` existent — c'est ce
+  que vérifie `test_les_entites_upstream_sont_creees` ;
+- **avec une destination**, trois entités s'y ajoutent, dont les suffixes d'identifiant unique
+  sont listés dans `SUFFIXES_PAR_DESTINATION` et l'identifiant complet reconstruit par
+  `entites_attendues_avec_destination()` (`<entry_id>_<destination_id>_<suffixe>`).
+
+Quand des entités sont ajoutées ou supprimées à l'intégration, ces listes doivent être mises à
+jour en conséquence, sinon les tests échoueront. Il en est de même pour l'ordre ou l'identifiant
 unique (`unique_id`) de chaque entité.
 
 ## Tester une destination distante
@@ -234,6 +244,53 @@ Cinq points méritent l'attention en écrivant un nouveau test :
 
    `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
 
+## Tester les entités d'une destination
+
+`tests/test_entites_destinations.py` couvre l'issue #16 : les deux capteurs et le capteur
+binaire créés pour chaque destination configurée. Deux fixtures **locales au fichier** montent
+l'intégration avec une puis deux destinations factices
+(`entree_avec_destination`, `entree_avec_deux_destinations`) ; elles ne sont pas dans
+`conftest.py`, car elles n'ont d'intérêt que pour ces entités.
+
+Aucun téléversement réel n'est joué : les événements sont émis **directement sur le bus**,
+exactement comme le font le coordinateur de téléversement (#8) et la rétention distante (#9).
+
+```python
+_emettre_echec(hass, "destination_test", erreur=f"401 Bearer {FAUX_JETON}")
+await hass.async_block_till_done()
+
+probleme = _etat(hass, entree, Platform.BINARY_SENSOR, SUFFIXE_PROBLEME)
+assert probleme.state == STATE_ON
+assert FAUX_JETON not in probleme.attributes[ATTR_LAST_ERROR]
+```
+
+Cinq points méritent l'attention en écrivant un nouveau test :
+
+1. **`await hass.async_block_till_done()` après chaque émission.** Le coordinateur prévient les
+   entités par un signal de dispatcher ; sans cette attente, l'état lu est celui d'avant
+   l'événement.
+2. **Une entité se retrouve par son identifiant unique**, jamais par un `entity_id` deviné :
+   `identifiant_unique(entry_id, destination_id, suffixe)` puis
+   `er.async_get(hass).async_get_entity_id(...)`, ce qu'enveloppent les aides `_entity_id()` et
+   `_etat()` du fichier.
+3. **L'ajout et la suppression à chaud passent par `async_persist_destinations()`**, qui réécrit
+   les options de l'entrée : c'est l'écouteur d'options qui crée ou retire les entités, sans
+   rechargement de l'intégration. Une destination supprimée doit disparaître du **registre**,
+   pas seulement de la machine à états.
+4. **Le redémarrage se simule par `hass.config_entries.async_reload()`** : `RestoreSensor` et
+   `RestoreEntity` retrouvent le dernier état publié, l'horodatage du dernier succès, le
+   compteur et les attributs d'erreur compris.
+5. **Aucune valeur réelle dans les tests de masquage.** Le jeton employé est la constante
+   inventée `FAUX_JETON` ; un test vérifie qu'il ne ressort ni dans l'état, ni dans ses
+   attributs, et `assainir_le_message()` est éprouvée séparément sur chaque forme
+   (`Bearer ...`, `access_token=...`, `"client_secret": "..."`).
+
+Le nombre de sauvegardes distantes est un compteur alimenté par les événements. La rétention
+distante (#9) fournira la source de vérité : elle s'enregistre par
+`async_enregistrer_source_des_comptes(hass, source)`, et les tests couvrent les trois cas —
+source absente (repli sur le compteur), source prioritaire, source défaillante (repli sans
+casser le capteur).
+
 ## Tester un fournisseur réel
 
 Depuis l'issue #10, un fournisseur est livré : Dropbox
@@ -288,7 +345,8 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
 entités), le socle des destinations distantes (contrat, registre, persistance), leur
-autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression) et le
-téléversement après création (lecture en flux, événements, échecs, délai maximum). Les
+autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression), le
+téléversement après création (lecture en flux, événements, échecs, délai maximum) et les
+entités d'état exposées par chaque destination (succès, problème, compteur, restauration). Les
 fournisseurs cloud eux-mêmes (Dropbox, Google Drive) sont testés par leurs issues respectives.
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).
