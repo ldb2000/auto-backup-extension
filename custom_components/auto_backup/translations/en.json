@@ -55,6 +55,7 @@
                     "reautoriser_destination": "Re-authorise a destination",
                     "supprimer_destination": "Remove a destination",
                     "reglages_televersement": "Upload settings",
+                    "reglages_notifications": "Notification settings",
                     "init": "Backup settings"
                 }
             },
@@ -99,6 +100,13 @@
                 "description": "The configuration and authorisation of the chosen destinations will be erased. Backups already uploaded to the provider are not deleted.",
                 "data": {
                     "destinations": "Destinations to remove"
+                }
+            },
+            "reglages_notifications": {
+                "title": "Notification settings",
+                "description": "When a backup definitively fails to reach a remote destination, Auto Backup can show a persistent notification naming the destination, the backup and the cause. A destination never has more than one such notification: it is updated on each new failure and disappears as soon as an upload succeeds.\n\nTurned off, notifications are no longer created: the “auto_backup.upload_failed” event, the error log and the repair issue reporting a destination to re-authorise are all kept.",
+                "data": {
+                    "notify_on_failure": "Notify upload failures and access to renew"
                 }
             },
             "reglages_televersement": {

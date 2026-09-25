@@ -360,6 +360,97 @@ async def test_un_succes_retire_la_notification_meme_option_coupee(
     assert _notification_d_echec(hass) is None
 
 
+### Réglage depuis l'interface ###
+
+
+def _valeur_proposee(resultat: dict[str, Any], cle: str) -> Any:
+    """Valeur pré-remplie par le formulaire pour ce champ."""
+    for marqueur in resultat["data_schema"].schema:
+        if marqueur == cle:
+            return (marqueur.description or {}).get("suggested_value")
+    raise AssertionError(f"champ « {cle} » absent du formulaire")
+
+
+async def _regler_les_notifications(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+    actives: bool,
+) -> dict[str, Any]:
+    """Ouvre les réglages des notifications et soumet ce choix."""
+    resultat = await ouvrir_les_options(entree.entry_id, "reglages_notifications")
+    assert resultat["step_id"] == "reglages_notifications"
+
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], user_input={CONF_NOTIFY_ON_FAILURE: actives}
+    )
+    await hass.async_block_till_done()
+    return resultat
+
+
+async def test_le_formulaire_propose_l_etat_en_vigueur(
+    hass: HomeAssistant,
+    entree_notifiante: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Le champ est pré-rempli : actif par défaut, puis valeur enregistrée."""
+    resultat = await ouvrir_les_options(
+        entree_notifiante.entry_id, "reglages_notifications"
+    )
+    assert resultat["type"] is FlowResultType.FORM
+    assert _valeur_proposee(resultat, CONF_NOTIFY_ON_FAILURE) is True
+
+    await _regler_les_notifications(
+        hass, entree_notifiante, ouvrir_les_options, actives=False
+    )
+
+    resultat = await ouvrir_les_options(
+        entree_notifiante.entry_id, "reglages_notifications"
+    )
+    assert _valeur_proposee(resultat, CONF_NOTIFY_ON_FAILURE) is False
+
+
+async def test_le_reglage_de_l_interface_coupe_les_notifications(
+    hass: HomeAssistant,
+    entree_notifiante: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Critère : désactivée dans les options, plus aucune notification.
+
+    Les destinations configurées, elles, survivent à l'enregistrement : le
+    réglage passe par `options_avec_reglage()`, comme le délai de téléversement.
+    """
+    resultat = await _regler_les_notifications(
+        hass, entree_notifiante, ouvrir_les_options, actives=False
+    )
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    assert entree_notifiante.options[CONF_NOTIFY_ON_FAILURE] is False
+    assert entree_notifiante.options[CONF_DESTINATIONS] == [config_factice()]
+
+    await _echec(hass)
+
+    assert _notification_d_echec(hass) is None
+    assert hass.data[DATA_NOTIFICATIONS].notifications_actives is False
+
+
+async def test_le_reglage_de_l_interface_les_retablit(
+    hass: HomeAssistant,
+    entree_notifiante: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Réactivées, les notifications repartent sans redémarrage."""
+    await _regler_les_notifications(
+        hass, entree_notifiante, ouvrir_les_options, actives=False
+    )
+    await _regler_les_notifications(
+        hass, entree_notifiante, ouvrir_les_options, actives=True
+    )
+
+    await _echec(hass)
+
+    assert _notification_d_echec(hass) is not None
+
+
 ### Ré-authentification ###
 
 

@@ -2,7 +2,8 @@
 
 Ce module apporte au flux d'options upstream un menu et les étapes d'ajout, de
 ré-autorisation et de suppression d'une destination, ainsi que — depuis
-l'issue #8 — les réglages du téléversement (délai maximum). Il n'existe pas dans
+l'issue #8 — les réglages du téléversement (délai maximum) et — depuis l'issue
+#17 — ceux des notifications d'échec. Il n'existe pas dans
 l'upstream et ne modifie aucune de ses lignes : `config_flow.py` se contente
 d'envelopper sa classe `OptionsFlowHandler` par `etendre_le_flux_d_options()`,
 qui construit une sous-classe portant les étapes ci-dessous
@@ -57,6 +58,7 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -74,11 +76,13 @@ from ..const import (
     CONF_DESTINATION_ID,
     CONF_DESTINATIONS,
     CONF_FOLDER,
+    CONF_NOTIFY_ON_FAILURE,
     CONF_PROVIDER,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     CONF_UPLOAD_TIMEOUT,
     DEFAULT_DESTINATION_FOLDER,
+    DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_UPLOAD_TIMEOUT,
     IDENTIFIANT_PROVISOIRE,
     OAUTH_AUTHORIZE_URL_TIMEOUT,
@@ -273,7 +277,7 @@ class GestionDesDestinationsMixin:
         options = ["ajouter_destination"]
         if self._configurations():
             options += ["reautoriser_destination", "supprimer_destination"]
-        options += ["reglages_televersement", "init"]
+        options += ["reglages_televersement", "reglages_notifications", "init"]
         return self.async_show_menu(step_id="menu", menu_options=options)
 
     ### Réglages du téléversement ###
@@ -325,6 +329,46 @@ class GestionDesDestinationsMixin:
                 schema, {CONF_UPLOAD_TIMEOUT: propose}
             ),
             errors=erreurs,
+        )
+
+    ### Réglages des notifications (issue #17) ###
+
+    async def async_step_reglages_notifications(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Notifications persistantes des échecs de destination, ou silence.
+
+        Le réglage ne porte que sur les **notifications** : désactivé, un échec
+        de téléversement reste journalisé et signalé par l'événement
+        `auto_backup.upload_failed`, et une destination dont l'accès est révoqué
+        reste signalée par un problème Home Assistant. Les automatisations
+        existantes ne changent donc pas de comportement.
+        """
+        if user_input is not None:
+            actives = bool(
+                user_input.get(CONF_NOTIFY_ON_FAILURE, DEFAULT_NOTIFY_ON_FAILURE)
+            )
+            _LOGGER.info(
+                "Notifications persistantes des échecs de destination : %s",
+                "activées" if actives else "désactivées",
+            )
+            return self.async_create_entry(
+                data=options_avec_reglage(
+                    self.config_entry, CONF_NOTIFY_ON_FAILURE, actives
+                )
+            )
+
+        schema = vol.Schema({vol.Required(CONF_NOTIFY_ON_FAILURE): BooleanSelector()})
+        return self.async_show_form(
+            step_id="reglages_notifications",
+            data_schema=self.add_suggested_values_to_schema(
+                schema,
+                {
+                    CONF_NOTIFY_ON_FAILURE: self.config_entry.options.get(
+                        CONF_NOTIFY_ON_FAILURE, DEFAULT_NOTIFY_ON_FAILURE
+                    )
+                },
+            ),
         )
 
     ### Ajout d'une destination ###

@@ -55,6 +55,7 @@
                     "reautoriser_destination": "Ré-autoriser une destination",
                     "supprimer_destination": "Supprimer une destination",
                     "reglages_televersement": "Réglages du téléversement",
+                    "reglages_notifications": "Réglages des notifications",
                     "init": "Réglages des sauvegardes"
                 }
             },
@@ -99,6 +100,13 @@
                 "description": "La configuration et l'autorisation des destinations choisies seront effacées. Les sauvegardes déjà déposées chez le fournisseur ne sont pas supprimées.",
                 "data": {
                     "destinations": "Destinations à supprimer"
+                }
+            },
+            "reglages_notifications": {
+                "title": "Réglages des notifications",
+                "description": "Quand l'envoi d'une sauvegarde vers une destination distante échoue définitivement, Auto Backup peut afficher une notification persistante nommant la destination, la sauvegarde et la cause. Une même destination n'a jamais qu'une seule notification, mise à jour à chaque nouvel échec, et elle disparaît dès qu'un envoi aboutit.\n\nDésactivées, les notifications ne sont plus créées : l'événement « auto_backup.upload_failed », le journal d'erreur et le problème signalant une destination à ré-autoriser, eux, sont maintenus.",
+                "data": {
+                    "notify_on_failure": "Notifier les échecs d'envoi et les accès à renouveler"
                 }
             },
             "reglages_televersement": {

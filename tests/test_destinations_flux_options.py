@@ -205,6 +205,7 @@ async def test_le_menu_s_adapte_aux_destinations_existantes(
         "reautoriser_destination",
         "supprimer_destination",
         "reglages_televersement",
+        "reglages_notifications",
         "init",
     ]
 
