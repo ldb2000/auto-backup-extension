@@ -177,9 +177,21 @@ ATTR_LAST_ERROR = "last_error"
 ATTR_LAST_FAILED_SLUG = "last_failed_slug"
 ATTR_LAST_FAILED_AT = "last_failed_at"
 
+# Registre persistant des sauvegardes distantes, tenu par la rétention distante
+# (issue #9) : il liste, destination par destination, les sauvegardes réellement
+# présentes chez le fournisseur, et il survit au redémarrage. C'est lui qui fait
+# autorité sur le capteur de comptage, par `entrees(destination_id)`. La clé
+# n'est pas typée ici : la classe du registre appartient à l'issue #9, non encore
+# fusionnée. Tant qu'elle est absente de `hass.data`, le capteur retombe sur son
+# compteur interne.
+DATA_REMOTE_BACKUPS = f"{DOMAIN}_remote_backups"
+
 # Champs lus dans l'événement `auto_backup.remote_purge`, émis par la rétention
-# distante (issue #9) : nombre de sauvegardes supprimées, et — quand le
-# fournisseur sait le dire — nombre de sauvegardes restantes, qui fait alors
-# autorité sur le compteur.
+# distante (issue #9) lorsqu'elle a réellement supprimé des sauvegardes :
+# `remote_ids` porte les identifiants distants supprimés. L'issue #9 n'émet ni
+# `deleted` ni `remaining` — un nombre restant serait structurellement faux,
+# l'événement n'étant pas émis quand rien n'a été supprimé — mais les deux
+# restent lus par le repli sans registre.
+ATTR_REMOTE_IDS = "remote_ids"
 ATTR_DELETED = "deleted"
 ATTR_REMAINING = "remaining"

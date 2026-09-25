@@ -43,10 +43,12 @@ from custom_components.auto_backup.const import (
     ATTR_LAST_FAILED_SLUG,
     ATTR_REMAINING,
     ATTR_REMOTE_ID,
+    ATTR_REMOTE_IDS,
     ATTR_SIZE,
     ATTR_SLUG,
     CONF_DESTINATIONS,
     DATA_DESTINATION_ENTITIES,
+    DATA_REMOTE_BACKUPS,
     DOMAIN,
     EVENT_REMOTE_PURGE,
     EVENT_UPLOAD_FAILED,
@@ -65,7 +67,6 @@ from custom_components.auto_backup.destinations.entities import (
     CapteurBinaireProblemeDestination,
     CapteurSauvegardesDistantes,
     assainir_le_message,
-    async_enregistrer_source_des_comptes,
     identifiant_unique,
 )
 from destinations_factices import config_factice
@@ -81,6 +82,26 @@ FAUX_JETON_GOOGLE = "ya29.FAUX-JETON-a1b2c3d4e5f6"
 FAUX_RAFRAICHISSEMENT_GOOGLE = "1//FAUX-JETON-a1b2c3d4e5f6"
 FAUX_UPLOAD_ID = "AEnB2UoFAUXident1f1antDeSess10n"
 FAUX_JETON_BASE64 = "ZXlKaGJHY2lPaUpJVXpJMU5pSjk"
+
+
+class RegistreFactice:
+    """Registre des sauvegardes distantes tel que l'issue #9 l'exposera.
+
+    Seule `entrees(destination_id)` est utilisée par les entités : le capteur
+    compte ce qu'elle renvoie. Le mode `defaillant` éprouve le repli quand le
+    registre lève au lieu de répondre.
+    """
+
+    def __init__(self, comptes: dict[str, int], *, defaillant: bool = False) -> None:
+        """Prépare un registre rendant `comptes[destination_id]` entrées."""
+        self.comptes = comptes
+        self.defaillant = defaillant
+
+    def entrees(self, destination_id: str) -> list[str]:
+        """Sauvegardes distantes connues pour cette destination."""
+        if self.defaillant:
+            raise RuntimeError("registre indisponible")
+        return [f"distant-{index}" for index in range(self.comptes[destination_id])]
 
 
 def config_deux(**surcharges: Any) -> dict[str, Any]:
@@ -678,17 +699,18 @@ async def test_une_purge_accepte_plusieurs_formes_de_decompte(
     )
 
 
-async def test_une_source_de_comptes_enregistree_fait_autorite(
+async def test_le_registre_de_la_retention_fait_autorite(
     hass: HomeAssistant, entree_avec_destination: MockConfigEntry
 ) -> None:
-    """La rétention distante (#9) peut brancher un compteur faisant autorité."""
+    """Le registre persistant de #9 l'emporte sur le compteur de repli."""
     _emettre_succes(hass)
     await hass.async_block_till_done()
 
-    debrancher = async_enregistrer_source_des_comptes(
-        hass,
-        lambda destination_id: 42 if destination_id == "destination_test" else None,
-    )
+    registre = RegistreFactice({"destination_test": 42})
+    hass.data[DATA_REMOTE_BACKUPS] = registre
+
+    # L'événement n'est plus qu'un déclencheur : le compte vient du registre.
+    _emettre_succes(hass)
     await hass.async_block_till_done()
     assert (
         _etat(
@@ -700,7 +722,15 @@ async def test_une_source_de_comptes_enregistree_fait_autorite(
         == "42"
     )
 
-    debrancher()
+    # Une purge relit le registre au lieu de retrancher quoi que ce soit.
+    registre.comptes["destination_test"] = 40
+    hass.bus.async_fire(
+        EVENT_REMOTE_PURGE,
+        {
+            ATTR_DESTINATION: "destination_test",
+            ATTR_REMOTE_IDS: ["distant-1", "distant-2"],
+        },
+    )
     await hass.async_block_till_done()
     assert (
         _etat(
@@ -709,23 +739,44 @@ async def test_une_source_de_comptes_enregistree_fait_autorite(
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
-        == "1"
+        == "40"
     )
 
 
-async def test_une_source_de_comptes_defaillante_ne_casse_pas_le_capteur(
+async def test_sans_registre_le_compteur_de_repli_prend_le_relais(
     hass: HomeAssistant, entree_avec_destination: MockConfigEntry
 ) -> None:
-    """Si la source lève, le capteur retombe sur son compteur interne."""
+    """Tant que l'issue #9 n'est pas là, `remote_ids` alimente le repli."""
+    assert DATA_REMOTE_BACKUPS not in hass.data
+
+    for _ in range(3):
+        _emettre_succes(hass)
+    hass.bus.async_fire(
+        EVENT_REMOTE_PURGE,
+        {ATTR_DESTINATION: "destination_test", ATTR_REMOTE_IDS: ["distant-1"]},
+    )
+    await hass.async_block_till_done()
+
+    assert (
+        _etat(
+            hass,
+            entree_avec_destination,
+            Platform.SENSOR,
+            SUFFIXE_SAUVEGARDES_DISTANTES,
+        ).state
+        == "2"
+    )
+
+
+async def test_un_registre_qui_ignore_la_destination_laisse_le_repli(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+) -> None:
+    """Un registre défaillant ne casse pas le capteur : il retombe au repli."""
+    _emettre_succes(hass)
+    hass.data[DATA_REMOTE_BACKUPS] = RegistreFactice({}, defaillant=True)
     _emettre_succes(hass)
     await hass.async_block_till_done()
 
-    def _source(_: str) -> int | None:
-        raise RuntimeError("registre indisponible")
-
-    async_enregistrer_source_des_comptes(hass, _source)
-    await hass.async_block_till_done()
-
     assert (
         _etat(
             hass,
@@ -733,16 +784,8 @@ async def test_une_source_de_comptes_defaillante_ne_casse_pas_le_capteur(
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
-        == "1"
+        == "2"
     )
-
-
-async def test_la_source_des_comptes_exige_des_entites_montees(
-    hass: HomeAssistant, integration_backup: None
-) -> None:
-    """Enregistrer une source sans entités montées est une erreur explicite."""
-    with pytest.raises(RuntimeError):
-        async_enregistrer_source_des_comptes(hass, lambda _: 1)
 
 
 ### PLUSIEURS DESTINATIONS ###

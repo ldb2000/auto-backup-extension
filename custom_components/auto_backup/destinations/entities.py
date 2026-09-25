@@ -29,13 +29,14 @@ Trois choix structurants :
    prévient les entités de cette destination par un signal de dispatcher. Les
    entités restent de simples vues : elles ne s'abonnent pas au bus.
 
-3. **Le nombre de sauvegardes distantes est un compteur, pas un inventaire.**
-   Tant que la rétention distante (#9) ne tient pas de registre persistant, le
-   compteur s'incrémente sur `upload_successful` et se décrémente sur
-   `remote_purge`, et il est restauré au redémarrage par `RestoreSensor`. Dès
-   que #9 sait répondre, elle enregistre sa source par
-   `async_enregistrer_source_des_comptes()` : le capteur lui donne alors la
-   priorité, sans que rien ne change ici.
+3. **Le nombre de sauvegardes distantes est lu, pas compté.** La rétention
+   distante (#9) tient dans `hass.data[DATA_REMOTE_BACKUPS]` un registre
+   persistant des sauvegardes réellement présentes chez chaque fournisseur : le
+   capteur en compte les entrées, et les événements ne sont plus que des
+   déclencheurs de relecture. Tant que ce registre est absent — l'issue #9
+   n'étant pas fusionnée —, le capteur retombe sur un compteur interne,
+   incrémenté sur `upload_successful`, diminué sur `remote_purge`, et restauré
+   au redémarrage par `RestoreSensor`.
 
 Les messages d'erreur exposés en attribut passent tous par
 `assainir_le_message()`, qui masque les jetons et les secrets susceptibles
@@ -72,7 +73,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON, Platform
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
@@ -91,9 +92,11 @@ from ..const import (
     ATTR_LAST_FAILED_AT,
     ATTR_LAST_FAILED_SLUG,
     ATTR_REMAINING,
+    ATTR_REMOTE_IDS,
     ATTR_SLUG,
     DATA_DESTINATION_ENTITIES,
     DATA_DESTINATIONS,
+    DATA_REMOTE_BACKUPS,
     DOMAIN,
     EVENT_REMOTE_PURGE,
     EVENT_UPLOAD_FAILED,
@@ -314,12 +317,6 @@ class EtatDestination:
         self.compteur_initialise = True
 
 
-# Source faisant autorité sur le nombre de sauvegardes distantes : elle reçoit
-# un identifiant de destination et renvoie un nombre, ou `None` si elle ne sait
-# pas répondre pour cette destination. Prévue pour le registre de la rétention
-# distante (issue #9).
-SourceDesComptes = Callable[[str], int | None]
-
 # Construit une entité pour une destination donnée.
 FabriqueEntite = Callable[
     [ConfigEntry, "CoordinateurEntitesDestinations", DestinationConfig], Entity
@@ -365,7 +362,6 @@ class CoordinateurEntitesDestinations:
         self._etats: dict[str, EtatDestination] = {}
         self._connues: dict[str, DestinationConfig] = {}
         self._plateformes: dict[str, _Plateforme] = {}
-        self._source_des_comptes: SourceDesComptes | None = None
 
     @property
     def entry_id(self) -> str:
@@ -433,35 +429,39 @@ class CoordinateurEntitesDestinations:
         return self._etats.setdefault(destination_id, EtatDestination())
 
     @callback
+    def compte_du_registre(self, destination_id: str) -> int | None:
+        """Nombre d'entrées du registre de la rétention distante (issue #9).
+
+        Le registre est persistant et tenu à jour à chaque téléversement comme à
+        chaque suppression : il fait autorité. L'accès est défensif, car la clé
+        est absente tant que l'issue #9 n'est pas là, et parce qu'un registre
+        défaillant ne doit pas casser un capteur d'état.
+        """
+        registre = self._hass.data.get(DATA_REMOTE_BACKUPS)
+        if registre is None:
+            return None
+        try:
+            return max(len(registre.entrees(destination_id)), 0)
+        except Exception:  # un registre défaillant ne casse pas le capteur
+            _LOGGER.exception(
+                "Le registre des sauvegardes distantes n'a pas su répondre pour "
+                "« %s » : repli sur le compteur interne",
+                destination_id,
+            )
+            return None
+
+    @callback
     def nombre_de_sauvegardes(self, destination_id: str) -> int:
         """Nombre de sauvegardes distantes connu pour cette destination.
 
-        La source enregistrée par `async_enregistrer_source_des_comptes()` fait
-        autorité quand elle sait répondre ; sinon, le compteur tenu par les
-        événements — et restauré au redémarrage — est utilisé.
+        Le registre persistant de la rétention distante fait autorité ; sinon,
+        le compteur de repli tenu par les événements — et restauré au
+        redémarrage — est utilisé.
         """
-        if self._source_des_comptes is not None:
-            try:
-                nombre = self._source_des_comptes(destination_id)
-            except Exception:  # une source défaillante ne casse pas le capteur
-                _LOGGER.exception(
-                    "La source du nombre de sauvegardes distantes a échoué pour "
-                    "« %s » : repli sur le compteur interne",
-                    destination_id,
-                )
-            else:
-                if nombre is not None:
-                    return max(int(nombre), 0)
+        compte = self.compte_du_registre(destination_id)
+        if compte is not None:
+            return compte
         return self.etat(destination_id).sauvegardes_distantes
-
-    @callback
-    def async_definir_la_source_des_comptes(
-        self, source: SourceDesComptes | None
-    ) -> None:
-        """Remplace la source faisant autorité sur le nombre de sauvegardes."""
-        self._source_des_comptes = source
-        for destination_id in self._connues:
-            self._async_notifier(destination_id)
 
     @callback
     def _async_notifier(self, destination_id: str) -> None:
@@ -520,20 +520,30 @@ class CoordinateurEntitesDestinations:
 
     @callback
     def _async_purge_distante(self, event: Event) -> None:
-        """`remote_purge` : le compteur suit les sauvegardes supprimées (#9).
+        """`remote_purge` : la rétention distante (#9) a supprimé des sauvegardes.
 
-        L'événement peut renseigner le nombre restant (`remaining`), qui fait
-        alors autorité, ou le nombre de sauvegardes supprimées (`deleted`), qui
-        est retranché. Sans l'un ni l'autre, le compteur est laissé tel quel :
-        une purge qui n'a rien supprimé ne doit rien changer.
+        Quand le registre persistant est là, il a déjà été mis à jour :
+        l'événement n'est qu'un déclencheur de relecture.
+
+        Sans registre, le compteur de repli est corrigé à partir de ce que
+        l'événement annonce : le nombre restant (`remaining`) fait autorité, à
+        défaut les identifiants supprimés (`remote_ids`, le champ émis par #9)
+        ou leur décompte (`deleted`) sont retranchés. Sans rien d'exploitable,
+        le compteur est laissé tel quel.
         """
         suivi = self._etat_suivi(event)
         if suivi is None:
             return
         destination_id, etat = suivi
 
+        if self.compte_du_registre(destination_id) is not None:
+            self._async_notifier(destination_id)
+            return
+
         restantes = _nombre(event.data.get(ATTR_REMAINING))
         supprimees = _nombre(event.data.get(ATTR_DELETED))
+        if supprimees is None:
+            supprimees = _nombre(event.data.get(ATTR_REMOTE_IDS))
         if restantes is not None:
             etat.definir_le_compte(restantes)
         elif supprimees:
@@ -723,7 +733,7 @@ class CapteurSauvegardesDistantes(_EntiteDestination, RestoreSensor):
 
     @property
     def native_value(self) -> int:
-        """Nombre de sauvegardes distantes, source de #9 prioritaire."""
+        """Nombre de sauvegardes distantes, registre de #9 prioritaire."""
         return self._coordinateur.nombre_de_sauvegardes(self._destination_id)
 
     async def async_added_to_hass(self) -> None:
@@ -850,35 +860,6 @@ def async_coordinateur_des_destinations(
         hass.data[DATA_DESTINATION_ENTITIES] = coordinateur
         coordinateur.async_demarrer()
     return coordinateur
-
-
-@callback
-def async_enregistrer_source_des_comptes(
-    hass: HomeAssistant, source: SourceDesComptes
-) -> CALLBACK_TYPE:
-    """Branche un compteur faisant autorité sur les sauvegardes distantes.
-
-    Point d'entrée prévu pour la rétention distante (issue #9), qui tiendra un
-    registre persistant des sauvegardes déposées chez chaque fournisseur. Tant
-    qu'aucune source n'est enregistrée, les capteurs s'appuient sur leur propre
-    compteur, alimenté par les événements et restauré au redémarrage.
-
-    Renvoie la fonction qui débranche la source.
-    """
-    coordinateur = hass.data.get(DATA_DESTINATION_ENTITIES)
-    if coordinateur is None:
-        raise RuntimeError(
-            "les entités de destination ne sont pas encore montées : "
-            "aucune source de comptes ne peut être enregistrée"
-        )
-    coordinateur.async_definir_la_source_des_comptes(source)
-
-    @callback
-    def _debrancher() -> None:
-        if hass.data.get(DATA_DESTINATION_ENTITIES) is coordinateur:
-            coordinateur.async_definir_la_source_des_comptes(None)
-
-    return _debrancher
 
 
 async def async_setup_destination_sensors(

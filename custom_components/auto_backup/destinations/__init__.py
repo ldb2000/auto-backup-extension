@@ -32,7 +32,6 @@ from .entities import (
     EtatDestination,
     assainir_le_message,
     async_coordinateur_des_destinations,
-    async_enregistrer_source_des_comptes,
     async_setup_destination_binary_sensors,
     async_setup_destination_sensors,
 )
@@ -104,7 +103,6 @@ __all__ = [
     "async_destination_configs",
     "async_effacer_la_reauthentification",
     "async_enregistrer_la_vue_de_retour",
-    "async_enregistrer_source_des_comptes",
     "async_entree_auto_backup",
     "async_persist_destinations",
     "async_persist_token",
