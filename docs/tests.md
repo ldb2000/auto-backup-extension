@@ -248,7 +248,13 @@ déjà couverte par `tests/test_televersement.py`.
 ```python
 hass.bus.async_fire(
     EVENT_UPLOAD_FAILED,
-    {"name": ..., "slug": ..., "destination": ..., "destination_name": ..., "error": ...},
+    {
+        "name": ...,
+        "slug": ...,
+        "destination": ...,
+        "destination_name": ...,
+        "error": ...,
+    },
 )
 await hass.async_block_till_done()
 ```

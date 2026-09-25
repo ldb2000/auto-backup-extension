@@ -809,7 +809,10 @@ class GestionDesDestinationsMixin:
         """
         config = self._configuration(str(self._destination_id))
         if config is None:
-            return self.async_abort(reason="destination_inconnue")
+            # La destination a disparu pendant le flux : c'est
+            # `_terminer_la_reautorisation()` qui porte ce refus, et lui seul,
+            # pour que les deux chemins d'arrivée l'énoncent de la même façon.
+            return self._terminer_la_reautorisation()
 
         changement = self._changement_de_compte(config)
         if changement is None:

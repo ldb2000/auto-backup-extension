@@ -593,6 +593,30 @@ async def test_la_destination_provisoire_ne_notifie_jamais(
     assert _notification_de_reauth(hass, "autorisation_en_cours") is None
 
 
+async def test_un_fournisseur_inconnu_garde_son_identifiant_technique(
+    hass: HomeAssistant, entree_oauth: MockConfigEntry
+) -> None:
+    """Un fournisseur retiré du registre reste nommé, faute de mieux.
+
+    C'est le cas d'une destination dont le fournisseur n'est plus livré : la
+    notification doit quand même dire de quoi elle parle.
+    """
+    config = DestinationConfig.from_dict(
+        config_oauth_factice(
+            destination_id="destination_orpheline",
+            name="Destination orpheline",
+            provider="jamais_installe",
+        )
+    )
+
+    async_signaler_la_reauthentification(hass, config)
+    await hass.async_block_till_done()
+
+    notification = _notification_de_reauth(hass, "destination_orpheline")
+    assert notification is not None
+    assert "jamais_installe" in notification["message"]
+
+
 async def test_l_option_desactivee_laisse_le_probleme_home_assistant(
     hass: HomeAssistant,
     integration_backup: None,
