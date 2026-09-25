@@ -126,6 +126,10 @@ class DestinationEnMemoire(RemoteDestination):
       donné, pour éprouver la tolérance aux échecs de la purge ;
     - `attente_secondes` : durée d'attente simulée pendant un téléversement,
       pour éprouver le délai maximum (issue #8) ;
+    - `attente_de_listage` : durée d'attente simulée avant de répondre au
+      listage, pour éprouver le filet de sécurité de la purge (issue #9) ;
+    - `attentes_de_suppression` : durée d'attente simulée avant de supprimer un
+      identifiant distant donné, même usage ;
     - `octets_recus` : contenu du dernier flux consommé, `None` si le
       téléversement n'a reçu qu'un chemin ;
     - `taille_recue` : nombre d'octets réellement lus dans le flux ;
@@ -145,6 +149,8 @@ class DestinationEnMemoire(RemoteDestination):
         self.suppressions: list[str] = []
         self.erreurs_de_suppression: dict[str, Exception] = {}
         self.attente_secondes = 0.0
+        self.attente_de_listage = 0.0
+        self.attentes_de_suppression: dict[str, float] = {}
         self.octets_recus: bytes | None = None
         self.taille_recue: int | None = None
         self.taille_annoncee: int | None = None
@@ -238,8 +244,14 @@ class DestinationEnMemoire(RemoteDestination):
         return sauvegarde
 
     async def async_list_backups(self) -> list[RemoteBackup]:
-        """Renvoie les sauvegardes mémorisées."""
+        """Renvoie les sauvegardes mémorisées.
+
+        `attente_de_listage` simule un fournisseur qui ne répond plus : la
+        purge doit alors couper l'appel plutôt que d'attendre sans fin.
+        """
         self.listages += 1
+        if self.attente_de_listage:
+            await asyncio.sleep(self.attente_de_listage)
         self._verifier_erreur()
         return list(self.sauvegardes.values())
 
@@ -247,9 +259,13 @@ class DestinationEnMemoire(RemoteDestination):
         """Supprime une sauvegarde mémorisée.
 
         La tentative est notée **avant** tout échec : un test peut ainsi
-        vérifier que la purge a poursuivi son chemin après une erreur.
+        vérifier que la purge a poursuivi son chemin après une erreur, ou après
+        le dépassement de délai que simule `attentes_de_suppression`.
         """
         self.suppressions.append(remote_id)
+        attente = self.attentes_de_suppression.get(remote_id)
+        if attente:
+            await asyncio.sleep(attente)
         self._verifier_erreur()
         erreur = self.erreurs_de_suppression.get(remote_id)
         if erreur is not None:

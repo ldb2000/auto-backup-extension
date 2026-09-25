@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.const import ATTR_NAME
@@ -173,6 +173,20 @@ async def _deposer(
             ),
         )
     return sauvegarde
+
+
+def _delai_de_purge(secondes: float) -> Any:
+    """Raccourcit le filet de sécurité de la purge le temps d'un test.
+
+    `DEFAULT_PURGE_TIMEOUT` vaut 300 s : un test qui l'attendrait vraiment
+    n'en finirait pas. Le délai est donc ramené à quelques millisecondes, et
+    c'est le fournisseur factice qui simule l'appel qui ne revient pas
+    (`attente_de_listage`, `attentes_de_suppression`).
+    """
+    return patch(
+        "custom_components.auto_backup.destinations.retention.DEFAULT_PURGE_TIMEOUT",
+        secondes,
+    )
 
 
 @pytest.fixture
@@ -504,6 +518,64 @@ async def test_un_listage_impossible_n_empeche_pas_les_autres_destinations(
     assert supprimes == {"bavarde": ["vieille"]}
     assert set(muette.sauvegardes) == {"jamais_vue"}
     assert "service indisponible" in caplog.text
+
+
+async def test_un_listage_qui_ne_revient_pas_est_coupe_par_le_delai(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Un fournisseur muet au listage est sauté, pas les destinations suivantes.
+
+    Sans le filet de sécurité, l'appel pendrait indéfiniment : la purge de
+    cette destination ne se terminerait jamais, et le verrou qui sérialise les
+    purges resterait pris.
+    """
+    await _demarrer(
+        hass,
+        destinations=[
+            config_factice(destination_id="figee", name="Figée"),
+            config_factice(destination_id="vive", name="Vive"),
+        ],
+    )
+    figee = _destination(hass, "figee")
+    vive = _destination(hass, "vive")
+    await _deposer(hass, figee, "jamais_listee", jours=100)
+    await _deposer(hass, vive, "vieille", jours=100)
+    figee.attente_de_listage = 30
+
+    with caplog.at_level(logging.ERROR), _delai_de_purge(0.01):
+        supprimes = await _coordinateur(hass).async_purger_toutes()
+
+    # La destination figée est abandonnée sans rien supprimer ; la suivante est
+    # purgée normalement.
+    assert supprimes == {"vive": ["vieille"]}
+    assert figee.suppressions == []
+    assert set(figee.sauvegardes) == {"jamais_listee"}
+    assert _inscrits(hass, "figee") == ["jamais_listee"]
+    assert "délai de listage dépassé" in caplog.text
+
+
+async def test_une_suppression_qui_ne_revient_pas_est_coupee_par_le_delai(
+    hass: HomeAssistant, entree: MockConfigEntry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Une suppression qui pend est abandonnée, les suivantes sont tentées."""
+    destination = _destination(hass, "destination_test")
+    await _deposer(hass, destination, "figee", jours=100)
+    await _deposer(hass, destination, "docile", jours=99)
+    destination.attentes_de_suppression["figee"] = 30
+
+    with caplog.at_level(logging.ERROR), _delai_de_purge(0.01):
+        supprimes = await _coordinateur(hass).async_purger_toutes()
+
+    assert supprimes == {"destination_test": ["docile"]}
+    assert destination.suppressions == ["figee", "docile"]
+    # Le fichier est peut-être toujours là : son entrée reste au registre pour
+    # être retentée à la purge suivante.
+    assert _inscrits(hass) == ["figee"]
+    assert set(destination.sauvegardes) == {"figee"}
+    assert "délai dépassé" in caplog.text
 
 
 async def test_une_destination_a_reautoriser_n_est_pas_jointe(

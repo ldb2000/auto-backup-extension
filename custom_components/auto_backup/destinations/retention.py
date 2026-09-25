@@ -24,7 +24,14 @@ Deux garanties structurent tout le module :
    impossible n'empêche pas les autres destinations d'être purgées, et une
    suppression qui échoue est journalisée puis dépassée. Une sauvegarde déjà
    absente chez le fournisseur (`DestinationNotFoundError`) est traitée comme
-   purgée : l'entrée correspondante quitte le registre.
+   purgée : l'entrée correspondante quitte le registre. Un appel qui **ne
+   revient pas** est le seul échec qu'une clause `except` ne rattrape pas :
+   chaque appel réseau est donc borné par `asyncio.timeout()`
+   (`DEFAULT_PURGE_TIMEOUT`), faute de quoi un fournisseur muet bloquerait la
+   purge de sa destination — et le verrou qui la sérialise — indéfiniment. Ce
+   délai est un filet de sécurité, pas un réglage : le contrat de
+   `RemoteDestination` demande à chaque fournisseur de borner lui-même ses
+   appels, bien plus finement.
 
 La purge se déclenche à deux moments :
 
@@ -62,6 +69,7 @@ from ..const import (
     DATA_DESTINATIONS,
     DATA_REMOTE_BACKUPS,
     DATA_REMOTE_PURGE,
+    DEFAULT_PURGE_TIMEOUT,
     DOMAIN,
     EVENT_REMOTE_PURGE,
     EVENT_UPLOAD_SUCCESSFUL,
@@ -464,9 +472,20 @@ class CoordinateurPurgeDistante:
     async def _async_lister(
         self, destination: RemoteDestination
     ) -> list[RemoteBackup] | None:
-        """Liste les sauvegardes distantes, ou `None` si le listage a échoué."""
+        """Liste les sauvegardes distantes, ou `None` si le listage a échoué.
+
+        Un dépassement du délai est un échec comme un autre : il est journalisé,
+        la destination est sautée, et la purge se poursuit avec les suivantes.
+        """
         try:
-            return list(await destination.async_list_backups())
+            async with asyncio.timeout(DEFAULT_PURGE_TIMEOUT):
+                return list(await destination.async_list_backups())
+        except TimeoutError:
+            _LOGGER.error(
+                "Purge distante de « %s » abandonnée : délai de listage dépassé (%s s)",
+                destination.name,
+                DEFAULT_PURGE_TIMEOUT,
+            )
         except DestinationError as err:
             _LOGGER.error(
                 "Purge distante de « %s » abandonnée : listage impossible (%s)",
@@ -557,14 +576,25 @@ class CoordinateurPurgeDistante:
 
         Une sauvegarde déjà absente compte comme supprimée : le but est atteint,
         et son entrée doit quitter le registre pour ne pas être retentée à
-        chaque purge. Une suppression qui échoue pour une autre raison laisse
-        l'entrée en place — le fichier, lui, est toujours là — et n'interrompt
-        pas la purge des suivantes.
+        chaque purge. Une suppression qui échoue pour une autre raison — délai
+        dépassé compris — laisse l'entrée en place, puisque le fichier, lui, est
+        toujours là, et n'interrompt pas la purge des suivantes. Le délai est
+        appliqué **par sauvegarde** : une seule suppression qui pend ne consomme
+        pas le budget des autres.
         """
         supprimes: list[str] = []
         for candidat in a_supprimer:
             try:
-                await destination.async_delete_backup(candidat.remote_id)
+                async with asyncio.timeout(DEFAULT_PURGE_TIMEOUT):
+                    await destination.async_delete_backup(candidat.remote_id)
+            except TimeoutError:
+                _LOGGER.error(
+                    "Suppression de la sauvegarde distante « %s » sur « %s » "
+                    "abandonnée : délai dépassé (%s s)",
+                    candidat.remote_id,
+                    destination.name,
+                    DEFAULT_PURGE_TIMEOUT,
+                )
             except DestinationNotFoundError:
                 _LOGGER.warning(
                     "Sauvegarde distante « %s » déjà absente de « %s » : son entrée "

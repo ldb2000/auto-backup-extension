@@ -185,3 +185,17 @@ DATA_REMOTE_PURGE: HassKey[CoordinateurPurgeDistante] = HassKey(
 # ATTR_SIZE, ATTR_SLUG et ATTR_NAME ci-dessus.
 ATTR_CREATED_AT = "created_at"
 ATTR_REMOTE_IDS = "remote_ids"
+
+# Délai maximum, en secondes, d'un appel réseau du coordinateur de purge : un
+# listage de destination, une suppression de sauvegarde. C'est un **filet de
+# sécurité**, pas un réglage : un fournisseur dont l'appel pend bloquerait sinon
+# la purge de sa destination — et le verrou qui la sérialise — indéfiniment,
+# sans erreur ni fin. Le contrat de `RemoteDestination` demande à chaque
+# fournisseur de borner lui-même ses appels, bien plus finement ; cette valeur
+# n'a donc à se déclencher que si aucun ne l'a fait.
+#
+# Volontairement **pas** une option de l'interface : la purge n'a aucune étape
+# de réglages (celle du fork ne règle que le téléversement, cf.
+# CONF_UPLOAD_TIMEOUT), et en ajouter une relève de #8/#17. La constante n'est
+# donc pas inscrite dans CLES_DU_FORK : rien ne la persiste dans les options.
+DEFAULT_PURGE_TIMEOUT = 300
