@@ -22,6 +22,7 @@ from custom_components.auto_backup.const import (
     CONF_AUTO_PURGE,
     CONF_BACKUP_TIMEOUT,
     CONF_DESTINATIONS,
+    CONF_PROVIDER_DATA,
     CONF_UPLOAD_TIMEOUT,
     DATA_DESTINATIONS,
     DEFAULT_BACKUP_TIMEOUT,
@@ -31,7 +32,9 @@ from custom_components.auto_backup.destinations import (
     DestinationConfig,
     DestinationConfigError,
     DestinationManager,
+    DestinationNotFoundError,
     async_persist_destinations,
+    async_persist_provider_data,
     preserve_fork_options,
 )
 from destinations_factices import PROVIDER_FACTICE, config_factice
@@ -177,6 +180,117 @@ async def test_la_persistance_refuse_deux_destinations_de_meme_identifiant(
         async_persist_destinations(hass, entree_sans_destination, [config, config])
 
     assert CONF_DESTINATIONS not in entree_sans_destination.options
+
+
+### Données de fournisseur (issue #14) ###
+
+
+@pytest.fixture
+async def entree_avec_compte(
+    hass: HomeAssistant, integration_backup: None, fournisseur_factice: str
+) -> MockConfigEntry:
+    """Entrée dont la destination porte déjà des données de fournisseur."""
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={
+            CONF_DESTINATIONS: [
+                config_factice(provider_data={"account_email": "a@exemple.test"})
+            ]
+        },
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+    return entree
+
+
+def _donnees_du_fournisseur(entree: MockConfigEntry) -> dict:
+    """Données de fournisseur de l'unique destination de l'entrée."""
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    return persistee.get(CONF_PROVIDER_DATA) or {}
+
+
+async def test_les_donnees_du_fournisseur_sont_fusionnees(
+    hass: HomeAssistant, entree_avec_compte: MockConfigEntry
+) -> None:
+    """Une nouvelle clé s'ajoute sans effacer celles déjà persistées.
+
+    C'est ce qui permet au fournisseur Google Drive de mémoriser l'identifiant
+    de son dossier cible (issue #14) sans perdre l'adresse du compte autorisé
+    écrite au moment de l'ajout (issue #13).
+    """
+    async_persist_provider_data(
+        hass, "destination_test", {"folder_id": "dossier-distant"}
+    )
+    await hass.async_block_till_done()
+
+    assert _donnees_du_fournisseur(entree_avec_compte) == {
+        "account_email": "a@exemple.test",
+        "folder_id": "dossier-distant",
+    }
+    # Le reste de la destination est intact.
+    (persistee,) = entree_avec_compte.options[CONF_DESTINATIONS]
+    assert persistee["folder"] == "Sauvegardes"
+    assert persistee["retention_days"] == 7
+
+
+async def test_une_donnee_de_fournisseur_inchangee_n_ecrit_rien(
+    hass: HomeAssistant, entree_avec_compte: MockConfigEntry
+) -> None:
+    """Réécrire la même valeur ne recharge pas les destinations pour rien."""
+    options = entree_avec_compte.options
+
+    async_persist_provider_data(
+        hass, "destination_test", {"account_email": "a@exemple.test"}
+    )
+    await hass.async_block_till_done()
+
+    assert entree_avec_compte.options is options
+
+
+async def test_des_donnees_de_fournisseur_vides_n_ecrivent_rien(
+    hass: HomeAssistant, entree_avec_compte: MockConfigEntry
+) -> None:
+    """Un fournisseur qui n'a rien à retenir ne touche pas à l'entrée."""
+    options = entree_avec_compte.options
+
+    async_persist_provider_data(hass, "destination_test", {})
+    await hass.async_block_till_done()
+
+    assert entree_avec_compte.options is options
+
+
+async def test_les_donnees_d_une_destination_inconnue_sont_refusees(
+    hass: HomeAssistant, entree_avec_compte: MockConfigEntry
+) -> None:
+    """Une destination supprimée pendant une opération réseau est signalée."""
+    with pytest.raises(DestinationNotFoundError):
+        async_persist_provider_data(hass, "disparue", {"folder_id": "x"})
+
+
+async def test_les_bornes_des_donnees_de_fournisseur_valent_aussi_ici(
+    hass: HomeAssistant, entree_avec_compte: MockConfigEntry
+) -> None:
+    """Une valeur non scalaire est refusée, comme à l'entrée du schéma."""
+    with pytest.raises(DestinationConfigError):
+        async_persist_provider_data(hass, "destination_test", {"folder_id": {"a": 1}})
+
+    assert _donnees_du_fournisseur(entree_avec_compte) == {
+        "account_email": "a@exemple.test"
+    }
+
+
+async def test_les_donnees_du_fournisseur_completent_les_options_upstream(
+    hass: HomeAssistant, entree_avec_compte: MockConfigEntry
+) -> None:
+    """L'écouteur upstream lit `auto_purge` sans repli : il doit le trouver."""
+    async_persist_provider_data(hass, "destination_test", {"folder_id": "dossier"})
+    await hass.async_block_till_done()
+
+    assert entree_avec_compte.options[CONF_AUTO_PURGE] is True
+    assert entree_avec_compte.options[CONF_BACKUP_TIMEOUT] == DEFAULT_BACKUP_TIMEOUT
 
 
 async def test_le_flux_d_options_conserve_les_destinations(

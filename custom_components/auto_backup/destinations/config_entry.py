@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_TOKEN
 from homeassistant.core import HomeAssistant, callback
@@ -20,6 +21,7 @@ from ..const import (
     CONF_BACKUP_TIMEOUT,
     CONF_DESTINATION_ID,
     CONF_DESTINATIONS,
+    CONF_PROVIDER_DATA,
     DATA_DESTINATIONS,
     DEFAULT_BACKUP_TIMEOUT,
     DOMAIN,
@@ -28,7 +30,7 @@ from .errors import DestinationConfigError, DestinationNotFoundError
 from .manager import DestinationManager
 from .models import DestinationConfig
 from .providers import enregistrer_les_fournisseurs
-from .schema import DESTINATIONS_SCHEMA
+from .schema import DESTINATIONS_SCHEMA, donnees_de_fournisseur
 
 
 @callback
@@ -188,6 +190,75 @@ def async_persist_token(
         raise DestinationNotFoundError(
             f"destination inconnue : « {destination_id} », jeton non persisté"
         )
+
+    hass.config_entries.async_update_entry(
+        entry,
+        options={**_options_completees(entry), CONF_DESTINATIONS: mises_a_jour},
+    )
+
+
+@callback
+def async_persist_provider_data(
+    hass: HomeAssistant, destination_id: str, donnees: Mapping[str, Any]
+) -> None:
+    """Fusionne des données de fournisseur dans celles d'une destination.
+
+    **Fusion et non remplacement** : un fournisseur qui mémorise l'identifiant de
+    son dossier cible (issue #14) ne doit pas effacer l'adresse du compte
+    autorisé écrite par le flux d'ajout (issues #10 et #13), et réciproquement.
+    Les autres destinations ne sont pas touchées, exactement comme pour le jeton.
+
+    La signature est celle d'`async_persist_token()` — l'entrée est retrouvée
+    ici, et non passée par l'appelant : un fournisseur n'a que `hass` et sa
+    configuration sous la main au moment où il écrit.
+
+    Le résultat est validé par `donnees_de_fournisseur()` avant d'être écrit :
+    les bornes du champ (nombre de clés, longueur et type des valeurs) valent
+    aussi pour une écriture venue d'un fournisseur.
+
+    Rien n'est écrit si les données sont vides ou déjà présentes à l'identique :
+    une écriture d'options recharge les destinations, il n'y a pas lieu de le
+    faire à chaque téléversement. Lève `DestinationNotFoundError` si la
+    destination n'existe plus — elle a pu être supprimée pendant l'envoi.
+    """
+    if not donnees:
+        return
+
+    entry = async_entree_auto_backup(hass)
+    if entry is None:
+        raise DestinationNotFoundError(
+            "aucune entrée de configuration Auto Backup : données de fournisseur "
+            "non persistées"
+        )
+
+    destinations = async_destination_configs(entry)
+    trouvee = False
+    inchangee = False
+    mises_a_jour: list[dict[str, Any]] = []
+    for brute in destinations:
+        copie = dict(brute)
+        if copie.get(CONF_DESTINATION_ID) == destination_id:
+            trouvee = True
+            actuelles = copie.get(CONF_PROVIDER_DATA)
+            actuelles = dict(actuelles) if isinstance(actuelles, Mapping) else {}
+            fusionnees = {**actuelles, **donnees}
+            inchangee = fusionnees == actuelles
+            try:
+                copie[CONF_PROVIDER_DATA] = donnees_de_fournisseur(fusionnees)
+            except (vol.Invalid, TypeError, ValueError) as err:
+                raise DestinationConfigError(
+                    f"données de fournisseur invalides pour « {destination_id} » : "
+                    f"{err}"
+                ) from err
+        mises_a_jour.append(copie)
+
+    if not trouvee:
+        raise DestinationNotFoundError(
+            f"destination inconnue : « {destination_id} », données de fournisseur "
+            "non persistées"
+        )
+    if inchangee:
+        return
 
     hass.config_entries.async_update_entry(
         entry,
