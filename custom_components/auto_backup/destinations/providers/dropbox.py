@@ -700,9 +700,9 @@ class DropboxDestination(RemoteDestination):
         """Crée le dossier cible s'il n'existe pas encore.
 
         Dropbox crée bien les dossiers manquants au moment du dépôt, mais pas
-        avant : un dossier créé explicitement apparaît dès la configuration de
-        la destination, et l'échec éventuel (chemin déjà occupé par un fichier,
-        espace saturé) est signalé **avant** d'avoir transféré le moindre octet.
+        avant : le créer explicitement le fait apparaître dès la première
+        sauvegarde, et signale l'échec éventuel (chemin déjà occupé par un
+        fichier, espace saturé) **avant** d'avoir transféré le moindre octet.
         Un dossier déjà présent n'est pas une erreur : c'est même le cas normal
         à partir de la deuxième sauvegarde.
         """
