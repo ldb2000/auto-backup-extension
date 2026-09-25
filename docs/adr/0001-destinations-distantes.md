@@ -813,8 +813,8 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   les entrées d'une destination supprimée de la configuration — quelques centaines d'octets par
   sauvegarde, jamais relues. Les purger à la suppression d'une destination supposerait de
   décider ce qu'il advient des fichiers distants correspondants, ce qui n'est pas du ressort de
-  #9 ; à reprendre avec la restauration depuis une sauvegarde distante (#16) ou le ménage des
-  options.
+  #9 ; à reprendre avec le ménage des options à la suppression d'une destination, qui n'a pas
+  encore d'issue dédiée.
 
 - **Marqueur de provenance chez les fournisseurs réels (issues #12 et #15)** : `#9` reconnaît le
   marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`, mais
