@@ -47,6 +47,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from ...const import DEFAULT_UPLOAD_TIMEOUT
+from ..config_entry import async_entree_auto_backup, delai_de_televersement
 from ..destination import RemoteDestination
 from ..errors import DestinationAuthError, DestinationError, DestinationQuotaError
 from ..models import DestinationConfig, RemoteBackup
@@ -145,10 +146,9 @@ TENTATIVES_MAX = 3
 ATTENTE_INITIALE = 1.0
 ATTENTE_MAX = 60.0
 
-# Délai maximum d'une requête de transfert. Le téléversement complet est déjà
-# borné par le coordinateur (`upload_timeout`) ; cette borne-ci n'est qu'un
-# garde-fou pour une requête isolée qui ne rendrait jamais la main.
-DELAI_ENVOI = DEFAULT_UPLOAD_TIMEOUT
+# Le délai maximum d'une requête de transfert n'est pas une constante : il suit
+# l'option `upload_timeout` de l'entrée (cf. `_delai_de_requete`). Seule la
+# valeur de repli, quand l'entrée est introuvable, vient de `const.py`.
 
 # Délais réseau explicites : sans eux, la valeur par défaut d'aiohttp (cinq
 # minutes **au total**) couperait le dépôt d'une grosse sauvegarde en plein
@@ -526,6 +526,33 @@ class DropboxDestination(RemoteDestination):
         return compte
 
     ### Appels HTTP ###
+
+    @property
+    def _delai_de_requete(self) -> float:
+        """Garde-fou d'une seule requête de transfert, en secondes.
+
+        Le téléversement complet est déjà borné par le coordinateur, qui applique
+        l'option `upload_timeout` ; cette borne-ci n'est qu'un filet pour une
+        requête isolée qui ne rendrait jamais la main. Elle **suit ce même
+        réglage** au lieu de rester figée sur la valeur livrée par défaut : sur
+        une connexion lente, un budget global relevé à plusieurs heures serait
+        sinon coupé au bout de trente minutes par le garde-fou d'une requête, et
+        l'utilisateur n'aurait aucun moyen de s'en sortir.
+
+        Elle vaut exactement le budget global, donc lui reste par construction
+        **inférieure ou égale** : c'est toujours le coordinateur qui tranche le
+        premier, jamais ce filet. Le poser plus haut le rendrait inopérant ; le
+        poser plus bas interdirait à une requête unique d'utiliser le budget que
+        l'utilisateur lui a accordé — un envoi simple, qui part en **une** seule
+        requête, a précisément besoin de tout ce budget.
+
+        Sans entrée de configuration — la destination n'est alors plus reliée à
+        rien — le repli est la valeur par défaut de `const.py`.
+        """
+        entry = async_entree_auto_backup(self._hass)
+        if entry is None:
+            return float(DEFAULT_UPLOAD_TIMEOUT)
+        return delai_de_televersement(entry)
 
     async def _async_appel_rpc(self, url: str) -> Mapping[str, Any]:
         """Appelle un point RPC de l'API Dropbox et renvoie sa réponse JSON.
@@ -943,6 +970,10 @@ class DropboxDestination(RemoteDestination):
             if charge_json is not None
             else None
         )
+        # Le garde-fou est lu une fois pour toutes les tentatives de cette
+        # requête : le relire entre deux tentatives ferait cohabiter deux bornes
+        # différentes dans un même dépôt si l'utilisateur change le réglage.
+        delai = self._delai_de_requete
         tentative = 1
         while True:
             jeton = await self._session.async_get_access_token()
@@ -969,7 +1000,7 @@ class DropboxDestination(RemoteDestination):
                 url,
                 entetes=entetes,
                 corps=corps_json if corps_json is not None else corps,
-                delai=DELAI_ENVOI,
+                delai=delai,
                 timeout_client=TIMEOUT_TRANSFERT,
             )
             if (

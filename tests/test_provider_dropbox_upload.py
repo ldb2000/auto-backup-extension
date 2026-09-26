@@ -20,10 +20,11 @@ et un test dédié garde la valeur livrée sous surveillance.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -61,8 +62,10 @@ from custom_components.auto_backup.const import (
     CONF_FOLDER,
     CONF_PROVIDER,
     CONF_PROVIDER_DATA,
+    CONF_UPLOAD_TIMEOUT,
     DATA_AUTO_BACKUP,
     DATA_DESTINATIONS,
+    DEFAULT_UPLOAD_TIMEOUT,
     DOMAIN,
     EVENT_UPLOAD_FAILED,
     EVENT_UPLOAD_SUCCESSFUL,
@@ -125,6 +128,13 @@ CHEMIN_DISTANT = f"{DOSSIER_DISTANT}/{NOM_FICHIER}"
 
 CONTENU = b"auto-backup-dropbox" * 1000
 TAILLE_MORCEAU = 4096
+
+# Délais du garde-fou par requête. Le délai relevé imite une connexion lente
+# (deux heures), le délai minuscule sert à observer la coupure sans faire
+# patienter la suite de tests.
+DELAI_RELEVE = 7200
+DELAI_MINUSCULE = 0.05
+DUREE_REPONSE_LENTE = 0.5
 
 ID_DISTANT = "id:fichier-factice-0001"
 EMPREINTE = "empreinte-factice-0001"
@@ -209,6 +219,38 @@ def destination(
 
 
 @pytest.fixture
+async def destination_configuree(
+    hass: HomeAssistant, integration_backup: None, instance_joignable: None
+) -> Callable[..., Awaitable[DropboxDestination]]:
+    """Fabrique une destination Dropbox dont l'entrée porte ces options.
+
+    Distincte de la fixture `destination` : les tests du garde-fou par requête
+    ont besoin de choisir l'option `upload_timeout` **avant** le chargement de
+    l'entrée, plutôt que de la réécrire ensuite — une écriture d'options
+    recharge le gestionnaire et remplace l'instance de destination.
+    """
+
+    async def _construire(
+        options: Mapping[str, Any] | None = None,
+    ) -> DropboxDestination:
+        entree = MockConfigEntry(
+            domain=DOMAIN,
+            title="Auto Backup",
+            data={},
+            options={CONF_DESTINATIONS: [config_dropbox()], **(options or {})},
+        )
+        entree.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entree.entry_id)
+        await hass.async_block_till_done()
+        gestionnaire: DestinationManager = hass.data[DATA_DESTINATIONS]
+        instance = gestionnaire.async_get(DESTINATION_ID)
+        assert isinstance(instance, DropboxDestination)
+        return instance
+
+    return _construire
+
+
+@pytest.fixture
 def sommeil() -> Any:
     """Neutralise l'attente entre deux tentatives et mémorise ses appels."""
     with patch(f"{MODULE_DROPBOX}.asyncio.sleep", AsyncMock()) as faux_sommeil:
@@ -279,6 +321,18 @@ def servir_en_consommant(
             recu.append(data)
         else:
             recu.append(b"".join([morceau async for morceau in data]))
+        return reponse_finale
+
+    return _servir
+
+
+def servir_lentement(
+    reponse_finale: AiohttpClientMockResponse, duree: float = DUREE_REPONSE_LENTE
+) -> Callable[..., Any]:
+    """Sert une réponse après avoir tardé, comme un fournisseur qui traîne."""
+
+    async def _servir(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        await asyncio.sleep(duree)
         return reponse_finale
 
     return _servir
@@ -875,6 +929,102 @@ async def test_un_envoi_simple_n_est_pas_rejoue(
 
     assert len(appels(aioclient_mock, URL_ENVOI)) == 1
     sommeil.assert_not_awaited()
+
+
+### Garde-fou d'une requête de transfert ###
+
+
+@pytest.mark.parametrize(
+    ("options", "attendu"),
+    [
+        # Option absente : la valeur livrée par défaut fait office de budget.
+        ({}, float(DEFAULT_UPLOAD_TIMEOUT)),
+        # Relevée pour une connexion lente, c'est elle qui vaut, et non 1800 s.
+        ({CONF_UPLOAD_TIMEOUT: DELAI_RELEVE}, float(DELAI_RELEVE)),
+        # Abaissée : le garde-fou suit aussi vers le bas.
+        ({CONF_UPLOAD_TIMEOUT: 120}, 120.0),
+        # Hors contrat ou nulle : repli, jamais une requête sans borne.
+        ({CONF_UPLOAD_TIMEOUT: "jamais"}, float(DEFAULT_UPLOAD_TIMEOUT)),
+        ({CONF_UPLOAD_TIMEOUT: 0}, float(DEFAULT_UPLOAD_TIMEOUT)),
+    ],
+)
+async def test_le_garde_fou_par_requete_suit_le_delai_configure(
+    destination_configuree: Callable[..., Awaitable[DropboxDestination]],
+    options: Mapping[str, Any],
+    attendu: float,
+) -> None:
+    """Le garde-fou d'une requête vaut le budget global, jamais une constante.
+
+    Il était figé sur la valeur livrée par défaut : un utilisateur relevant
+    `upload_timeout` pour une connexion lente voyait sa requête unique coupée
+    au bout de trente minutes, alors que son budget global ne l'était pas.
+    """
+    destination = await destination_configuree(options)
+
+    assert destination._delai_de_requete == attendu
+
+
+async def test_le_garde_fou_par_requete_ne_depasse_pas_le_budget_global(
+    destination_configuree: Callable[..., Awaitable[DropboxDestination]],
+) -> None:
+    """Le garde-fou reste inférieur ou égal au budget global du coordinateur.
+
+    C'est ce qui garantit que le coordinateur tranche le premier : un garde-fou
+    plus généreux que le budget serait inopérant.
+    """
+    coordinateur_et_requete = [
+        (delai, await destination_configuree({CONF_UPLOAD_TIMEOUT: delai}))
+        for delai in (60, DEFAULT_UPLOAD_TIMEOUT, DELAI_RELEVE)
+    ]
+
+    for budget, destination in coordinateur_et_requete:
+        assert destination._delai_de_requete <= float(budget)
+
+
+async def test_une_requete_qui_traine_est_coupee_par_le_delai_configure(
+    destination_configuree: Callable[..., Awaitable[DropboxDestination]],
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Le garde-fou configuré coupe pour de bon une requête qui ne rend rien.
+
+    Le réglage est réduit à une fraction de seconde et la réponse simulée tarde
+    bien davantage : c'est la borne par requête qui doit trancher, avec le
+    message que l'utilisateur lira dans l'événement d'échec.
+    """
+    destination = await destination_configuree({CONF_UPLOAD_TIMEOUT: DELAI_MINUSCULE})
+    aioclient_mock.post(
+        URL_CREATION_DOSSIER,
+        side_effect=servir_lentement(
+            reponse(URL_CREATION_DOSSIER, charge={"metadata": {}})
+        ),
+    )
+
+    with pytest.raises(DestinationError, match="temps imparti"):
+        await televerser(destination)
+
+    assert not appels(aioclient_mock, URL_ENVOI)
+
+
+async def test_une_requete_lente_aboutit_sous_un_delai_confortable(
+    destination_configuree: Callable[..., Awaitable[DropboxDestination]],
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """La même lenteur ne gêne pas quand le réglage laisse le temps de répondre.
+
+    Symétrique du test précédent : le garde-fou ne coupe rien de légitime.
+    """
+    destination = await destination_configuree({CONF_UPLOAD_TIMEOUT: DELAI_RELEVE})
+    aioclient_mock.post(
+        URL_CREATION_DOSSIER,
+        side_effect=servir_lentement(
+            reponse(URL_CREATION_DOSSIER, charge={"metadata": {}})
+        ),
+    )
+    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+
+    distante = await televerser(destination)
+
+    assert distante.remote_id == ID_DISTANT
 
 
 ### Sauvegarde distante renvoyée ###

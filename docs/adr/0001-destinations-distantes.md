@@ -534,6 +534,21 @@ la valeur par défaut d'`aiohttp` est de **cinq minutes au total**, ce qui coupe
 d'une grosse sauvegarde en plein transfert. Seule l'absence prolongée de données est fatale ;
 la durée totale, elle, reste bornée par le `upload_timeout` du coordinateur.
 
+Un dernier garde-fou borne **une seule requête** de transfert, pour le cas où elle ne rendrait
+jamais la main. Il n'est pas une constante : il est dérivé de ce même `upload_timeout`, lu dans
+les options de l'entrée à chaque dépôt. Figé sur la valeur livrée par défaut, il coupait une
+requête au bout de trente minutes alors que l'utilisateur avait relevé son budget global pour
+une connexion lente — un réglage qui restait donc sans effet sur la seule requête d'un envoi
+simple. Il vaut exactement le budget global, donc lui reste **inférieur ou égal** : c'est
+toujours le coordinateur qui tranche le premier, et une requête unique peut utiliser tout le
+budget que l'utilisateur lui a accordé.
+
+La lecture de l'option vit en un point unique, `delai_de_televersement()` dans
+`destinations/config_entry.py`, dont le coordinateur et les fournisseurs dépendent tous les
+deux : deux lectures indépendantes finiraient par diverger sur le repli ou sur la tolérance aux
+valeurs hors contrat, et c'est précisément cette divergence qui avait laissé la borne par
+requête derrière le réglage.
+
 #### Ce que la sauvegarde distante rapporte à la rétention
 
 `RemoteBackup` est renseignée depuis la réponse de Dropbox, et non depuis ce que le fork croit

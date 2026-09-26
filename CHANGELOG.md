@@ -95,6 +95,8 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - `custom_components/auto_backup/services.yaml` rejoint les fichiers upstream « étendus » de `tests/test_conformite_upstream.py` : le champ `upload_to` y est ajouté aux trois services de sauvegarde, sans qu'aucune ligne upstream ne soit modifiée. Refs #8
 - `custom_components/auto_backup/__init__.py` : la ligne upstream `await auto_backup.async_create_backup(data)` est ré-indentée pour entrer dans un `try`/`finally` qui garantit la libération de la demande de téléversement. C'est la seule ligne upstream retouchée du fork ; elle est justifiée dans `docs/UPSTREAM.md` et contrôlée par `REINDENTATIONS_TOLEREES` dans `tests/test_conformite_upstream.py`, qui exige que son contenu reste identique au caractère près. Refs #8
 
+- Le garde-fou qui borne une requête de transfert Dropbox suit désormais l'option `upload_timeout` au lieu de rester figé sur la valeur livrée par défaut : un délai relevé pour une connexion lente s'applique à la requête qui transporte la sauvegarde, et pas seulement au téléversement pris dans son ensemble. La lecture de l'option est faite en un point unique (`delai_de_televersement()` dans `destinations/config_entry.py`), partagé par le coordinateur du téléversement et par les fournisseurs. Refs #11
+
 ### Sécurité
 
 - Le dossier distant (`folder`) d'une destination est validé comme chemin relatif POSIX par `chemin_de_dossier()`, appelé par le schéma voluptuous comme par `DestinationConfig` : traversée (`..`), chemin absolu, lettre de lecteur, séparateur Windows, segment vide, espace de bordure et caractère de contrôle sont refusés avant d'atteindre un fournisseur. Refs #6

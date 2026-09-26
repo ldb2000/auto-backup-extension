@@ -220,6 +220,11 @@ au fil de l'eau : si Dropbox la refuse en cours de route, l'envoi est abandonné
 sauvegarde suivante qui repartira. Le délai maximum global (« Réglages du téléversement »,
 30 minutes par défaut) s'applique par-dessus tout cela.
 
+Ce même réglage borne aussi chaque requête prise isolément, pour le cas où Dropbox cesserait de
+répondre sans fermer la connexion. Autrement dit, **si votre connexion est lente, il suffit
+d'augmenter ce délai** : la valeur que vous choisissez vaut pour le téléversement entier comme
+pour la requête qui transporte la sauvegarde, et vous n'avez rien d'autre à régler.
+
 ## En cas de problème
 
 | Message | Cause la plus fréquente |
