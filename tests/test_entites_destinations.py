@@ -1224,6 +1224,54 @@ async def test_l_erreur_restauree_est_reassainie(
     assert "***" in message
 
 
+@pytest.mark.parametrize(
+    ("erreur", "fuite"),
+    [
+        # Chemin absolu : révèle l'arborescence de l'hôte, pas seulement à
+        # l'échec — un `last_error` écrit avant l'ajout du masquage des
+        # chemins doit être nettoyé lui aussi à la restauration.
+        ("fichier introuvable : /config/secrets.yaml", "/config/secrets.yaml"),
+        # Clé sensible en camelCase, portant un jeton : même exigence.
+        (f"accessToken: {FAUX_JETON}", FAUX_JETON),
+    ],
+)
+async def test_l_erreur_restauree_avec_un_chemin_ou_une_cle_sensible_est_reassainie(
+    hass: HomeAssistant,
+    entree_avec_destination: MockConfigEntry,
+    erreur: str,
+    fuite: str,
+) -> None:
+    """Un `last_error` ancien contenant un chemin ou un jeton par clé est masqué.
+
+    Non-régression du critère d'acceptation de l'issue #16 : un message
+    restauré après redémarrage ne doit pas exposer de chemin `/config/…` ni de
+    jeton porté par une clé sensible (`accessToken`), au même titre qu'un
+    message frais issu d'un échec (`test_last_error_suit_le_masquage_commun`).
+    """
+    capteur = _preparer_une_entite_montee_apres_coup(
+        hass,
+        CapteurBinaireProblemeDestination(
+            entree_avec_destination,
+            hass.data[DATA_DESTINATION_ENTITIES],
+            DestinationConfig.from_dict(config_factice()),
+        ),
+        "binary_sensor.probleme_chemin_ou_cle_a_reassainir",
+        State(
+            "binary_sensor.probleme_chemin_ou_cle_a_reassainir",
+            STATE_ON,
+            {ATTR_LAST_ERROR: erreur},
+        ),
+    )
+
+    await capteur.async_added_to_hass()
+
+    message = capteur.extra_state_attributes[ATTR_LAST_ERROR]
+    assert capteur.is_on is True
+    assert fuite not in message
+    assert "***" in message
+    assert message == masquer(erreur, longueur_max=LONGUEUR_MAX_ERREUR)
+
+
 async def test_un_capteur_binaire_restaure_sans_probleme_reste_au_repos(
     hass: HomeAssistant, entree_avec_destination: MockConfigEntry
 ) -> None:
