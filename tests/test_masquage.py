@@ -19,6 +19,7 @@ import pytest
 from custom_components.auto_backup.destinations.masquage import (
     LONGUEUR_MIN_SUITE_OPAQUE,
     masquer,
+    masquer_un_nom,
 )
 from custom_components.auto_backup.destinations.models import VALEUR_MASQUEE
 
@@ -275,6 +276,62 @@ def test_un_message_legitime_reste_lisible(message: str) -> None:
     assert masquer(message) == message
 
 
+### Noms de la configuration du fork (passes 1 à 5) ###
+
+# Des noms parfaitement ordinaires, mais sans espace : la passe 6 les prenait
+# tous pour des suites opaques, et l'utilisateur lisait « échec d'envoi vers
+# « *** » » sans pouvoir dire laquelle de ses destinations avait lâché.
+NOMS_ORDINAIRES_SANS_ESPACE = (
+    "Dropbox-Compte-Familial",
+    "Sauvegardes-Maison-Principale",
+    "GoogleDriveMaisonPrincipale",
+    "sauvegarde-complete-2026-09-26",
+    "auto_backup_2026_09_26_03_00",
+)
+
+
+@pytest.mark.parametrize("nom", NOMS_ORDINAIRES_SANS_ESPACE)
+def test_un_nom_ordinaire_sans_espace_reste_lisible(nom: str) -> None:
+    """Un nom du fork échappe au dernier filet, et lui seul.
+
+    Le masquage complet — celui de la cause d'un échec — masque bien ces noms :
+    c'est la démonstration que la distinction est nécessaire, et non un
+    embellissement.
+    """
+    assert len(nom) >= LONGUEUR_MIN_SUITE_OPAQUE
+    assert masquer(nom) == VALEUR_MASQUEE
+
+    assert masquer_un_nom(nom) == nom
+
+
+@pytest.mark.parametrize(
+    ("brut", "attendu"),
+    [
+        pytest.param(
+            "Dropbox /config/backups/abcd1234.tar", "Dropbox ***", id="chemin-absolu"
+        ),
+        pytest.param(f"nuit {JETON_DROPBOX}", "nuit ***", id="jeton-dropbox-nu"),
+        pytest.param(f"Compte {COURRIEL}", "Compte ***", id="adresse-electronique"),
+        pytest.param(
+            f"Compte Bearer {JETON_DROPBOX}", "Compte Bearer ***", id="en-tete"
+        ),
+        pytest.param(
+            f"Dropbox access_token={JETON_GOOGLE}",
+            "Dropbox access_token=***",
+            id="cle-sensible",
+        ),
+    ],
+)
+def test_un_nom_reste_soumis_aux_cinq_premieres_passes(brut: str, attendu: str) -> None:
+    """Un secret collé dans un nom est masqué comme ailleurs.
+
+    Le nom d'une destination est saisi par l'utilisateur et celui d'une
+    sauvegarde peut venir d'une automatisation : écarter le dernier filet
+    n'ouvre pas la porte aux secrets reconnaissables à leur forme.
+    """
+    assert masquer_un_nom(brut) == attendu
+
+
 ### Réserves assumées ###
 
 
@@ -319,17 +376,33 @@ def test_reserve_un_secret_court_hors_de_portee_d_un_mot_cle_sort_intact() -> No
     assert masquer("secret is court-factice") == "secret is court-factice"
 
 
-def test_reserve_un_mot_francais_interminable_est_masque() -> None:
-    """Un mot de vingt caractères ou plus à capitale initiale passe pour opaque.
+@pytest.mark.parametrize(
+    "suite",
+    [
+        pytest.param("Anticonstitutionnellement", id="mot-francais-a-capitale"),
+        pytest.param("storageQuotaExceeded", id="code-google-quota"),
+        pytest.param("userRateLimitExceeded", id="code-google-cadence"),
+        pytest.param("expired_access_token", id="code-dropbox-jeton-expire"),
+        pytest.param("too_many_write_operations", id="code-dropbox-ecritures"),
+    ],
+)
+def test_reserve_un_mot_ou_un_code_technique_interminable_est_masque(
+    suite: str,
+) -> None:
+    """La passe 6 avale aussi les codes d'erreur des fournisseurs.
 
-    La casse mêlée est l'un des indices de suite opaque. Le cas est théorique —
-    un tel mot ne figure pas dans un message de fournisseur — et le sens du
-    compromis est le bon : masquer de trop, jamais de trop peu.
+    Le mot français à capitale initiale est un cas théorique ; la portée réelle
+    de la réserve, ce sont les codes techniques de vingt caractères ou plus que
+    Dropbox et Google renvoient. C'est acceptable : les fournisseurs du fork
+    traduisent la cause principale en français et n'ajoutent le code brut qu'en
+    appendice, si bien que la cause reste diagnosticable une fois le code
+    masqué. La réserve ne porte que sur la cause : les noms passent par
+    `masquer_un_nom()`.
     """
-    mot = "Anticonstitutionnellement"
-    assert len(mot) >= LONGUEUR_MIN_SUITE_OPAQUE
+    assert len(suite) >= LONGUEUR_MIN_SUITE_OPAQUE
 
-    assert masquer(mot) == VALEUR_MASQUEE
+    assert masquer(suite) == VALEUR_MASQUEE
+    assert masquer_un_nom(suite) == suite
 
 
 def test_un_mot_interminable_en_minuscules_reste_lisible() -> None:

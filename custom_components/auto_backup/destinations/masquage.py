@@ -27,10 +27,23 @@ Les passes vont de la plus précise à la plus générale :
    révèlent l'arborescence de l'hôte et le nom des sauvegardes ;
 6. **suites opaques** d'au moins `LONGUEUR_MIN_SUITE_OPAQUE` caractères qui ne
    ressemblent pas à un mot — dernier filet pour un secret sans clé ni forme
-   reconnaissable.
+   reconnaissable. C'est la seule passe qu'un appelant peut écarter
+   (`dernier_filet=False`, cf. `masquer_un_nom()`).
 
 Vient enfin la **troncature** facultative (`longueur_max`), pour un affichage
 qui ne peut pas accueillir une trace de pile complète.
+
+**Un nom de la configuration du fork n'est pas un texte de fournisseur.** Les
+passes 1 à 5 reconnaissent un secret à sa forme ; la passe 6 ne reconnaît qu'une
+suite longue sans espace, et dévore donc les noms parfaitement ordinaires que
+l'utilisateur donne à ses destinations et à ses sauvegardes dès qu'ils n'ont pas
+d'espace (« Dropbox-Compte-Familial », « sauvegarde-complete-2026-09-26 »). Or
+ces noms sont de la **configuration du fork** : le problème Home Assistant de
+`destinations/reauth.py`, le journal et les listes du menu d'options les
+affichent déjà en clair. Les masquer ne protège donc rien, et retire à
+l'utilisateur le seul moyen de savoir **laquelle** de ses destinations a lâché.
+`masquer_un_nom()` leur applique les passes 1 à 5 seulement ; le dernier filet
+reste pour la cause d'un échec, seul texte affiché que le fork ne maîtrise pas.
 
 **Réserves assumées.** Le masquage est volontairement large : mieux vaut masquer
 un code d'erreur HTTP (« code=500 » devient « code=*** ») que laisser fuir un
@@ -55,8 +68,18 @@ messages en français. Restent trois angles morts connus et acceptés :
   que la réserve ci-dessus protège justement, pour un gain nul sur les deux
   seuls fournisseurs intégrés, dont les jetons sont longs et reconnus par leur
   forme. À revoir en même temps que l'ajout d'un fournisseur aux jetons courts.
-- **Mot français interminable.** Un mot de vingt caractères ou plus commençant
-  par une majuscule est pris pour une suite opaque et masqué.
+- **Mot interminable ou code technique d'un fournisseur.** La passe 6 masque
+  toute suite de `LONGUEUR_MIN_SUITE_OPAQUE` caractères ou plus qui mêle casses,
+  chiffres ou `_+` : un mot français à capitale initiale
+  (« Anticonstitutionnellement »), cas théorique, mais aussi — et c'est la
+  portée réelle de la réserve — les **codes d'erreur des fournisseurs**, qui
+  atteignent couramment cette longueur : `storageQuotaExceeded`,
+  `expired_access_token`, `too_many_write_operations`, `userRateLimitExceeded`.
+  C'est acceptable : les fournisseurs du fork traduisent la cause principale en
+  français et n'ajoutent le code brut qu'en appendice (« (motif : …) »), si bien
+  que la cause reste diagnosticable une fois le code masqué. Cette réserve ne
+  porte que sur la cause d'un échec : les noms passent par `masquer_un_nom()`,
+  hors de portée de cette passe.
 """
 
 from __future__ import annotations
@@ -202,7 +225,9 @@ _MOTIF_SUITE_OPAQUE = re.compile(
 )
 
 
-def masquer(texte: str, *, longueur_max: int | None = None) -> str:
+def masquer(
+    texte: str, *, longueur_max: int | None = None, dernier_filet: bool = True
+) -> str:
     """Remplace par `***` ce qu'un affichage ne doit jamais montrer.
 
     Le masquage est **défensif** : il porte sur un texte que le fork ne contrôle
@@ -212,8 +237,12 @@ def masquer(texte: str, *, longueur_max: int | None = None) -> str:
     l'utilisateur recopiera dans un ticket d'assistance.
 
     `longueur_max`, s'il est fourni, borne le résultat : le texte est coupé et
-    terminé par une ellipse. Les passes et les réserves assumées sont décrites
-    en tête de module.
+    terminé par une ellipse.
+
+    `dernier_filet=False` écarte la seule passe 6, celle des suites opaques, et
+    n'a de sens que pour un nom venu de la configuration du fork : passer par
+    `masquer_un_nom()`, qui porte ce raisonnement. Les passes et les réserves
+    assumées sont décrites en tête de module.
     """
     masque = _MOTIF_EMAIL.sub(VALEUR_MASQUEE, texte)
     masque = _MOTIF_PORTEUR.sub(
@@ -223,10 +252,26 @@ def masquer(texte: str, *, longueur_max: int | None = None) -> str:
     for motif in _MOTIFS_DE_JETON:
         masque = motif.sub(VALEUR_MASQUEE, masque)
     masque = _MOTIF_CHEMIN.sub(VALEUR_MASQUEE, masque)
-    masque = _MOTIF_SUITE_OPAQUE.sub(_masquer_la_suite_opaque, masque)
+    if dernier_filet:
+        masque = _MOTIF_SUITE_OPAQUE.sub(_masquer_la_suite_opaque, masque)
     if longueur_max is not None and len(masque) > longueur_max:
         masque = masque[: longueur_max - 1].rstrip() + "…"
     return masque
+
+
+def masquer_un_nom(texte: str, *, longueur_max: int | None = None) -> str:
+    """Masque un nom de destination ou de sauvegarde, sans le dernier filet.
+
+    Un nom est de la **configuration du fork**, pas un texte de fournisseur : il
+    est déjà affiché en clair par le problème Home Assistant d'une destination à
+    ré-autoriser, par le journal et par les listes du menu d'options. Les passes
+    1 à 5 restent appliquées — un utilisateur peut avoir collé une adresse
+    électronique, un chemin ou un jeton dans un nom — mais la passe 6 est
+    écartée : elle réduisait à `***` tout nom de vingt caractères ou plus sans
+    espace (« Dropbox-Compte-Familial »), sans rien protéger, et l'utilisateur
+    ne pouvait plus dire quelle destination avait lâché quand il en a deux.
+    """
+    return masquer(texte, longueur_max=longueur_max, dernier_filet=False)
 
 
 def _est_un_mot_ordinaire(valeur: str) -> bool:

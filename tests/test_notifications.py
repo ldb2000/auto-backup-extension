@@ -708,7 +708,8 @@ async def test_l_option_desactivee_laisse_le_probleme_home_assistant(
 # Le masquage lui-même est éprouvé vecteur par vecteur dans
 # `tests/test_masquage.py` : il est partagé par tout le fork. Ne reste ici que
 # ce qui est propre aux notifications — la traversée effective du masquage par
-# chacun des trois champs affichés.
+# chacun des trois champs affichés, et la profondeur retenue pour chacun : le
+# masquage entier pour la cause, ses passes 1 à 5 pour les deux noms.
 
 JETON_FACTICE = "sl.Bu1FaCtIcE-jamais-emis-0123456789"
 RAFRAICHISSEMENT_FACTICE = "1//0gFaCtIcE-jamais-emis-0123456789"
@@ -748,7 +749,9 @@ async def test_les_trois_champs_affiches_traversent_le_masquage(
     La cause n'est pas le seul texte non maîtrisé : le nom d'une destination est
     saisi par l'utilisateur, et celui d'une sauvegarde peut venir d'une
     automatisation. Un test par champ, pour qu'aucun n'échappe au masquage lors
-    d'un remaniement.
+    d'un remaniement. Les noms n'en traversent que les passes 1 à 5
+    (`masquer_un_nom()`), suffisantes pour les trois secrets cités ici ; le
+    dernier filet est réservé à la cause, cf. la section « Noms sans espace ».
     """
     await _echec(
         hass,
@@ -787,6 +790,67 @@ async def test_le_nom_d_une_destination_a_reautoriser_est_masque(
     affiche = f"{notification['title']}\n{notification['message']}"
     assert COURRIEL_FACTICE not in affiche
     assert f"Compte {VALEUR_MASQUEE}" in affiche
+
+
+### Noms sans espace : non-régression ###
+
+# Le dernier filet du masquage — « toute suite de vingt caractères ou plus » —
+# prenait ces noms ordinaires pour des suites opaques, faute d'espace. La
+# notification disait « échec d'envoi vers « *** » », et l'utilisateur qui a deux
+# destinations ne pouvait plus dire laquelle avait lâché. Les tests précédents ne
+# l'avaient pas vu : leurs noms d'essai portent tous une espace.
+DESTINATION_SANS_ESPACE = "Dropbox-Compte-Familial"
+SAUVEGARDE_SANS_ESPACE = "sauvegarde-complete-2026-09-26"
+
+
+async def test_un_nom_sans_espace_reste_en_clair_dans_la_notification_d_echec(
+    hass: HomeAssistant, entree_notifiante: MockConfigEntry
+) -> None:
+    """Le nom de la destination et celui de la sauvegarde restent lisibles.
+
+    Ce sont des noms de la configuration du fork, déjà affichés en clair par le
+    journal et par les listes du menu d'options : les masquer ne protégeait rien
+    et privait l'utilisateur de la seule information qui lui dise quoi réparer.
+    """
+    await _echec(
+        hass,
+        nom=SAUVEGARDE_SANS_ESPACE,
+        destination_nom=DESTINATION_SANS_ESPACE,
+        cause="le fournisseur a refusé l'envoi",
+    )
+
+    notification = _notification_d_echec(hass)
+    assert notification is not None
+    assert DESTINATION_SANS_ESPACE in notification["title"]
+    assert DESTINATION_SANS_ESPACE in notification["message"]
+    assert SAUVEGARDE_SANS_ESPACE in notification["message"]
+    assert VALEUR_MASQUEE not in f"{notification['title']}\n{notification['message']}"
+
+
+async def test_un_nom_sans_espace_reste_en_clair_dans_la_notification_de_reauth(
+    hass: HomeAssistant, entree_oauth: MockConfigEntry
+) -> None:
+    """La ré-authentification nomme la destination comme le problème l'affiche.
+
+    Le problème Home Assistant créé au même moment porte ce nom en clair dans
+    ses `translation_placeholders` : la notification qui le complète ne peut pas
+    le réduire à `***` sans devenir inutilisable.
+    """
+    config = DestinationConfig.from_dict(
+        config_oauth_factice(
+            destination_id="destination_sans_espace",
+            name=DESTINATION_SANS_ESPACE,
+        )
+    )
+
+    async_signaler_la_reauthentification(hass, config)
+    await hass.async_block_till_done()
+
+    notification = _notification_de_reauth(hass, "destination_sans_espace")
+    assert notification is not None
+    assert DESTINATION_SANS_ESPACE in notification["title"]
+    assert DESTINATION_SANS_ESPACE in notification["message"]
+    assert VALEUR_MASQUEE not in f"{notification['title']}\n{notification['message']}"
 
 
 ### Cycle de vie ###

@@ -20,8 +20,15 @@ Trois règles gouvernent l'ensemble :
    comme à la suppression de la destination.
 3. **Aucun secret dans une notification.** Tout ce qui vient d'un fournisseur —
    la cause d'un échec, au premier chef — traverse `masquer()` avant d'être
-   affiché. Le masquage ne vit pas ici : `destinations/masquage.py` est le point
-   unique du fork, et son en-tête décrit les passes comme les réserves assumées.
+   affiché. Les deux **noms** affichés, celui de la destination et celui de la
+   sauvegarde, passent par `masquer_un_nom()` : mêmes passes, sauf le dernier
+   filet des suites opaques, qui réduisait à `***` tout nom de vingt caractères
+   ou plus sans espace (« Dropbox-Compte-Familial »). Un nom est de la
+   configuration du fork, déjà affichée en clair par le problème Home Assistant
+   et par le menu des options : le masquer ne protégeait rien et empêchait
+   l'utilisateur de savoir laquelle de ses destinations avait lâché. Le masquage
+   ne vit pas ici : `destinations/masquage.py` est le point unique du fork, et
+   son en-tête décrit les passes comme les réserves assumées.
 
 L'option `notify_on_failure` (vraie par défaut, réglable dans les options de
 l'intégration) coupe les notifications persistantes, et elles seules : les
@@ -57,7 +64,7 @@ from ..const import (
     NOTIFICATION_UPLOAD_PREFIX,
 )
 from .errors import UnknownProviderError
-from .masquage import masquer
+from .masquage import masquer, masquer_un_nom
 from .models import DestinationConfig
 from .registry import provider_label
 
@@ -187,10 +194,14 @@ class GestionnaireDeNotifications:
             )
             return
 
-        destination = masquer(
+        # Les noms gardent leurs passes 1 à 5 mais pas le dernier filet : ce
+        # sont des noms du fork, et l'utilisateur doit pouvoir les lire pour
+        # savoir quelle destination a lâché. Seule la cause, texte du
+        # fournisseur, traverse le masquage entier.
+        destination = masquer_un_nom(
             str(event.data.get(ATTR_DESTINATION_NAME) or destination_id)
         )
-        sauvegarde = masquer(
+        sauvegarde = masquer_un_nom(
             str(event.data.get(ATTR_NAME) or event.data.get(ATTR_SLUG) or "sans nom")
         )
         cause = masquer(str(event.data.get(ATTR_ERROR) or "cause inconnue"))
@@ -307,7 +318,10 @@ def async_notifier_la_reauthentification(
     if not gestionnaire.notifications_actives:
         return
 
-    destination = masquer(config.name)
+    # Le problème Home Assistant créé au même moment affiche ce nom en clair
+    # (`destinations/reauth.py`) : la notification ne gagnerait rien à le réduire
+    # à `***`, elle perdrait seulement de l'information.
+    destination = masquer_un_nom(config.name)
     persistent_notification.async_create(
         hass,
         MESSAGE_REAUTH.format(

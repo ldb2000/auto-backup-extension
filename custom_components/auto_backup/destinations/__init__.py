@@ -41,7 +41,7 @@ from .errors import (
     UnknownProviderError,
 )
 from .manager import DestinationManager
-from .masquage import masquer
+from .masquage import masquer, masquer_un_nom
 from .models import VALEUR_MASQUEE, DestinationConfig, RemoteBackup
 from .notifications import (
     GestionnaireDeNotifications,
@@ -124,6 +124,7 @@ __all__ = [
     "jeton_valide",
     "list_providers",
     "masquer",
+    "masquer_un_nom",
     "normaliser_le_jeton",
     "options_avec_destinations",
     "options_avec_reglage",
