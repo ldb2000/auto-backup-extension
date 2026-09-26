@@ -296,16 +296,23 @@ joignable, options upstream complétées — et trois s'y ajoutent :
 Le dépôt se développe et se teste sur l'interpréteur exigé par la dernière version de Home
 Assistant (`requires-python` dans `pyproject.toml`, aujourd'hui **3.14**). L'intégration est en
 revanche **installée** chez des utilisateurs dont le plancher annoncé est celui de `hacs.json` :
-**Home Assistant 2025.1, qui tourne sous Python 3.12**.
+**Home Assistant 2026.3, qui exige Python 3.14.2** (plancher relevé de 2025.1.0 par l'issue
+#28).
 
 **Règle : tout ce qui vit sous `custom_components/auto_backup/` doit rester analysable par
-Python 3.12.** Une syntaxe plus récente ne casse rien en développement, mais lève une
+Python 3.14.** Une syntaxe plus récente ne casse rien en développement, mais lève une
 `SyntaxError` au chargement de l'intégration chez ces utilisateurs, avant l'exécution de la
 moindre ligne de logique. La règle ne s'applique qu'au code livré : `tests/` et les scripts du
 dépôt ne tournent que sur l'interpréteur de développement.
 
+Les deux planchers coïncident depuis #28, mais ils restent indépendants : le dépôt suit la
+dernière version de Home Assistant, alors que la version annoncée dans `hacs.json` ne bouge que
+sur décision explicite. Ils divergeront de nouveau dès la prochaine version de Python, et la
+règle ci-dessus redeviendra contraignante — d'où le maintien du garde-fou.
+
 Le piège rencontré sur l'issue #13 est la PEP 758 : `except A, B:` sans parenthèses, valide à
-partir de Python 3.14 seulement. On écrit donc :
+partir de Python 3.14 seulement. Elle passerait le plancher actuel, mais le dépôt garde la forme
+parenthésée, valide sur toutes les versions :
 
 ```python
 except (ClientError, ValueError, UnicodeDecodeError) as err:
@@ -318,16 +325,23 @@ journal `debug`) : la cible de `ruff format` est l'interpréteur de développeme
 qu'il juge superflues sur une clause sans `as`.
 
 Le garde-fou est [`tests/test_compatibilite_python.py`](../tests/test_compatibilite_python.py) :
-il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 12))` et
+il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 14))` et
 échoue en nommant le fichier, la ligne et la construction fautive. Deux tests l'accompagnent :
-l'un vérifie que le garde-fou refuse bien un extrait écrit en PEP 758 (sans quoi il pourrait
-passer à côté de ce qu'il surveille), l'autre relie le plancher testé à `hacs.json` — monter la
-version minimale de Home Assistant annoncée oblige à revoir `PLANCHER_UTILISATEUR` et cette
-section plutôt qu'à les laisser diverger en silence.
+l'un vérifie que le mécanisme refuse bien une syntaxe postérieure au plancher qu'on lui donne
+(sans quoi le garde-fou pourrait passer à côté de ce qu'il surveille), l'autre relie le plancher
+testé à `hacs.json` — monter la version minimale de Home Assistant annoncée oblige à revoir
+`PLANCHER_UTILISATEUR` et cette section plutôt qu'à les laisser diverger en silence.
+
+Ce premier test s'exerce sur Python 3.13, une version *antérieure* au plancher, et non sur le
+plancher lui-même : la PEP 758 étant valide en 3.14, plus aucune syntaxe connue ne lui est
+postérieure, et CPython borne de toute façon `feature_version` à la version de l'interpréteur
+courant. Il démontre donc que le mécanisme mord toujours, sans prétendre que 3.13 soit le
+plancher contrôlé.
 
 Limite assumée : `feature_version` est donnée pour « best effort » par CPython et ne couvre pas
 l'intégralité des évolutions de syntaxe. Ce garde-fou ne remplace pas une exécution réelle sur
-le plancher, mais il est instantané et bloque la régression la plus probable.
+le plancher, mais il est instantané et bloque la régression la plus probable le jour où les deux
+planchers divergeront de nouveau.
 
 ## Modifier l'intégration importée
 

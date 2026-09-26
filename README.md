@@ -104,9 +104,12 @@ La version de Home Assistant utilisée pour les tests est celle qu'épingle
 figées dans `uv.lock`). C'est ce qui fixe le plancher de développement à Python 3.14.2,
 exigé par Home Assistant >= 2026.3.
 
-Ce plancher ne concerne que l'environnement de développement et de test. La version minimale
-de Home Assistant annoncée aux utilisateurs de l'intégration reste **2025.1.0**, déclarée dans
-`hacs.json`.
+La version minimale de Home Assistant annoncée aux utilisateurs de l'intégration est
+**2026.3.0**, déclarée dans `hacs.json` : les destinations distantes importent des exceptions
+OAuth2 apparues dans cette version. Home Assistant 2026.3 exigeant lui aussi Python 3.14.2, le
+plancher de développement et celui des utilisateurs coïncident aujourd'hui. Ils restent deux
+planchers distincts : le dépôt suit la dernière version de Home Assistant, alors que la version
+annoncée ne bouge que sur décision explicite.
 
 Le répertoire `custom_components/auto_backup/` est exclu du reformatage `ruff` pour rester
 identique à l'upstream (voir [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).

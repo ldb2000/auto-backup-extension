@@ -39,6 +39,13 @@ modification, et peut porter ses propres appareils et entités.
 - Contre : Exige Home Assistant ≥ 2025.3, alors que `hacs.json` annonce **2025.1.0** comme version
   minimale : adopter les sous-entrées relèverait le plancher pour tous les utilisateurs, y
   compris ceux qui n'utilisent aucune destination cloud.
+
+  > **Note du 2026-09-25 (issue #28)** : cet argument ne tient plus. Le plancher annoncé est
+  > passé à **2026.3.0**, bien au-delà du 2025.3 qu'exigent les sous-entrées ; les adopter ne
+  > relèverait plus rien. La décision ci-dessous n'est pas réécrite pour autant : `entry.options`
+  > reste retenue pour ses autres raisons (divergence minimale avec le code upstream, options
+  > déjà persistées par le cœur, tests triviaux). Une migration vers les sous-entrées relèverait
+  > d'une issue dédiée et reste hors périmètre de #28.
 - Contre : Impose de modifier le flux de configuration upstream (`async_get_supported_subentry_types`,
   classes de flux dédiées), donc de diverger davantage d'un code importé à l'identique
   (cf. `docs/UPSTREAM.md`).
@@ -48,6 +55,9 @@ Les destinations sont stockées comme une liste sérialisable dans les options d
 persistées par Home Assistant dans `.storage/core.config_entries`.
 
 - Pour : Aucun plancher de version supplémentaire : compatible avec le 2025.1.0 annoncé.
+
+  > **Note du 2026-09-25 (issue #28)** : ce « pour » est devenu sans objet, le plancher annoncé
+  > étant désormais **2026.3.0**. Les autres arguments en faveur de cette option restent entiers.
 - Pour : Deux lignes ajoutées aux modules upstream, sans suppression (cf. `docs/UPSTREAM.md`).
 - Pour : Rechargement et écriture triviaux à tester, y compris le redémarrage simulé.
 - Contre : L'interface d'ajout et de suppression est à écrire (issue #7) ; les sous-entrées l'auraient
@@ -74,6 +84,12 @@ installation qui fonctionne aujourd'hui pour une commodité d'implémentation. S
 chaque ligne modifiée dans le code upstream se paie à chaque resynchronisation, et que
 l'option B en demande deux fois moins.
 
+> **Note du 2026-09-25 (issue #28)** : l'argument du plancher, qui ouvre ce paragraphe, est caduc.
+> Le plancher annoncé est passé à Home Assistant 2026.3.0, bien au-delà du 2025.3 qu'exigent les
+> sous-entrées de configuration : plus aucune installation n'est exclue par ce choix. La décision
+> reste `entry.options`, mais pour ses seules autres raisons — divergence minimale avec le code
+> upstream, persistance déjà assurée par le cœur, tests simples.
+
 Conséquences pratiques :
 
 - l'écriture passe toujours par `async_persist_destinations()`, qui conserve les options
@@ -89,11 +105,13 @@ Conséquences pratiques :
 
 ### Révision possible
 
-Quand le plancher passera à 2025.3 ou au-delà, migrer vers les sous-entrées redeviendra
-pertinent, en particulier pour la gestion des jetons OAuth par compte. La migration consistera à
-transformer chaque élément de la liste en sous-entrée dans `async_migrate_entry` : le format
-persisté (identifiant stable, fournisseur, nom, dossier, rétentions) est déjà celui qu'une
-sous-entrée porterait.
+La condition posée ici est remplie depuis l'issue #28 : le plancher annoncé vaut 2026.3.0, donc
+au-delà du 2025.3 qu'exigent les sous-entrées. Migrer est désormais possible, et intéressant pour
+la gestion des jetons OAuth par compte, mais reste hors périmètre : c'est une re-décision à
+prendre explicitement, pas une conséquence automatique. La migration consisterait à transformer
+chaque élément de la liste en sous-entrée dans `async_migrate_entry` : le format persisté
+(identifiant stable, fournisseur, nom, dossier, rétentions) est déjà celui qu'une sous-entrée
+porterait.
 
 ## Décision 2 — un registre de fournisseurs, pas d'import en dur
 
@@ -738,13 +756,15 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   crochet : l'ajout **s'interrompt** (abandon `echec_fournisseur`), voir la section « Échec d'un
   crochet » ci-dessus.
 
-- **Plancher d'Home Assistant** : le fork annonce **2025.1.0** comme version minimale, mais
-  l'absence de sous-entrées de configuration — choix retenu en #6 — a imposé de repousser des
-  mécanismes robustes vers le flux d'options. Le plancher sera aligné sur **2026.3** par
-  l'issue #28 pour lever cette limitation et migrer vers le modèle standard de Home Assistant.
-  **Traité en #28** : le `hacs.json` est mis à jour et le garde-fou `tests/test_compatibilite_python.py`
-  doit dériver de ce nouveau plancher, et non plus de 2025.1.0, pour que le plancher d'analyse
-  reste aligné avec la version minimale déclarée aux utilisateurs.
+- **Plancher d'Home Assistant** : **traité en #28**. Le fork annonçait **2025.1.0** comme version
+  minimale alors que le code OAuth2 livré en #7 importe `OAuth2TokenRequestError` et
+  `OAuth2TokenRequestReauthError`, apparues en 2026.3 : l'intégration n'aurait pas pu se charger
+  sur les versions annoncées. `hacs.json` et `pyproject.toml` déclarent désormais **2026.3.0**,
+  et le garde-fou `tests/test_compatibilite_python.py` dérive son plancher d'analyse (Python
+  3.14) de cette version, et non plus de 2025.1.0. Les deux « contre »/« pour » de la décision 1
+  qui s'appuyaient sur l'ancien plancher sont annotés ci-dessus : l'argument de version ne
+  soutient plus le choix d'`entry.options`, qui reste retenu pour ses autres raisons. Migrer vers
+  les sous-entrées de configuration était hors périmètre de #28 et demanderait une issue dédiée.
 
 - **Limitation d'une corrélation par nom en présence d'appels concurrents (FAQ, issue #19)** :
   deux appels **concurrents** portant le **même nom explicite** et `upload_to` ne sont pas
