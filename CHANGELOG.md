@@ -66,6 +66,8 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 
 ### Modifié
 
+- `docs/adr/0001-destinations-distantes.md` : clarification du contrat de l'événement `auto_backup.remote_purge` (champs et condition d'émission : suppression réelle requise) et documentation du registre `hass.data[DATA_REMOTE_BACKUPS]` avec sa méthode `entrees(destination_id)` comme source de vérité du nombre de sauvegardes distantes (issue #16) ; ajout à la section « Points ouverts » que l'issue #32 réévaluera la persistance en sous-entrées de configuration après l'epic (frein du plancher disparu avec #28). Refs #9
+- `README.md` : clarification que l'événement `auto_backup.remote_purge` n'est émis que lorsqu'une suppression a réellement eu lieu pour une destination, et aucun événement n'est émis si rien n'a été supprimé. Refs #9
 - Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
 - `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6
 - Les exemptions `ruff` de l'upstream sont énumérées module par module dans `pyproject.toml` : le code du fork (`destinations/`) est soumis à toutes les règles et au formatage. Refs #6

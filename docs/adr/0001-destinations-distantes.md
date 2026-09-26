@@ -678,8 +678,29 @@ décision 4) ; un listage impossible abandonne cette destination sans toucher au
 suppression en échec est journalisée et laisse son entrée au registre — le fichier est toujours
 là — pour être retentée à la purge suivante. Une sauvegarde déjà absente
 (`DestinationNotFoundError`) est au contraire traitée comme purgée : le but est atteint, et son
-entrée quitte le registre pour ne pas être retentée indéfiniment. L'événement
-`auto_backup.remote_purge` n'est émis que si quelque chose a réellement disparu.
+entrée quitte le registre pour ne pas être retentée indéfiniment.
+
+### Contrat de l'événement `auto_backup.remote_purge`
+
+L'événement `auto_backup.remote_purge` n'est **émis que lorsqu'une suppression a réellement eu
+lieu** pour une destination donnée. Ses champs sont :
+
+- `destination` : identifiant technique de la destination (`str`), clé dans le registre ;
+- `destination_name` : nom lisible de la destination configuré par l'utilisateur (`str`) ;
+- `remote_ids` : liste des identifiants distants (`remote_id`) supprimés (`list[str]`).
+
+Un appel du service `auto_backup.purge` qui purge d'autres destinations sans en supprimer une
+donnée n'émet donc pas d'événement pour elle. De même, un téléversement suivi d'une purge qui ne
+trouve rien à supprimer n'émet rien.
+
+### Registre persistant des sauvegardes distantes
+
+Le registre `hass.data[DATA_REMOTE_BACKUPS]` est un `Store` Home Assistant persisté dans
+`.storage/auto_backup.remote_backups`. Il expose une **méthode `entrees(destination_id)`** qui
+renvoie la liste des sauvegardes déposées pour une destination donnée : chaque entrée porte
+`remote_id`, `name`, `slug`, `created_at` et `size`. **C'est la source de vérité du nombre de
+sauvegardes distantes pour une destination**, notamment pour l'issue #16 (entités d'état). Le
+registre n'expose aucun secret : ni jeton, ni identifiant de compte ne figure dans ses entrées.
 
 ### Le filet de sécurité : borner les appels réseau de la purge
 
@@ -785,6 +806,8 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   l'absence de sous-entrées de configuration — choix retenu en #6 — a imposé de repousser des
   mécanismes robustes vers le flux d'options. Le plancher sera aligné sur **2026.3** par
   l'issue #28 pour lever cette limitation et migrer vers le modèle standard de Home Assistant.
+  Une fois ce plancher atteint, l'issue #32 (créée le 2026-09-26) réévaluera la persistance en
+  sous-entrées de configuration après la clôture de l'epic, sur décision du propriétaire du fork.
 
 - **Limitation d'une corrélation par nom en présence d'appels concurrents (FAQ, issue #19)** :
   deux appels **concurrents** portant le **même nom explicite** et `upload_to` ne sont pas

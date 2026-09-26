@@ -108,9 +108,10 @@ avertissement dans le journal, et les autres destinations sont purgées normalem
 déjà disparu chez le fournisseur est traité comme purgé (avertissement, entrée retirée du
 registre) et une suppression en échec n'interrompt jamais la purge des suivantes.
 
-**Événement** : `auto_backup.remote_purge` est émis après chaque série de suppressions, avec les
-champs `destination` (identifiant), `destination_name` (nom lisible) et `remote_ids` (liste des
-identifiants distants supprimés).
+**Événement** : `auto_backup.remote_purge` est émis **après chaque série de suppressions qui a
+supprimé au moins un fichier**, avec les champs `destination` (identifiant), `destination_name`
+(nom lisible) et `remote_ids` (liste des identifiants distants supprimés). Aucun événement n'est
+émis pour une destination où rien n'a été supprimé.
 
 ```yaml
 automation:
