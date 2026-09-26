@@ -30,6 +30,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from homeassistant.components import persistent_notification
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
@@ -67,6 +68,9 @@ from custom_components.auto_backup.destinations import (
     DestinationError,
     DestinationNotFoundError,
     identifiant_du_probleme,
+)
+from custom_components.auto_backup.destinations.notifications import (
+    identifiant_de_notification_de_reauthentification,
 )
 from custom_components.auto_backup.destinations.providers.google_drive import (
     CLE_ID_DU_DOSSIER,
@@ -1013,6 +1017,23 @@ def _registre(hass: HomeAssistant) -> Any:
     return hass.data[DATA_REMOTE_BACKUPS]
 
 
+def _notification_de_reauth(
+    hass: HomeAssistant, destination_id: str = IDENTIFIANT_DESTINATION
+) -> Any:
+    """Notification persistante de ré-authentification (#17), si elle existe.
+
+    Le problème Home Assistant (`reauth.py`) et la notification (#17,
+    `notifications.py`) sont créés dans le même mouvement par
+    `async_signaler_la_reauthentification()` : ce n'est donc pas une mécanique
+    propre au listage ou à la suppression, mais un effet de bord partagé de
+    l'appel Drive commun (`async_appel_drive_json`), qui doit se produire aussi
+    bien pour un appel direct que pour un appel fait depuis la purge.
+    """
+    return persistent_notification._async_get_or_create_notifications(hass).get(
+        identifiant_de_notification_de_reauthentification(destination_id)
+    )
+
+
 async def test_une_purge_sans_rien_a_supprimer_reste_silencieuse(
     hass: HomeAssistant,
     integration_backup: None,
@@ -1031,7 +1052,11 @@ async def test_une_purge_sans_rien_a_supprimer_reste_silencieuse(
 
     assert faux.supprimes == []
     assert evenements == []
-    assert [enregistrement.message for enregistrement in caplog.records] == []
+    assert [
+        enregistrement.message
+        for enregistrement in caplog.records
+        if enregistrement.levelno >= logging.ERROR
+    ] == []
 
 
 async def test_une_purge_qui_echoue_au_listage_ne_trace_pas_d_appel(
@@ -1101,6 +1126,78 @@ async def test_une_troncature_de_pagination_n_empeche_pas_la_purge_d_aboutir(
         for enregistrement in caplog.records
         if enregistrement.levelno >= logging.ERROR
     ] == []
+
+
+### Ré-authentification pendant une purge (issue #17) ###
+
+
+async def test_un_401_au_listage_d_une_purge_notifie_la_reautorisation(
+    hass: HomeAssistant,
+    integration_backup: None,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Critère 5 : un 401 au listage d'une purge crée aussi la notification.
+
+    `test_une_erreur_d_authentification_au_listage_demande_une_reautorisation`
+    éprouve déjà le problème Home Assistant sur un appel direct à
+    `async_list_backups()`. Ici, l'appel vient du coordinateur de purge
+    (déclenché par le service `auto_backup.purge`), qui attrape lui-même la
+    `DestinationAuthError` pour journaliser et passer à la destination
+    suivante : le signalement de ré-authentification — et la notification
+    persistante de l'issue #17 qui l'accompagne — doit donc avoir eu lieu
+    *avant* que cette exception ne soit rattrapée, sans quoi une destination
+    purgée en tâche de fond resterait invisible à l'écran d'accueil.
+    """
+    await _entree(hass, **{CONF_RETENTION_DAYS: 1})
+    _FauxDrive(
+        aioclient_mock,
+        fichiers=[fichier_drive("vieille", jours=30)],
+        pannes_listage=[(401, erreur_google(401, "authError"))],
+    )
+
+    await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+    await hass.async_block_till_done()
+
+    registre = ir.async_get(hass)
+    assert (
+        registre.async_get_issue(
+            DOMAIN, identifiant_du_probleme(IDENTIFIANT_DESTINATION)
+        )
+        is not None
+    )
+    assert _notification_de_reauth(hass) is not None
+
+
+async def test_un_401_a_la_suppression_d_une_purge_notifie_la_reautorisation(
+    hass: HomeAssistant,
+    integration_backup: None,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Critère 5 : un 401 à la suppression d'une purge crée aussi la notification.
+
+    Même raisonnement que pour le listage, mais l'échec survient cette fois à
+    `files.delete`, une fois le fichier expiré retenu par la rétention : la
+    purge le rattrape en `DestinationError` (`_async_supprimer`) et continue,
+    mais la ré-authentification a déjà été signalée par l'appel Drive partagé.
+    """
+    await _entree(hass, **{CONF_RETENTION_DAYS: 1})
+    _FauxDrive(
+        aioclient_mock,
+        fichiers=[fichier_drive("vieille", jours=30)],
+        pannes_suppression={"vieille": (401, erreur_google(401, "authError"))},
+    )
+
+    await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+    await hass.async_block_till_done()
+
+    registre = ir.async_get(hass)
+    assert (
+        registre.async_get_issue(
+            DOMAIN, identifiant_du_probleme(IDENTIFIANT_DESTINATION)
+        )
+        is not None
+    )
+    assert _notification_de_reauth(hass) is not None
 
 
 ### Journaux ###
