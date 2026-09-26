@@ -295,8 +295,10 @@ PROVENANCE_NOM = "nom"
 # pas contenir de crochet ouvrant, qui délimite le groupe, mais tolère le reste :
 # `_assaini()` ne filtre pas les crochets, et un slug qui en porterait doit
 # rester reconnaissable.
+# Le motif est confronté au nom entier (`fullmatch`) : un `$` accepterait un nom
+# terminé par un retour à la ligne, qui n'est pas celui que le dépôt a écrit.
 MOTIF_NOM_DEPOSE = re.compile(
-    rf"^.+ \[(?P<slug>[^\[]{{1,{LONGUEUR_MAX_SLUG}}})\]{re.escape(SUFFIXE_ARCHIVE)}$"
+    rf".+ \[(?P<slug>[^\[]{{1,{LONGUEUR_MAX_SLUG}}})\]{re.escape(SUFFIXE_ARCHIVE)}"
 )
 
 
@@ -523,7 +525,7 @@ def slug_de_la_convention(nom: str) -> str | None:
     """
     if not nom or len(nom) > LONGUEUR_MAX_NOM_FICHIER:
         return None
-    correspondance = MOTIF_NOM_DEPOSE.match(nom)
+    correspondance = MOTIF_NOM_DEPOSE.fullmatch(nom)
     if correspondance is None:
         return None
     return correspondance["slug"].strip() or None

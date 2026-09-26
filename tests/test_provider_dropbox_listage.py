@@ -501,9 +501,11 @@ async def test_un_listage_qui_traine_est_coupe_par_le_garde_fou(
         ),
     )
 
+    # Le message est celui du listage entier, et non celui d'une requête isolée :
+    # les deux parlent de « temps imparti », seule la phrase les distingue.
     with (
         patch(f"{MODULE_DROPBOX}.DELAI_LISTAGE", DELAI_MINUSCULE),
-        pytest.raises(DestinationError, match="temps imparti"),
+        pytest.raises(DestinationError, match=r"listage.*n'a pas abouti"),
     ):
         await destination.async_list_backups()
 
@@ -858,11 +860,13 @@ async def test_une_suppression_rejouee_apres_une_limitation_aboutit(
 
 
 async def test_une_suppression_refusee_reste_une_erreur_de_destination(
-    destination: DropboxDestination,
-    aioclient_mock: AiohttpClientMocker,
-    sommeil: Any,
+    destination: DropboxDestination, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """Un refus définitif nomme la sauvegarde et la destination concernées."""
+    """Un refus définitif nomme la sauvegarde et la destination concernées.
+
+    Aucune nouvelle tentative n'est attendue : un `409` de nom interdit ne
+    s'arrangera pas en attendant une minute.
+    """
     aioclient_mock.post(
         URL_SUPPRESSION, status=409, json=erreur_dropbox("path_write/disallowed_name/.")
     )
@@ -873,6 +877,7 @@ async def test_une_suppression_refusee_reste_une_erreur_de_destination(
     assert not isinstance(echec.value, DestinationNotFoundError)
     assert IDS[0] in str(echec.value)
     assert NOM_DESTINATION in str(echec.value)
+    assert len(appels(aioclient_mock, URL_SUPPRESSION)) == 1
 
 
 ### Erreur d'authentification : ré-autorisation, pas erreur générique ###
