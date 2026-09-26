@@ -355,6 +355,11 @@ restauration depuis le nuage est hors périmètre de l'epic #1. La demander « a
 contredirait le critère de moindre privilège de l'issue #10 ; elle sera ajoutée avec la
 fonctionnalité qui la justifiera, au prix d'une ré-autorisation par l'utilisateur.
 
+`files.metadata.write` est absente pour la même raison : elle ne servirait qu'à écrire des
+`property_groups`, qui exigent en plus un modèle de propriétés déclaré pour l'application. Le
+fork s'en passe — voir « Chez Dropbox, ce marqueur ne survit pas au dépôt » — et n'élargit donc
+pas l'autorisation demandée à l'utilisateur.
+
 Aucune portée de partage, de demande de fichier, de contact ni d'équipe n'est demandée.
 `token_access_type=offline` est ajouté à la demande d'autorisation : sans lui Dropbox ne
 délivre pas de jeton de rafraîchissement et l'accès expirerait au bout de quatre heures,
@@ -608,10 +613,58 @@ avoir envoyé : `remote_id` est l'identifiant opaque (`id:...`), seule clé de s
 `path` le `path_display`, `size` et `created_at` la taille et le `server_modified` enregistrés
 **par Dropbox**.
 
-`metadata` porte le slug, l'empreinte du contenu (`content_hash`) et un marqueur
-`auto_backup: True`. Ce marqueur est ce qui autorisera le listage (#12) et la purge distante
-(#9) à ne considérer que les fichiers déposés par l'intégration : un fichier que l'utilisateur
-a rangé lui-même dans le dossier ne doit jamais être supprimé par une rétention.
+`metadata` porte le slug, l'empreinte du contenu (`content_hash`) et le marqueur de provenance
+produit par `marqueur_auto_backup()`. La clé de ce marqueur n'a **qu'une** définition, celle de
+`destinations/retention.py` : la dupliquer dans le fournisseur marchait tant que les deux
+valeurs coïncidaient, et aurait fait qu'un renommage côté rétention cesse en silence de
+reconnaître tous les dépôts Dropbox.
+
+#### Chez Dropbox, ce marqueur ne survit pas au dépôt
+
+C'est la limite à connaître avant d'écrire #12, et elle contredit ce que cet ADR affirmait :
+**l'API Dropbox v2 n'offre aucune métadonnée libre sur un fichier**. Il n'y a pas d'équivalent
+des `appProperties` de Google Drive. Le seul emplacement existant est `property_groups` de
+`CommitInfo`, inutilisable ici : il exige un *modèle de propriétés* déclaré au préalable pour
+l'application, puis la portée `files.metadata.write`, que le fork ne demande pas (cf. « Portées
+demandées, et pourquoi chacune »).
+
+Le marqueur posé dans `_sauvegarde_depuis()` ne vit donc **qu'en mémoire**, le temps que le
+coordinateur de #8 traite la sauvegarde — et le registre de #9 ne le persiste pas davantage : il
+ne garde que `remote_id`, `name`, `slug`, `created_at` et `size`. Aucun fichier déposé chez
+Dropbox ne porte de preuve de provenance.
+
+Pour #12, la provenance se reconstitue donc depuis le **registre** de #9 et, à défaut, depuis la
+**convention de nommage** `<nom> [<slug>].tar` : la piste A de la section « Reconnaître ses
+propres sauvegardes », rejetée comme preuve générale, redevient le seul repli quand le registre
+a été perdu — avec la prudence que cela impose, un nom n'étant pas une preuve. Le marqueur reste
+posé dans `RemoteBackup.metadata` parce qu'il ne coûte rien et qu'un fournisseur capable de le
+persister, lui, n'aura rien à changer au dépôt.
+
+**Risque d'orphelins, à arbitrer dans #12.** Un dépôt qui aboutit chez Dropbox mais que le fork
+rapporte en échec laisse un fichier que rien ne rattache à l'intégration : pas d'entrée au
+registre — `auto_backup.upload_successful` n'a pas été émis — et pas de marqueur à relire. Il ne
+sera jamais purgé et grossira le dossier de l'utilisateur en silence. Trois chemins y mènent :
+
+- le **rejeu** d'un `upload_session/finish` dont la première tentative avait en réalité abouti :
+  Dropbox répond `path/conflict/file`, que le fork traduit en échec (`mode: add`,
+  `autorename: false`) ;
+- un **écart de taille** entre ce que Dropbox enregistre et les octets envoyés : le dépôt est
+  déclaré en échec alors que le fichier est déjà commité ;
+- un **délai dépassé** après le commit mais avant que la réponse ne soit lue.
+
+#12 devra trancher : reconnaissance par la convention de nommage au listage, trace locale des
+dépôts incertains, ou acceptation documentée. Enrichir l'événement de téléversement pour que le
+registre garde le chemin et la date du fournisseur relève de la même issue (voir les points
+ouverts).
+
+#### Les crochets de #12 échouent par une erreur typée
+
+`async_list_backups()` et `async_delete_backup()` restent à écrire, mais ils ne lèvent pas
+`NotImplementedError` : depuis #9, une rétention configurée sur une destination Dropbox fait
+appeler le listage après **chaque** sauvegarde, et `retention._async_lister()` ne journalise
+sans trace d'appel que les erreurs typées du socle. Les deux crochets lèvent donc une
+`DestinationError` dont le message français renvoie à #12 : la purge saute la destination en une
+ligne lisible, au lieu d'empiler une trace d'appel pour une situation parfaitement attendue.
 
 Les journaux enfin : l'en-tête `Authorization` est construit dans une seule fonction et n'est
 journalisé nulle part, à aucun niveau. L'argument `Dropbox-API-Arg` porte le chemin distant —
@@ -901,12 +954,13 @@ morts : un `.storage` perdu (réinstallation, restauration partielle) rend nos p
 non purgeables, et un dossier distant partagé par deux instances Home Assistant ne voit chacune
 purger que les siennes.
 
-**C. Un marqueur dans les métadonnées du fournisseur.** Dropbox et Google Drive savent attacher
-des propriétés à un fichier (`property groups`, `appProperties`). Un fournisseur les pose au
-téléversement, la purge les relit au listage. La preuve voyage alors **avec le fichier** : elle
-survit à la perte du registre. Mais elle dépend de ce que chaque API sait stocker — souvent des
-chaînes seulement, parfois rien — et les fournisseurs réels ne posent ce marqueur qu'à partir
-des issues #12 et #15.
+**C. Un marqueur dans les métadonnées du fournisseur.** Google Drive sait attacher des
+propriétés privées à un fichier (`appProperties`) : le fournisseur les pose au téléversement, la
+purge les relit au listage, et la preuve voyage alors **avec le fichier** — elle survit à la
+perte du registre. Mais elle dépend de ce que chaque API sait stocker, et **Dropbox ne sait
+rien stocker ici** : son seul emplacement (`property_groups`) réclame un modèle de propriétés
+et une portée que le fork ne demande pas, de sorte que le marqueur qu'il pose à l'envoi ne vit
+qu'en mémoire (voir « Chez Dropbox, ce marqueur ne survit pas au dépôt »).
 
 **Décision : B *et* C, en « ou » logique.** Une sauvegarde distante n'est candidate à la purge
 que si elle est **inscrite au registre** *ou* si elle **porte le marqueur** `auto_backup`. Les
@@ -1140,11 +1194,28 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   encore d'issue dédiée.
 
 - **Marqueur de provenance chez les fournisseurs réels (issues #12 et #15)** : `#9` reconnaît le
-  marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`, mais
-  aucun fournisseur livré ne le pose encore : ni Dropbox (#10) ni Google Drive (#13) n'écrivent
-  de métadonnées. Les issues #12 et #15 devront passer ce marqueur à `async_upload()` **et** le
-  relire dans `async_list_backups()`, sans quoi seule la voie du registre protège les sauvegardes
-  du fork.
+  marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`, que le
+  dépôt Dropbox de `#11` pose bien — mais **sans qu'il soit stocké chez le fournisseur** : l'API
+  v2 n'a pas de champ libre (voir « Chez Dropbox, ce marqueur ne survit pas au dépôt »). Chez
+  Dropbox, la voie du registre est donc la seule, avec la convention de nommage
+  `<nom> [<slug>].tar` pour dernier repli ; seul Google Drive (#14, #15) pourra réellement faire
+  voyager le marqueur avec le fichier, via `appProperties`.
+
+- **Fichier déposé chez Dropbox mais rapporté en échec (issue #12)** : un dépôt commité que le
+  fork déclare en échec — rejeu de `finish` répondant `path/conflict/file`, écart de taille,
+  délai dépassé après le commit — n'entre pas au registre et ne porte aucun marqueur : il ne sera
+  jamais purgé. Le cas est documenté dans la section Dropbox ci-dessus ; son arbitrage
+  (reconnaissance par nommage, trace locale des dépôts incertains, ou acceptation assumée)
+  appartient à #12, qui écrit le listage.
+
+- **Le registre re-date l'entrée qu'il inscrit (issue #12)** : `#9` alimente le registre depuis
+  l'événement `auto_backup.upload_successful`, qui ne porte ni le chemin distant ni le
+  `server_modified` du fournisseur. `created_at` vaut donc l'instant de réception de l'événement,
+  et non la date enregistrée chez Dropbox — quelques secondes d'écart, sans conséquence
+  fonctionnelle : la suppression s'appuie sur `remote_id`, et la rétention en jours se compte en
+  jours. **Décision : accepté tel quel.** Enrichir l'événement (chemin, date du fournisseur) pour
+  que le registre garde ce que `RemoteBackup` sait déjà relèverait de #12, qui a besoin de ces
+  champs pour le listage.
 
 ## Conséquences
 
@@ -1211,9 +1282,10 @@ Ajouts de l'issue #11 :
 - Une sauvegarde part réellement chez Dropbox : le socle et le coordinateur de `#8` n'ont pas
   bougé d'une ligne, seul `DropboxDestination.async_upload()` a été écrit — la preuve que le
   contrat de `RemoteDestination` tenait la route pour un fournisseur réel.
-- Une sauvegarde distante déposée porte le marqueur `auto_backup` dans ses métadonnées : `#9`
-  (purge distante) et `#12` (listage et suppression) s'en serviront pour ne jamais toucher un
-  fichier que l'utilisateur a rangé lui-même dans le dossier.
+- Une sauvegarde déposée porte le marqueur `auto_backup` dans `RemoteBackup.metadata`, mais
+  **rien ne l'emporte chez Dropbox** : l'API v2 n'offre aucune métadonnée libre. C'est le
+  registre de `#9` qui établit la provenance, et `#12` devra s'en accommoder (voir « Chez
+  Dropbox, ce marqueur ne survit pas au dépôt »).
 - `#14` héritera des mêmes questions — seuil d'envoi simple, fragmentation, rejeu borné — mais
   pas du même code : les deux API n'ont ni le même protocole d'envoi par morceaux, ni les mêmes
   codes d'erreur. Le jour où une troisième s'ajouterait, une fabrique commune de tentatives

@@ -50,7 +50,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
-| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
+| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès, et refus typé des crochets encore à écrire (#12). |
 | `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
 | `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
@@ -346,6 +346,21 @@ joignable, options upstream complétées — et trois s'y ajoutent :
   parcours complet vérifie qu'un **unique** appel au point « compte » sert le nom proposé et les
   données persistées, et qu'un échec de ce crochet **interrompt** l'ajout (abandon
   `echec_fournisseur`) sans laisser de problème de ré-authentification orphelin.
+- **Un crochet encore à écrire qui est appelé en fonctionnement échoue par une erreur typée**, et
+  un test l'exige. Le listage Dropbox (#12) est appelé par la purge distante après **chaque**
+  sauvegarde dès qu'une rétention est configurée : une `NotImplementedError` tombait dans la
+  clause de dernier recours du coordinateur, qui journalisait une trace d'appel complète à chaque
+  fois. Le test déroule donc le service `auto_backup.purge` sur une destination Dropbox porteuse
+  d'une rétention et vérifie le **journal** : aucun enregistrement porteur d'une trace, et une
+  seule ligne d'erreur, qui nomme la destination et renvoie à l'issue.
+
+  ```python
+  with caplog.at_level(logging.DEBUG):
+      await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+      await hass.async_block_till_done()
+
+  assert [enr.message for enr in caplog.records if enr.exc_info] == []
+  ```
 
 ## Tester le dépôt d'une sauvegarde chez un fournisseur
 

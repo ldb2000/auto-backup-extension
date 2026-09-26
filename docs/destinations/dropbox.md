@@ -270,7 +270,15 @@ un clic — que diagnostiquer plus tard une destination muette.
   (le vôtre suffit) ; cela n'a aucune incidence sur le volume de fichiers déposés.
 - **Le listage et la purge distante des sauvegardes arrivent dans une version suivante** : les
   sauvegardes déposées chez Dropbox ne sont pas encore supprimées automatiquement, même si vous
-  avez renseigné une rétention pour la destination. Supprimez-les à la main d'ici là.
+  avez renseigné une rétention pour la destination. Supprimez-les à la main d'ici là. Une
+  rétention renseignée n'est pas ignorée en silence : chaque purge le dit dans le journal de
+  Home Assistant, en nommant la destination.
+- **Un dépôt signalé en échec peut, rarement, avoir abouti.** Si Dropbox enregistre le fichier
+  mais que la réponse n'arrive pas telle qu'attendue (nom déjà pris au moment de valider la
+  session, taille enregistrée différente de ce qui a été envoyé, délai dépassé juste après la
+  validation), Home Assistant annonce un échec alors que le fichier est bien là. Jetez un œil au
+  dossier après un échec de téléversement : le fichier resté sur place ne sera pas repris par la
+  purge distante à venir.
 - **Un téléversement interrompu ne reprend pas** : un redémarrage de Home Assistant en plein
   envoi abandonne le transfert, et la sauvegarde suivante repartira de zéro. Rien n'apparaît
   dans votre dossier tant qu'une session d'envoi n'a pas été validée : une session inachevée ne
