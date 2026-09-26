@@ -754,7 +754,8 @@ fork, et porte l'**union stricte** des deux implémentations :
 
 Le nom de la clé est conservé : il aide à comprendre l'échec sans rien divulguer. Les URL sont
 épargnées, n'étant pas des chemins locaux, et le masquage porte sur **tout** ce qui est affiché —
-la cause, mais aussi le nom de la destination et celui de la sauvegarde.
+la cause, mais aussi le nom de la destination et celui de la sauvegarde, à des profondeurs
+distinctes détaillées ci-dessous.
 
 **Un nom du fork n'est pas un texte de fournisseur : `masquer_un_nom()`.** Les deux noms affichés
 ne traversent que les passes 1 à 5 ; la passe 6 est réservée à la cause. La raison de la
