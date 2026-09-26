@@ -50,7 +50,8 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
-| `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, sauvegarde distante renvoyée. |
+| `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
+| `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
@@ -295,7 +296,10 @@ joignable, options upstream complétées — et trois s'y ajoutent :
 ## Tester le dépôt d'une sauvegarde chez un fournisseur
 
 [`tests/test_provider_dropbox_upload.py`](../tests/test_provider_dropbox_upload.py) (issue #11)
-éprouve l'envoi réel d'une sauvegarde. Cinq particularités s'y ajoutent à celles ci-dessus.
+éprouve l'envoi réel d'une sauvegarde, et
+[`tests/test_provider_dropbox_upload_cas_limites.py`](../tests/test_provider_dropbox_upload_cas_limites.py)
+ses cas limites, en réutilisant ses fixtures plutôt qu'en les dupliquant. Six particularités
+s'ajoutent à celles ci-dessus.
 
 **Les seuils sont réduits par `patch`, jamais atteints pour de vrai.** Fabriquer 150 Mo d'octets
 pour franchir le seuil de fragmentation coûterait plus cher que ce que le test prouve ; ce sont
@@ -319,9 +323,27 @@ quadruplet `(méthode, url, corps, en-têtes)`. Deux pièges :
 
 - un corps vide (la requête `finish`) est ramené à `None` par le simulateur ;
 - un corps **en flux** est enregistré tel quel, sans être consommé. Le lire après coup ne
-  fonctionne que si sa source est en mémoire. Dans le test d'intégration, où le flux vient d'un
-  vrai fichier refermé à la fin du téléversement, il faut le consommer **pendant** la requête,
-  avec un `side_effect` — c'est ce que fait `servir_en_consommant()`.
+  fonctionne que si sa source est en mémoire ; quand le flux vient d'un vrai fichier refermé à la
+  fin du téléversement, il faut le consommer **pendant** la requête, avec un `side_effect` —
+  c'est ce que fait `servir_en_consommant()`.
+
+**Le simulateur de `files/upload` doit lire le corps de la requête**, et pas seulement le
+mémoriser : le fournisseur compte les octets **réellement** transmis pour vérifier la taille du
+dépôt, et un simulateur qui n'itère jamais le flux lui fait voir zéro octet — le test échouerait
+sur un code intact, ce qui n'apprend rien à personne. L'aide `simuler_l_envoi()` enregistre donc
+un `side_effect` consommant et rend les corps reçus :
+
+```python
+simuler_le_dossier(aioclient_mock)
+recu = simuler_l_envoi(aioclient_mock)
+
+await televerser(destination)
+
+assert recu == [CONTENU]
+```
+
+La session fragmentée n'a pas ce besoin : elle découpe le flux elle-même, ses fragments sont donc
+des `bytes` déjà lus quand la requête part.
 
 **Les réponses successives d'une même URL passent par `side_effect`.** Enregistrer deux fois la
 même URL sur `aioclient_mock` ne sert que la première ; l'aide `servir()` rend les réponses
