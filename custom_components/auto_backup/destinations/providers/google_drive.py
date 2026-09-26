@@ -1,9 +1,17 @@
-"""Destination Google Drive, autorisée en OAuth2 (issue #13).
+"""Destination Google Drive, autorisée en OAuth2 (issues #13 et #14).
 
 Ce module branche Google Drive sur le socle des destinations distantes : il
-déclare son autorisation OAuth2 (`OAUTH2_SPEC`), identifie le compte autorisé et
-vérifie l'accès. Le téléversement (#14), le listage et la suppression (#15)
-viendront le compléter sans rien changer ici d'autre que leurs trois méthodes.
+déclare son autorisation OAuth2 (`OAUTH2_SPEC`), identifie le compte autorisé,
+vérifie l'accès et téléverse une sauvegarde. Le listage et la suppression (#15)
+viendront le compléter sans rien changer ici d'autre que leurs deux méthodes ;
+d'ici là, elles lèvent une `DestinationError` explicite, que la rétention
+distante (#9) traite comme l'échec attendu qu'elle est.
+
+Le téléversement lui-même — dossier cible et envoi resumable — vit dans
+`google_drive_upload.py`, importé **dans** `async_upload()` : ce module-ci
+fournit les primitives partagées (appel authentifié, traduction des erreurs,
+signalement d'un accès révoqué) et ne peut donc pas l'importer au niveau du
+module sans refermer un cycle.
 
 **Aucun SDK Google n'est utilisé** : les appels passent par la session aiohttp
 partagée de Home Assistant (`async_get_clientsession`), ce qui évite d'ajouter
@@ -49,9 +57,10 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from aiohttp import ClientError
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from ..config_entry import async_persist_provider_data
 from ..destination import RemoteDestination
 from ..errors import (
     DestinationAuthError,
@@ -86,9 +95,12 @@ PORTEE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
 CHAMPS_COMPTE = "user(displayName,emailAddress)"
 CHAMPS_CONNEXION = "user"
 
-# Clé sous laquelle l'adresse du compte autorisé est conservée dans les données
-# de fournisseur de la destination (`DestinationConfig.provider_data`).
+# Clés sous lesquelles le fournisseur conserve ce qu'il a besoin de retenir dans
+# les données de fournisseur de la destination (`DestinationConfig.provider_data`) :
+# l'adresse du compte autorisé (issue #13) et l'identifiant du dossier cible une
+# fois qu'il a été retrouvé ou créé (issue #14).
 CLE_EMAIL_DU_COMPTE = "account_email"
+CLE_ID_DU_DOSSIER = "folder_id"
 
 # Tiret demi-cadratin du nom par défaut, écrit en séquence d'échappement : `ruff`
 # refuse les caractères ambigus dans le code (RUF001).
@@ -136,14 +148,14 @@ class CompteGoogle:
     email: str | None = None
 
 
-def _texte(valeur: Any) -> str | None:
+def texte_optionnel(valeur: Any) -> str | None:
     """Renvoie une chaîne non vide, nettoyée, ou `None` pour tout le reste."""
     if not isinstance(valeur, str):
         return None
     return valeur.strip() or None
 
 
-def _raisons(charge: Any) -> set[str]:
+def raisons_de_l_erreur(charge: Any) -> set[str]:
     """Motifs d'erreur (`error.errors[].reason`) présents dans une réponse."""
     if not isinstance(charge, Mapping):
         return set()
@@ -160,14 +172,14 @@ def _raisons(charge: Any) -> set[str]:
     }
 
 
-def _erreur_de_la_reponse(statut: int, charge: Any) -> DestinationError:
+def erreur_de_la_reponse(statut: int, charge: Any) -> DestinationError:
     """Traduit une réponse en échec de l'API Drive en erreur typée du socle.
 
     Le message est en français et nomme la cause probable ; il ne reprend que le
     motif technique de Google (`reason`), jamais le corps entier de la réponse,
     qui n'apporterait rien à l'utilisateur.
     """
-    raisons = _raisons(charge)
+    raisons = raisons_de_l_erreur(charge)
     if statut == 401:
         return DestinationAuthError(
             "Google a refusé le jeton d'accès : l'autorisation a été révoquée ou "
@@ -194,6 +206,25 @@ def _erreur_de_la_reponse(statut: int, charge: Any) -> DestinationError:
         f"Google Drive a renvoyé une réponse inattendue (HTTP {statut})"
         + (f" : {', '.join(sorted(raisons))}" if raisons else "")
     )
+
+
+@callback
+def signaler_si_acces_revoque(session: DestinationOAuth2Session, statut: int) -> None:
+    """Signale la destination à ré-autoriser quand Drive refuse le jeton (401).
+
+    Le jeton porté par la requête était valide du point de vue de la session
+    (non expiré, rafraîchi si besoin) : si Drive le refuse quand même, c'est que
+    l'autorisation a été révoquée côté Google ou que le projet Cloud a changé.
+    Seule une nouvelle autorisation en sort, comme pour Dropbox (401/403) : la
+    destination est signalée à ré-autoriser, elle seule. Pendant le flux
+    d'ajout, le signalement porte sur la destination provisoire et le flux
+    l'efface aussitôt (`destinations/flow.py`).
+
+    Un `403` ne le déclenche **pas** : API non activée ou quota épuisé se
+    corrigent dans la console Google, ré-autoriser n'y changerait rien.
+    """
+    if statut == 401:
+        async_signaler_la_reauthentification(session.hass, session.config)
 
 
 async def async_appel_drive(
@@ -230,12 +261,14 @@ async def async_appel_drive(
                 charge = await reponse.json()
             except (ClientError, ValueError, UnicodeDecodeError) as err:
                 # Une réponse vide ou non JSON reste exploitable : seul le statut
-                # décide alors du succès ou de l'échec. Les parenthèses sont
-                # obligatoires : la forme sans parenthèses (PEP 758) n'existe qu'à
-                # partir de Python 3.14 et lèverait une SyntaxError au chargement
-                # de l'intégration chez les utilisateurs de Home Assistant 2025.1
-                # (Python 3.12). Le `as err` maintient ces parenthèses en place
-                # face à `ruff format`, dont la cible est py314.
+                # décide alors du succès ou de l'échec. Les parenthèses restent la
+                # forme retenue par le dépôt : valides sur toutes les versions,
+                # alors que la forme sans parenthèses (PEP 758) exige Python 3.14
+                # — le plancher annoncé depuis Home Assistant 2026.3 (issue #28),
+                # qui retombera en retard sur l'interpréteur du dépôt dès la
+                # prochaine version de Python, cf.
+                # tests/test_compatibilite_python.py. Le `as err` maintient ces
+                # parenthèses en place face à `ruff format`, dont la cible est py314.
                 _LOGGER.debug(
                     "Réponse Drive %s %s non décodable en JSON (%s) : "
                     "seul le statut sera exploité",
@@ -252,23 +285,14 @@ async def async_appel_drive(
         raise DestinationError(f"Google Drive est injoignable : {err}") from err
 
     if statut >= 400:
-        if statut == 401:
-            # Le jeton porté par la requête était valide du point de vue de la
-            # session (non expiré, rafraîchi si besoin) : si Drive le refuse
-            # quand même, c'est que l'autorisation a été révoquée côté Google ou
-            # que le projet Cloud a changé. Seule une nouvelle autorisation en
-            # sort, comme pour Dropbox (401/403) : la destination est signalée à
-            # ré-autoriser, elle seule. Pendant le flux d'ajout, le signalement
-            # porte sur la destination provisoire et le flux l'efface aussitôt
-            # (`destinations/flow.py`).
-            async_signaler_la_reauthentification(session.hass, session.config)
-        erreur = _erreur_de_la_reponse(statut, charge)
+        signaler_si_acces_revoque(session, statut)
+        erreur = erreur_de_la_reponse(statut, charge)
         _LOGGER.debug(
             "Appel Drive %s %s en échec : HTTP %s (%s)",
             methode.upper(),
             url,
             statut,
-            ", ".join(sorted(_raisons(charge))) or "sans motif",
+            ", ".join(sorted(raisons_de_l_erreur(charge))) or "sans motif",
         )
         raise erreur
     return charge
@@ -285,8 +309,8 @@ async def async_lire_le_compte(
     if not isinstance(utilisateur, Mapping):
         return CompteGoogle()
     return CompteGoogle(
-        nom=_texte(utilisateur.get("displayName")),
-        email=_texte(utilisateur.get("emailAddress")),
+        nom=texte_optionnel(utilisateur.get("displayName")),
+        email=texte_optionnel(utilisateur.get("emailAddress")),
     )
 
 
@@ -310,6 +334,7 @@ class GoogleDriveDestination(RemoteDestination):
         super().__init__(hass, config)
         self._session = async_session_de_la_destination(hass, config)
         self._compte: CompteGoogle | None = None
+        self._dossier_id: str | None = None
 
     @property
     def session(self) -> DestinationOAuth2Session:
@@ -319,7 +344,47 @@ class GoogleDriveDestination(RemoteDestination):
     @property
     def account_email(self) -> str | None:
         """Adresse du compte Google autorisé, si elle a été mémorisée."""
-        return _texte((self._config.provider_data or {}).get(CLE_EMAIL_DU_COMPTE))
+        return texte_optionnel(
+            (self._config.provider_data or {}).get(CLE_EMAIL_DU_COMPTE)
+        )
+
+    @property
+    def folder_id(self) -> str | None:
+        """Identifiant du dossier cible chez Google, s'il est déjà connu.
+
+        Il vient de la mémoire de l'instance quand un téléversement l'a déjà
+        résolu, sinon des données persistées avec la destination : un
+        redémarrage de Home Assistant ne fait donc pas recréer le dossier.
+        """
+        if self._dossier_id is not None:
+            return self._dossier_id
+        return texte_optionnel(
+            (self._config.provider_data or {}).get(CLE_ID_DU_DOSSIER)
+        )
+
+    @callback
+    def _memoriser_le_dossier(self, dossier_id: str) -> None:
+        """Mémorise l'identifiant du dossier cible, et le persiste s'il change.
+
+        La mémorisation sur l'instance sert le téléversement en cours ; la
+        persistance sert les suivants, y compris après un redémarrage. Une
+        écriture qui ne changerait rien est ignorée par
+        `async_persist_provider_data()` lui-même : rien à filtrer ici. Un échec
+        d'écriture (destination supprimée entre-temps) n'interrompt pas l'envoi :
+        au pire, le dossier sera cherché à nouveau au prochain téléversement.
+        """
+        self._dossier_id = dossier_id
+        try:
+            async_persist_provider_data(
+                self._hass, self.destination_id, {CLE_ID_DU_DOSSIER: dossier_id}
+            )
+        except DestinationError as err:
+            _LOGGER.warning(
+                "Identifiant du dossier cible non persisté pour la destination "
+                "« %s » : %s",
+                self.destination_id,
+                err,
+            )
 
     ### Crochets du flux d'ajout ###
 
@@ -381,33 +446,80 @@ class GoogleDriveDestination(RemoteDestination):
         size: int | None = None,
         filename: str | None = None,
     ) -> RemoteBackup:
-        """Téléversement : implémenté par l'issue #14.
+        """Dépose une sauvegarde dans le dossier cible du Drive (issue #14).
+
+        Le contenu est lu **en flux** et envoyé en mode « resumable », fragment
+        par fragment : l'empreinte mémoire est bornée par la taille d'un fragment
+        et ne dépend pas de celle de la sauvegarde (le détail est dans
+        `google_drive_upload.py`, section « Mémoire »). Le dossier cible est
+        retrouvé ou créé au premier appel, et son identifiant est mémorisé pour
+        les suivants.
 
         La signature suit celle du socle depuis l'issue #8 : le coordinateur
         (`destinations/upload.py`) appelle toujours avec `stream`, `size` et
-        `filename`, et ne fournit `source` que sur Home Assistant Core. Elle est
-        déclarée ici pour que #14 n'ait que le corps à écrire.
+        `filename`, et ne fournit `source` que sur Home Assistant Core. Seul
+        `stream` est exploité : la portée `drive.file` et l'envoi resumable ne
+        demandent rien d'autre, et rien n'est jamais recopié sur le disque.
         """
-        raise NotImplementedError(
-            "le téléversement vers Google Drive est implémenté par l'issue #14"
+        # Import différé : `google_drive_upload` s'appuie sur les primitives
+        # définies ici, l'importer au niveau du module refermerait un cycle.
+        from .google_drive_upload import TeleversementDrive
+
+        if stream is None:
+            raise DestinationError(
+                "le téléversement vers Google Drive attend le flux de la "
+                "sauvegarde (« stream ») : aucun contenu n'a été fourni"
+            )
+
+        envoi = TeleversementDrive(
+            session=self._session,
+            dossier=self.folder,
+            dossier_id=self.folder_id,
+            memoriser=self._memoriser_le_dossier,
         )
+        distante = await envoi.async_executer(
+            nom=name, slug=slug, flux=stream, taille=size
+        )
+        _LOGGER.debug(
+            "Sauvegarde « %s » déposée sur Google Drive dans « %s »",
+            distante.name,
+            self.folder,
+        )
+        return distante
 
     async def async_list_backups(self) -> list[RemoteBackup]:
-        """Listage : implémenté par l'issue #15."""
-        raise NotImplementedError(
-            "le listage des sauvegardes Google Drive est implémenté par l'issue #15"
+        """Listage : implémenté par l'issue #15.
+
+        L'absence de listage est une **erreur attendue**, pas un défaut de
+        programmation : depuis la rétention distante (#9), une destination
+        Google Drive porteuse d'une rétention appelle cette méthode après chaque
+        téléversement réussi. Une `NotImplementedError` y serait rattrapée comme
+        erreur inattendue et journalisée en `ERROR` avec une trace d'appel, à
+        chaque sauvegarde. Une `DestinationError` dit la même chose au
+        coordinateur de purge, qui l'attend, la journalise en une ligne lisible
+        et passe à la destination suivante.
+        """
+        raise DestinationError(
+            "le listage des sauvegardes Google Drive n'est pas encore "
+            "implémenté, voir l'issue #15"
         )
 
     async def async_delete_backup(self, remote_id: str) -> None:
-        """Suppression : implémentée par l'issue #15."""
-        raise NotImplementedError(
-            "la suppression d'une sauvegarde Google Drive est implémentée par "
-            "l'issue #15"
+        """Suppression : implémentée par l'issue #15.
+
+        `DestinationError` pour la même raison que le listage ci-dessus. La
+        purge n'atteint pas encore cette méthode — elle abandonne la destination
+        dès le listage — mais un appel direct doit échouer de la même façon.
+        """
+        raise DestinationError(
+            "la suppression d'une sauvegarde Google Drive n'est pas encore "
+            "implémentée, voir l'issue #15"
         )
 
 
 __all__ = [
     "CLE_EMAIL_DU_COMPTE",
+    "CLE_ID_DU_DOSSIER",
     "LIBELLE_GOOGLE_DRIVE",
     "PORTEE_DRIVE_FILE",
     "PROVIDER_GOOGLE_DRIVE",
@@ -419,4 +531,8 @@ __all__ = [
     "GoogleDriveDestination",
     "async_appel_drive",
     "async_lire_le_compte",
+    "erreur_de_la_reponse",
+    "raisons_de_l_erreur",
+    "signaler_si_acces_revoque",
+    "texte_optionnel",
 ]

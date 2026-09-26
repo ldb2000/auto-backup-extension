@@ -35,14 +35,23 @@ Le code propre au fork vit dans le sous-paquet `custom_components/auto_backup/de
 absent de l'upstream : contrat commun des destinations distantes, types de données, erreurs
 typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis autorisation
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
-d'interface du flux d'options (`flow.py`, issue #7), puis l'orchestration du téléversement
-après création (`destinations/upload.py`, issue #8) et, depuis l'issue #17, les notifications
-persistantes des échecs et des accès révoqués (`destinations/notifications.py`) ainsi que le point
-unique de masquage des secrets du fork (`destinations/masquage.py`), que doit appeler tout code
-affichant un texte venu d'un fournisseur. Les fournisseurs réellement livrés vivent
+d'interface du flux d'options (`flow.py`, issue #7), l'orchestration du téléversement
+après création (`destinations/upload.py`, issue #8), la rétention et la purge distantes
+(`destinations/retention.py`, issue #9) et, depuis l'issue #17, les notifications persistantes
+des échecs et des accès révoqués (`destinations/notifications.py`) ainsi que le point unique de
+masquage des secrets du fork (`destinations/masquage.py`), que doit appeler tout code affichant
+un texte venu d'un fournisseur. Les fournisseurs réellement livrés vivent
 dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10, Google Drive depuis
 l'issue #13 — et sont enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé
 par `async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
+
+La purge distante (#9) suit la même règle : elle vit entièrement dans
+`destinations/retention.py`, s'ajoute au service `auto_backup.purge` par une ré-inscription faite
+dans `__init__.py` (voir plus bas) et ne touche pas à la rétention locale de `manager.py`. Elle
+écrit en revanche un **second fichier de stockage**, `.storage/auto_backup.remote_backups`
+(registre des sauvegardes déposées chez les fournisseurs), à côté de
+`.storage/auto_backup.snapshots_expiry` que l'upstream gère seul : les deux clés sont distinctes
+et le fork ne lit ni n'écrit celle de l'upstream.
 
 `handlers.py` et `manager.py` ne sont, eux, **pas modifiés du tout** : `destinations/upload.py`
 lit une sauvegarde en flux en s'appuyant sur `isinstance(handler, SupervisorHandler |
@@ -56,6 +65,7 @@ Ce sont les points de couplage à revérifier lors d'une resynchronisation :
 | `AutoBackup._handler` | `manager.py` | retrouver le handler choisi au démarrage, pour lire la sauvegarde |
 | `SupervisorHandler._session`, `._ip`, `._headers` | `handlers.py` | appeler `GET /backups/<slug>/download` en streaming |
 | `BackupHandler._manager` | `handlers.py` | atteindre l'agent de sauvegarde local et son fichier |
+| `async_service_handler` (fonction locale d'`async_setup_entry`) | `__init__.py` | la passer à `async_setup_remote_purge()`, qui ré-inscrit `auto_backup.purge` en l'enveloppant (#9) |
 
 `AutoBackup.generate_backup_name()` est également appelée, mais c'est une méthode **publique**.
 Si l'upstream renomme l'un de ces attributs, `tests/test_televersement.py` échoue
@@ -79,7 +89,13 @@ caractère près.
   (`OAUTH_CALLBACK_PATH`, `DATA_OAUTH_STATES`, `DATA_OAUTH_VIEW`, `OAUTH_STATE_TTL`,
   `OAUTH_AUTHORIZE_URL_TIMEOUT`, `OAUTH_TOKEN_TIMEOUT`, `ISSUE_REAUTH_PREFIX`) — dont
   `IDENTIFIANT_PROVISOIRE`, partagé par le flux d'ajout et le signalement de
-  ré-authentification — et, à la fin du bloc, `CONF_PROVIDER_DATA` (issues #10 et #13).
+  ré-authentification —, puis `CONF_PROVIDER_DATA` (issues #10 et #13) et, à la fin du bloc, les
+  constantes de la rétention distante (issue #9) : l'import de type des deux classes de
+  `destinations/retention.py`, `STORAGE_KEY_REMOTE_BACKUPS`, `STORAGE_VERSION_REMOTE_BACKUPS`,
+  `DATA_REMOTE_BACKUPS`, `DATA_REMOTE_PURGE`, `ATTR_CREATED_AT`, `ATTR_REMOTE_IDS` et
+  `DEFAULT_PURGE_TIMEOUT` — ce dernier borne les appels réseau de la purge et n'est
+  **pas** inscrit dans `CLES_DU_FORK` : ce n'est pas une option d'entrée, rien ne le persiste.
+  L'ordre du fichier est donc : #6, #8, #7, #10/#13, puis #9.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
@@ -90,10 +106,15 @@ caractère près.
   `destinations/upload.py` ; la clé `upload_to` de `SCHEMA_BACKUP_BASE`, donc des trois
   services de sauvegarde à la fois ; l'appel `async_setup_upload(hass, entry)` ; et, dans le
   gestionnaire de service, `async_prepare_upload()` **avant** la création de la sauvegarde puis
-  `async_release_upload()` dans un `finally`. L'issue #17 y ajoute deux lignes de plus, sur le
-  même modèle : l'import d'`async_setup_notifications()` et son appel dans `async_setup_entry`,
-  qui branche les notifications persistantes sur les événements de téléversement. Tout cela est
-  ajouté, à une ré-indentation près, décrite juste en dessous.
+  `async_release_upload()` dans un `finally`. L'issue #9 y ajoute deux blocs, l'un et l'autre en
+  ajout pur : l'import d'`async_setup_remote_purge()` et son appel **après** la boucle
+  d'inscription des services, qui ré-inscrit `auto_backup.purge` avec un gestionnaire enveloppant
+  celui de l'upstream (purge locale d'abord, purge distante ensuite). La boucle upstream et
+  `async_unload_entry()` restent intacts : le service est retiré par son nom, comme les trois
+  autres. L'issue #17 y ajoute deux lignes de plus, sur le même modèle : l'import
+  d'`async_setup_notifications()` et son appel dans `async_setup_entry`, qui branche les
+  notifications persistantes sur les événements de téléversement. Tout cela est ajouté, à une
+  ré-indentation près, décrite juste en dessous.
 - `custom_components/auto_backup/services.yaml` : un champ `upload_to` ajouté aux services
   `backup`, `backup_full` et `backup_partial` (défini une fois avec l'ancre YAML `&upload_to`,
   référencé deux fois), à la fin de la liste des champs de chacun. Aucun champ upstream n'est
@@ -183,6 +204,30 @@ ligne upstream n'est pas reprise telle quelle, et c'est assumé :
 - **coût en resynchronisation** : si l'upstream modifie cette ligne, le report doit être refait à
   la main dans le `try`. Le diff reste lisible (`diff -w` l'ignore même complètement) et
   `tests/test_conformite_upstream.py` en fait un cas nommé, pas une exemption silencieuse.
+
+#### Service `auto_backup.purge` : enveloppé, jamais réécrit
+
+La purge distante (#9) devait s'exécuter à chaque appel du service upstream. Deux branchements
+ont été écartés :
+
+- **modifier `manager.py`** (`AutoBackup.purge_backups()`) : c'est du code upstream, que le fork
+  ne touche pas ;
+- **écouter `auto_backup.purged_backups`** : l'upstream n'émet cet événement que si une
+  sauvegarde locale a **réellement** été supprimée. Sur une installation qui n'utilise pas
+  `keep_days`, appeler le service n'aurait alors purgé aucune destination distante.
+
+Le fork **ré-inscrit** donc le service, après la boucle upstream, avec un gestionnaire qui
+appelle d'abord `async_service_handler` (la fonction upstream, passée en paramètre) puis la purge
+distante. Home Assistant remplace une inscription de service par la dernière reçue ; la purge
+locale garde donc exactement son comportement, ses conditions et ses journaux.
+
+Deux points de vigilance à la resynchronisation :
+
+- si l'upstream **renomme** `async_service_handler` ou change sa signature, la ligne d'appel du
+  fork ne compile plus : l'erreur est immédiate, jamais silencieuse ;
+- si l'upstream déplace l'inscription des services **après** la ligne du fork, sa version
+  reprendrait la main et la purge distante ne s'exécuterait plus. `tests/test_purge_distante.py`
+  le détecte (`test_le_service_purge_purge_le_local_et_le_distant`).
 
 #### Option `upload_timeout` : une étape du fork, pas un champ du formulaire upstream
 

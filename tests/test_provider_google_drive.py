@@ -77,6 +77,10 @@ from custom_components.auto_backup.destinations.providers.google_drive import (
     GoogleDriveDestination,
     async_lire_le_compte,
 )
+from custom_components.auto_backup.destinations.providers.google_drive_upload import (
+    URL_ENVOI,
+    URL_FICHIERS,
+)
 
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
@@ -96,6 +100,10 @@ NOM_DU_COMPTE = "Camille Martin"
 EMAIL_DU_COMPTE = "camille.martin@exemple.test"
 
 IDENTIFIANT_DESTINATION = "mon_drive"
+
+# URL de session d'envoi factice, utilisée par le seul test de téléversement de
+# ce fichier : l'envoi lui-même est couvert par `test_provider_google_drive_upload`.
+URL_SESSION_FACTICE = f"{URL_ENVOI}?uploadType=resumable&upload_id=envoi-factice"
 
 # Tiret demi-cadratin du nom par défaut, en séquence d'échappement : `ruff`
 # refuse les caractères ambigus dans le code (RUF001).
@@ -885,7 +893,6 @@ async def test_le_compte_est_lu_meme_quand_drive_repond_partiellement(
 @pytest.mark.parametrize(
     ("operation", "arguments", "issue"),
     [
-        ("async_upload", ("/backup/ha.tar",), "#14"),
         ("async_list_backups", (), "#15"),
         ("async_delete_backup", ("identifiant-distant",), "#15"),
     ],
@@ -897,35 +904,55 @@ async def test_les_operations_de_sauvegarde_viennent_ensuite(
     arguments: tuple,
     issue: str,
 ) -> None:
-    """Hors périmètre de l'issue #13 : le contrat est déclaré, pas encore tenu."""
+    """Hors périmètre des issues #13 et #14 : le contrat est déclaré, pas tenu.
+
+    L'erreur levée est une `DestinationError` et **non** une
+    `NotImplementedError` : la rétention distante (#9) appelle
+    `async_list_backups()` après chaque téléversement réussi dès qu'une rétention
+    est configurée, et une erreur non typée y serait journalisée en `ERROR` avec
+    une trace d'appel à chaque sauvegarde. Le message renvoie à l'issue qui
+    livrera l'implémentation.
+    """
     destination = _destination(hass)
     appel = getattr(destination, operation)
-    nommes = {"name": "ha"} if operation == "async_upload" else {}
 
-    with pytest.raises(NotImplementedError) as erreur:
-        await appel(*arguments, **nommes)
+    with pytest.raises(DestinationError) as erreur:
+        await appel(*arguments)
 
+    assert not isinstance(erreur.value, NotImplementedError)
     assert issue in str(erreur.value)
+    assert "pas encore" in str(erreur.value)
 
 
 async def test_le_televersement_accepte_la_forme_du_coordinateur(
-    hass: HomeAssistant, entree_google: MockConfigEntry
+    hass: HomeAssistant,
+    entree_google: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
 ) -> None:
-    """Le stub suit la signature du socle depuis l'issue #8 (flux, taille, nom).
+    """Le téléversement suit la signature du socle depuis l'issue #8.
 
     Le coordinateur (`destinations/upload.py`) appelle sans `source` et avec
     `stream`, `size` et `filename` : cet appel doit atteindre le corps de la
-    méthode — et donc échouer sur `NotImplementedError`, pas sur `TypeError`.
+    méthode, et donc partir chez Google. Le détail de l'envoi est éprouvé par
+    `tests/test_provider_google_drive_upload.py` (issue #14).
     """
     destination = _destination(hass)
+    aioclient_mock.get(URL_FICHIERS, json={"files": [{"id": "dossier", "name": "x"}]})
+    aioclient_mock.post(URL_ENVOI, headers={"Location": URL_SESSION_FACTICE}, json={})
+    aioclient_mock.put(
+        URL_SESSION_FACTICE,
+        json={"id": "fichier-factice", "name": "ha.tar", "size": "5"},
+    )
 
     async def flux() -> AsyncIterator[bytes]:
-        yield b""
+        yield b"tar!\n"
 
-    with pytest.raises(NotImplementedError, match="#14"):
-        await destination.async_upload(
-            None, name="ha", slug="abc", stream=flux(), size=0, filename="ha.tar"
-        )
+    distante = await destination.async_upload(
+        None, name="ha", slug="abc", stream=flux(), size=5, filename="ha.tar"
+    )
+
+    assert distante.remote_id == "fichier-factice"
+    assert distante.size == 5
 
 
 ### Journaux ###

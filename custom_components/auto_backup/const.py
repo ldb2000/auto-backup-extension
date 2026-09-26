@@ -10,6 +10,10 @@ if TYPE_CHECKING:
     from .destinations.notifications import GestionnaireDeNotifications
     from .destinations.oauth import EtatOAuth
     from .destinations.upload import CoordinateurTeleversement
+    from .destinations.retention import (
+        CoordinateurPurgeDistante,
+        RegistreSauvegardesDistantes,
+    )
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -160,6 +164,44 @@ IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
 # détecter qu'une ré-autorisation a changé de compte. Facultatif : une destination qui
 # n'en a pas est persistée exactement comme avant.
 CONF_PROVIDER_DATA = "provider_data"
+
+### RÉTENTION ET PURGE DISTANTES (issue #9) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Toute la logique vit dans
+# `destinations/retention.py` ; `manager.py` n'est pas touché.
+
+# Registre persistant des sauvegardes déposées par le fork chez un fournisseur :
+# destination -> liste d'entrées {remote_id, slug, name, created_at, size}. C'est
+# lui qui rend une sauvegarde distante purgeable : un fichier que l'utilisateur a
+# déposé lui-même n'y figure pas, donc n'est jamais supprimé (cf. l'ADR).
+STORAGE_KEY_REMOTE_BACKUPS = "remote_backups"
+STORAGE_VERSION_REMOTE_BACKUPS = 1
+
+DATA_REMOTE_BACKUPS: HassKey[RegistreSauvegardesDistantes] = HassKey(
+    f"{DOMAIN}_remote_backups"
+)
+DATA_REMOTE_PURGE: HassKey[CoordinateurPurgeDistante] = HassKey(
+    f"{DOMAIN}_remote_purge"
+)
+
+# Champs propres au registre et à l'événement `auto_backup.remote_purge`, en
+# complément d'ATTR_DESTINATION, ATTR_DESTINATION_NAME, ATTR_REMOTE_ID,
+# ATTR_SIZE, ATTR_SLUG et ATTR_NAME ci-dessus.
+ATTR_CREATED_AT = "created_at"
+ATTR_REMOTE_IDS = "remote_ids"
+
+# Délai maximum, en secondes, d'un appel réseau du coordinateur de purge : un
+# listage de destination, une suppression de sauvegarde. C'est un **filet de
+# sécurité**, pas un réglage : un fournisseur dont l'appel pend bloquerait sinon
+# la purge de sa destination — et le verrou qui la sérialise — indéfiniment,
+# sans erreur ni fin. Le contrat de `RemoteDestination` demande à chaque
+# fournisseur de borner lui-même ses appels, bien plus finement ; cette valeur
+# n'a donc à se déclencher que si aucun ne l'a fait.
+#
+# Volontairement **pas** une option de l'interface : la purge n'a aucune étape
+# de réglages (celle du fork ne règle que le téléversement, cf.
+# CONF_UPLOAD_TIMEOUT), et en ajouter une relève de #8/#17. La constante n'est
+# donc pas inscrite dans CLES_DU_FORK : rien ne la persiste dans les options.
+DEFAULT_PURGE_TIMEOUT = 300
 
 ### NOTIFICATIONS PERSISTANTES (issue #17) ###
 # Ajouts du fork (cf. docs/UPSTREAM.md). Une sauvegarde cloud silencieusement cassée

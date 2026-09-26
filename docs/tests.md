@@ -49,10 +49,14 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
+| `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
 | `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés. |
 | `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, noms du fork exemptés du dernier filet (`masquer_un_nom()`), réserves assumées, troncature. |
-| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
+| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès, et refus typé des crochets encore à écrire (#12). |
+| `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
+| `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
+| `tests/test_provider_google_drive_upload.py` | Téléversement Google Drive : dossier cible, envoi resumable par fragments, reprises, erreurs typées, journaux et parcours complet depuis le service. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
@@ -108,7 +112,7 @@ Les tests du **socle** s'appuient sur le fournisseur factice de
 [`tests/destinations_factices.py`](../tests/destinations_factices.py), entièrement en mémoire :
 aucun fichier n'est lu, aucun appel réseau n'est fait. Ils démontrent qu'un fournisseur s'ajoute
 par le seul registre, sans rien changer au cœur de l'intégration. Un **fournisseur réel** se
-teste autrement : voir [Tester un fournisseur réel](#tester-un-fournisseur-réel-google-drive).
+teste autrement : voir [Tester un fournisseur réel](#tester-un-fournisseur-réel).
 
 ```python
 async def test_mon_comportement(hass, fournisseur_factice):
@@ -239,6 +243,59 @@ Cinq points méritent l'attention en écrivant un nouveau test :
 
    `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
 
+## Tester la purge distante
+
+`tests/test_purge_distante.py` couvre l'issue #9. Le montage est plus léger que celui du
+téléversement : les sauvegardes distantes sont **déposées directement** chez le fournisseur
+factice par `destination.ajouter_sauvegarde()`, sans créer ni téléverser quoi que ce soit.
+
+```python
+# Déposée chez le fournisseur *et* inscrite au registre : purgeable.
+await _deposer(hass, destination, "vieille", jours=10)
+# Déposée par l'utilisateur, inconnue du registre : intouchable.
+await _deposer(hass, destination, "photos", jours=99, inscrire=False)
+
+supprimes = await _coordinateur(hass).async_purger_toutes()
+```
+
+Cinq points à connaître :
+
+1. **Le registre décide de ce qui est purgeable.** `_deposer(..., inscrire=False)` simule un
+   fichier que l'utilisateur aurait déposé lui-même : il ne figure pas au registre du fork
+   (`hass.data[DATA_REMOTE_BACKUPS]`) et ne doit **jamais** être supprimé. La seconde voie, le
+   marqueur `auto_backup` posé dans `RemoteBackup.metadata`, se teste avec
+   `metadata=marqueur_auto_backup()`.
+2. **Le fournisseur factice note les tentatives.** `destination.suppressions` liste les
+   identifiants dont la suppression a été *tentée*, dans l'ordre, y compris celles qui ont
+   échoué ; `destination.listages` compte les appels à `async_list_backups()`, et un zéro prouve
+   qu'une destination n'a jamais été jointe (ré-authentification requise, aucune rétention
+   configurée). `destination.erreurs_de_suppression[remote_id] = ...` programme l'échec d'une
+   suppression précise, `destination.erreur_a_lever` celui de toutes les opérations.
+3. **Le stockage est celui de `hass_storage`.** Le registre est un `Store` Home Assistant
+   (`auto_backup.remote_backups`) : son contenu est lisible dans la fixture `hass_storage`, et
+   un rechargement de l'entrée (`async_reload`) prouve qu'il survit à un redémarrage.
+4. **Le service `purge` fait les deux purges.** Pour prouver que la purge locale upstream n'a pas
+   été perdue en route, le test garnit `gestionnaire._snapshots` d'une sauvegarde expirée et
+   remplace `gestionnaire._handler.remove_backup` par un `AsyncMock` : l'appel du service doit
+   déclencher la suppression locale (et l'événement `auto_backup.purged_backups`) **et** la
+   suppression distante.
+5. **Un appel qui ne revient pas se simule, il ne s'attend pas.** Les appels réseau de la purge
+   sont bornés par `DEFAULT_PURGE_TIMEOUT` (300 s). Pour éprouver ce filet de sécurité, le délai
+   est ramené à quelques millisecondes par l'aide `_delai_de_purge()` du fichier de tests, et
+   c'est le fournisseur factice qui simule le fournisseur muet — `attente_de_listage` pour le
+   listage, `attentes_de_suppression[remote_id]` pour une suppression précise :
+
+   ```python
+   destination.attentes_de_suppression["figee"] = 30
+
+   with _delai_de_purge(0.01):
+       supprimes = await _coordinateur(hass).async_purger_toutes()
+   ```
+
+   L'attente réelle est donc de quelques millisecondes, pas de 300 secondes. Le même principe
+   vaut pour le téléversement, où c'est l'option `upload_timeout` qui est réglée à `0.01` et
+   `attente_secondes` qui fait patienter.
+
 ## Tester les notifications d'échec
 
 `tests/test_notifications.py` couvre l'issue #17. Les tests partent des **événements publics**
@@ -362,22 +419,165 @@ joignable, options upstream complétées — et trois s'y ajoutent :
   parcours complet vérifie qu'un **unique** appel au point « compte » sert le nom proposé et les
   données persistées, et qu'un échec de ce crochet **interrompt** l'ajout (abandon
   `echec_fournisseur`) sans laisser de problème de ré-authentification orphelin.
+- **Un crochet encore à écrire qui est appelé en fonctionnement échoue par une erreur typée**, et
+  un test l'exige. Le listage Dropbox (#12) est appelé par la purge distante après **chaque**
+  sauvegarde dès qu'une rétention est configurée : une `NotImplementedError` tombait dans la
+  clause de dernier recours du coordinateur, qui journalisait une trace d'appel complète à chaque
+  fois. Le test déroule donc le service `auto_backup.purge` sur une destination Dropbox porteuse
+  d'une rétention et vérifie le **journal** : aucun enregistrement porteur d'une trace, et une
+  seule ligne d'erreur, qui nomme la destination et renvoie à l'issue.
+
+  ```python
+  with caplog.at_level(logging.DEBUG):
+      await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+      await hass.async_block_till_done()
+
+  assert [enr.message for enr in caplog.records if enr.exc_info] == []
+  ```
+
+## Tester le dépôt d'une sauvegarde chez un fournisseur
+
+[`tests/test_provider_dropbox_upload.py`](../tests/test_provider_dropbox_upload.py) (issue #11)
+éprouve l'envoi réel d'une sauvegarde, et
+[`tests/test_provider_dropbox_upload_cas_limites.py`](../tests/test_provider_dropbox_upload_cas_limites.py)
+ses cas limites, en réutilisant ses fixtures plutôt qu'en les dupliquant. Six particularités
+s'ajoutent à celles ci-dessus.
+
+**Les seuils sont réduits par `patch`, jamais atteints pour de vrai.** Fabriquer 150 Mo d'octets
+pour franchir le seuil de fragmentation coûterait plus cher que ce que le test prouve ; ce sont
+les **mécanismes** qui sont vérifiés — nombre d'appels, offsets successifs, validation finale :
+
+```python
+with (
+    patch(f"{MODULE_DROPBOX}.SEUIL_ENVOI_SIMPLE", fragment),
+    patch(f"{MODULE_DROPBOX}.TAILLE_FRAGMENT", fragment),
+):
+    await televerser(destination, contenu=contenu)
+```
+
+Un test distinct garde les **valeurs livrées** sous surveillance (150 Mo, 8 Mio, multiple de
+4 Mio) : sans lui, un seuil changé par erreur passerait inaperçu, tous les autres tests le
+remplaçant par le leur. Pour que ces `patch` mordent, le code relit la constante au lieu de la
+figer en valeur par défaut d'un paramètre.
+
+**Le corps d'une requête se lit dans `aioclient_mock.mock_calls`**, dont chaque entrée est un
+quadruplet `(méthode, url, corps, en-têtes)`. Deux pièges :
+
+- un corps vide (la requête `finish`) est ramené à `None` par le simulateur ;
+- un corps **en flux** est enregistré tel quel, sans être consommé. Le lire après coup ne
+  fonctionne que si sa source est en mémoire ; quand le flux vient d'un vrai fichier refermé à la
+  fin du téléversement, il faut le consommer **pendant** la requête, avec un `side_effect` —
+  c'est ce que fait `servir_en_consommant()`.
+
+**Le simulateur de `files/upload` doit lire le corps de la requête**, et pas seulement le
+mémoriser : le fournisseur compte les octets **réellement** transmis pour vérifier la taille du
+dépôt, et un simulateur qui n'itère jamais le flux lui fait voir zéro octet — le test échouerait
+sur un code intact, ce qui n'apprend rien à personne. L'aide `simuler_l_envoi()` enregistre donc
+un `side_effect` consommant et rend les corps reçus :
+
+```python
+simuler_le_dossier(aioclient_mock)
+recu = simuler_l_envoi(aioclient_mock)
+
+await televerser(destination)
+
+assert recu == [CONTENU]
+```
+
+La session fragmentée n'a pas ce besoin : elle découpe le flux elle-même, ses fragments sont donc
+des `bytes` déjà lus quand la requête part.
+
+**Les réponses successives d'une même URL passent par `side_effect`.** Enregistrer deux fois la
+même URL sur `aioclient_mock` ne sert que la première ; l'aide `servir()` rend les réponses
+l'une après l'autre, la dernière valant pour tous les appels suivants. C'est ce qui permet
+d'éprouver « `429` avec `Retry-After`, puis succès » en une seule opération.
+
+**`asyncio.sleep` est neutralisé** par la fixture `sommeil`, qui mémorise les délais demandés :
+un test vérifie le délai **observé**, pas le temps écoulé. Les tests qui en ont besoin
+l'appellent directement sur la destination, hors de toute tâche de fond.
+
+**Le journal est éprouvé à deux moments** : un téléversement réussi, et un téléversement qui
+échoue après plusieurs tentatives. Dans les deux cas, ni `Authorization`, ni `Bearer`, ni aucun
+jeton ne doit apparaître, même en `debug`.
+
+## Tester le téléversement vers Google Drive
+
+`tests/test_provider_google_drive_upload.py` (issue #14) va plus loin que la simulation d'un point
+d'accès : il embarque un **simulateur du protocole resumable**, `_FauxDrive`, branché sur
+`aioclient_mock`. Le simulateur tient l'état réel de la session d'envoi — il refuse un fragment qui
+ne commence pas là où le précédent s'est arrêté, répond `308` avec l'en-tête `Range` tant que
+l'envoi n'est pas terminé, et ne renvoie les métadonnées du fichier qu'une fois la taille totale
+atteinte. Un test qui découpe mal son contenu échoue donc pour la bonne raison.
+
+Trois réglages rendent ces tests rapides et lisibles :
+
+1. **`fragments_courts`** ramène `TAILLE_FRAGMENT` à 512 octets par `monkeypatch` : c'est le
+   découpage qui est éprouvé, pas la capacité de la machine à brasser 8 Mio. Un test dédié vérifie
+   à part que la valeur réelle est bien un multiple de 256 Kio, comme Google l'exige.
+2. **`delais`** remplace `async_attendre_avant_reprise()` par une fonction qui **relève** le délai
+   au lieu de l'attendre. Les reprises se testent alors en quelques millisecondes, et la liste
+   obtenue (`[1.0, 2.0]`) prouve le caractère exponentiel et borné du calcul :
+
+   ```python
+   assert delais == [1.0, 2.0]
+   ```
+
+3. **Les anomalies se déclarent à la construction du simulateur**, pas en bricolant les mocks :
+
+   ```python
+   faux = _FauxDrive(aioclient_mock, pannes=[(429, {"Retry-After": "5"}, ...)])
+   faux = _FauxDrive(aioclient_mock, pannes=[TimeoutError()])  # coupure réseau
+   faux = _FauxDrive(aioclient_mock, pertes={512})  # session amnésique
+   ```
+
+   Une panne est soit un triplet `(statut, en-têtes, corps)`, soit une exception à lever. Elle
+   n'est consommée que par un vrai fragment : une **demande d'état** de la session répond toujours
+   l'état réel, sans quoi la reprise ne pourrait pas être vérifiée.
+
+Deux points d'attention en ajoutant un test :
+
+- **l'identifiant du dossier est persisté pendant l'envoi**, ce qui réécrit les options de l'entrée
+  et **recrée les instances de destination**. Un test qui veut éprouver la mémoire d'instance garde
+  sa référence (`destination = _destination(hass)`), un test qui veut éprouver la mémoire persistée
+  redemande la destination au gestionnaire après `await hass.async_block_till_done()` ;
+- **l'URL de session est une valeur sensible** au même titre qu'un jeton : elle figure dans la
+  liste des chaînes qu'un test vérifie absentes des journaux en niveau `debug`.
+
+Le fichier se termine par deux **parcours complets**, qui suivent les règles de la section
+« Tester le téléversement d'une sauvegarde » ci-dessus — `wait_background_tasks=True` compris :
+
+- appel de `auto_backup.backup` avec `upload_to`, création de sauvegarde simulée, puis vérification
+  que l'événement `auto_backup.upload_successful` porte l'identifiant distant renvoyé par Drive ;
+- le même parcours avec une **rétention configurée** sur la destination, qui déclenche la purge
+  distante (#9) après le téléversement. Le listage Google Drive n'existant pas avant #15, cette
+  purge échoue nécessairement : le test vérifie que l'échec est journalisé **sans trace d'appel**
+  (`"Traceback" not in caplog.text`, et aucun enregistrement porteur d'`exc_info`) et que le
+  message renvoie à l'issue. C'est un test de **bruit de journal** : sans lui, remplacer la
+  `DestinationError` des deux méthodes différées par une `NotImplementedError` repasserait
+  inaperçu, alors qu'il en résulterait une trace d'appel à chaque sauvegarde.
 
 ## Compatibilité Python
 
 Le dépôt se développe et se teste sur l'interpréteur exigé par la dernière version de Home
 Assistant (`requires-python` dans `pyproject.toml`, aujourd'hui **3.14**). L'intégration est en
 revanche **installée** chez des utilisateurs dont le plancher annoncé est celui de `hacs.json` :
-**Home Assistant 2025.1, qui tourne sous Python 3.12**.
+**Home Assistant 2026.3, qui exige Python 3.14.2** (plancher relevé de 2025.1.0 par l'issue
+#28).
 
 **Règle : tout ce qui vit sous `custom_components/auto_backup/` doit rester analysable par
-Python 3.12.** Une syntaxe plus récente ne casse rien en développement, mais lève une
+Python 3.14.** Une syntaxe plus récente ne casse rien en développement, mais lève une
 `SyntaxError` au chargement de l'intégration chez ces utilisateurs, avant l'exécution de la
 moindre ligne de logique. La règle ne s'applique qu'au code livré : `tests/` et les scripts du
 dépôt ne tournent que sur l'interpréteur de développement.
 
+Les deux planchers coïncident depuis #28, mais ils restent indépendants : le dépôt suit la
+dernière version de Home Assistant, alors que la version annoncée dans `hacs.json` ne bouge que
+sur décision explicite. Ils divergeront de nouveau dès la prochaine version de Python, et la
+règle ci-dessus redeviendra contraignante — d'où le maintien du garde-fou.
+
 Le piège rencontré sur l'issue #13 est la PEP 758 : `except A, B:` sans parenthèses, valide à
-partir de Python 3.14 seulement. On écrit donc :
+partir de Python 3.14 seulement. Elle passerait le plancher actuel, mais le dépôt garde la forme
+parenthésée, valide sur toutes les versions :
 
 ```python
 except (ClientError, ValueError, UnicodeDecodeError) as err:
@@ -390,16 +590,23 @@ journal `debug`) : la cible de `ruff format` est l'interpréteur de développeme
 qu'il juge superflues sur une clause sans `as`.
 
 Le garde-fou est [`tests/test_compatibilite_python.py`](../tests/test_compatibilite_python.py) :
-il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 12))` et
+il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 14))` et
 échoue en nommant le fichier, la ligne et la construction fautive. Deux tests l'accompagnent :
-l'un vérifie que le garde-fou refuse bien un extrait écrit en PEP 758 (sans quoi il pourrait
-passer à côté de ce qu'il surveille), l'autre relie le plancher testé à `hacs.json` — monter la
-version minimale de Home Assistant annoncée oblige à revoir `PLANCHER_UTILISATEUR` et cette
-section plutôt qu'à les laisser diverger en silence.
+l'un vérifie que le mécanisme refuse bien une syntaxe postérieure au plancher qu'on lui donne
+(sans quoi le garde-fou pourrait passer à côté de ce qu'il surveille), l'autre relie le plancher
+testé à `hacs.json` — monter la version minimale de Home Assistant annoncée oblige à revoir
+`PLANCHER_UTILISATEUR` et cette section plutôt qu'à les laisser diverger en silence.
+
+Ce premier test s'exerce sur Python 3.13, une version *antérieure* au plancher, et non sur le
+plancher lui-même : la PEP 758 étant valide en 3.14, plus aucune syntaxe connue ne lui est
+postérieure, et CPython borne de toute façon `feature_version` à la version de l'interpréteur
+courant. Il démontre donc que le mécanisme mord toujours, sans prétendre que 3.13 soit le
+plancher contrôlé.
 
 Limite assumée : `feature_version` est donnée pour « best effort » par CPython et ne couvre pas
 l'intégralité des évolutions de syntaxe. Ce garde-fou ne remplace pas une exécution réelle sur
-le plancher, mais il est instantané et bloque la régression la plus probable.
+le plancher, mais il est instantané et bloque la régression la plus probable le jour où les deux
+planchers divergeront de nouveau.
 
 ## Modifier l'intégration importée
 
@@ -426,9 +633,12 @@ Ce code est soumis à l'intégralité des règles de lint et au formatage automa
 Ces tests couvrent le comportement upstream importé (configuration, services, options,
 entités), le socle des destinations distantes (contrat, registre, persistance), leur
 autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression), le
-téléversement après création (lecture en flux, événements, échecs, délai maximum), la
-connexion d'un compte Google Drive (issue #13) et les notifications d'échec, de
-ré-authentification et de changement de compte (issue #17). Le téléversement vers Google Drive (#14) et la
-purge distante (#15) sont testés par leurs issues respectives, comme le fournisseur Dropbox
-(#10 à #12).
+téléversement après création (lecture en flux, événements, échecs, délai maximum), la connexion
+d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
+la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant), le
+dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14),
+enfin les notifications d'échec et de ré-authentification, le masquage des secrets et la
+confirmation d'un changement de compte (issue #17). Le listage et la suppression chez chaque
+fournisseur (#12 et #15) sont testés par leurs issues respectives.
+
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

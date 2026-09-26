@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import patch
 
@@ -42,9 +42,11 @@ from custom_components.auto_backup.const import (
     CONF_FOLDER,
     CONF_PROVIDER,
     CONF_PROVIDER_DATA,
+    CONF_RETENTION_DAYS,
     DATA_DESTINATIONS,
     DOMAIN,
     OAUTH_CALLBACK_PATH,
+    SERVICE_PURGE,
 )
 from custom_components.auto_backup.destinations import (
     DestinationAuthError,
@@ -863,30 +865,69 @@ async def test_une_absence_de_reponse_est_signalee(
         await _destination(hass, entree_dropbox).async_check_connection()
 
 
-### Hors périmètre de l'issue #10 ###
+### Cycle de vie des sauvegardes : hors périmètre jusqu'à l'issue #12 ###
 
 
 async def test_le_cycle_de_vie_des_sauvegardes_reste_a_implementer(
     hass: HomeAssistant, entree_dropbox: MockConfigEntry
 ) -> None:
-    """Téléversement (#11), listage et suppression (#12) sont hors périmètre."""
+    """Listage et suppression (#12) restent hors périmètre.
+
+    Les deux crochets échouent par l'erreur typée du socle, et non par
+    `NotImplementedError` : la purge distante (#9) les appelle en fonctionnement,
+    et elle ne sait journaliser proprement qu'une `DestinationError`.
+
+    Le dépôt d'une sauvegarde, lui, est implémenté depuis l'issue #11 :
+    `tests/test_provider_dropbox_upload.py` le couvre de bout en bout.
+    """
     destination = _destination(hass, entree_dropbox)
 
-    with pytest.raises(NotImplementedError, match="#11"):
-        await destination.async_upload("/backup/ha.tar", name="ha")
-
-    async def flux() -> AsyncIterator[bytes]:
-        yield b""
-
-    # Forme d'appel du coordinateur de téléversement (issue #8).
-    with pytest.raises(NotImplementedError, match="#11"):
-        await destination.async_upload(
-            None, name="ha", slug="abc", stream=flux(), size=0, filename="ha.tar"
-        )
-    with pytest.raises(NotImplementedError, match="#12"):
+    with pytest.raises(DestinationError, match=r"listage.*#12"):
         await destination.async_list_backups()
-    with pytest.raises(NotImplementedError, match="#12"):
+    with pytest.raises(DestinationError, match=r"suppression.*#12"):
         await destination.async_delete_backup("id:factice")
+
+
+async def test_une_purge_avec_retention_ne_journalise_aucune_trace(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Une rétention sur une destination Dropbox n'empile plus de trace d'appel.
+
+    Depuis #9, la purge distante liste la destination dès qu'une rétention y est
+    configurée — donc après chaque sauvegarde. Le crochet levait
+    `NotImplementedError`, que le coordinateur ne rattrapait que par sa clause de
+    dernier recours : une trace d'appel complète était journalisée à chaque fois,
+    pour une situation parfaitement attendue. L'utilisateur lit désormais une
+    ligne qui nomme la destination et renvoie à l'issue.
+    """
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={CONF_DESTINATIONS: [config_dropbox(**{CONF_RETENTION_DAYS: 1})]},
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG):
+        await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+        await hass.async_block_till_done()
+
+    assert [enr.message for enr in caplog.records if enr.exc_info] == []
+    assert "Traceback" not in caplog.text
+    assert "NotImplementedError" not in caplog.text
+    journal = [
+        enr.getMessage() for enr in caplog.records if enr.levelno >= logging.ERROR
+    ]
+    assert len(journal) == 1
+    assert "Dropbox de Jeanne" in journal[0]
+    assert "listage" in journal[0]
+    assert "#12" in journal[0]
 
 
 ### Secrets ###

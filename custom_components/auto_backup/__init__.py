@@ -58,6 +58,9 @@ from .destinations.upload import (  # téléversement distant (fork)
     async_release_upload,
     async_setup_upload,
 )
+from .destinations.retention import (  # purge distante (fork)
+    async_setup_remote_purge,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -190,6 +193,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     for service, schema in MAP_SERVICES.items():
         hass.services.async_register(DOMAIN, service, async_service_handler, schema)
+
+    # Fork (#9) : la purge distante s'ajoute au service `purge` sans toucher au
+    # gestionnaire upstream ci-dessus. La ré-inscription, faite ici après la
+    # boucle, enveloppe celui-ci : la purge locale s'exécute d'abord, à
+    # l'identique, puis chaque destination distante est purgée. Le service est
+    # retiré par `async_unload_entry`, upstream et inchangé.
+    await async_setup_remote_purge(hass, entry, async_service_handler)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

@@ -1,13 +1,15 @@
-"""Documentation de la connexion d'un compte Dropbox (issue #10, critère 6).
+"""Documentation de la destination Dropbox (issues #10 et #11).
 
-Critère : « GIVEN `docs/destinations/dropbox.md` WHEN je le lis THEN la création
-de l'application Dropbox, les portées à cocher et l'URI de redirection à
-renseigner y sont décrites en français. »
+Critère de l'issue #10 : « GIVEN `docs/destinations/dropbox.md` WHEN je le lis
+THEN la création de l'application Dropbox, les portées à cocher et l'URI de
+redirection à renseigner y sont décrites en français. » L'issue #11 y ajoute le
+téléversement : nommage du fichier déposé, dossier cible et seuil de
+fragmentation.
 
 Ce test est indépendant de `tests/test_provider_dropbox.py` : il ne réutilise
 aucune de ses assertions et relit le fichier de documentation lui-même, pour
-vérifier que la page réellement livrée décrit les trois étapes attendues — et
-que les portées et l'URI qu'elle cite correspondent bien à celles que le code
+vérifier que la page réellement livrée décrit les étapes attendues — et que les
+portées, l'URI et les seuils qu'elle cite correspondent bien à ceux que le code
 utilise, plutôt que de les recopier à la main (ce qui masquerait une dérive
 entre la doc et le code).
 """
@@ -20,7 +22,11 @@ from pathlib import Path
 from custom_components.auto_backup.const import DOMAIN, OAUTH_CALLBACK_PATH
 from custom_components.auto_backup.destinations.providers.dropbox import (
     PORTEES,
+    SEUIL_ENVOI_SIMPLE,
+    TAILLE_FRAGMENT,
+    TENTATIVES_MAX,
     URL_AUTORISATION,
+    nom_de_fichier_dropbox,
 )
 
 RACINE_DEPOT = Path(__file__).resolve().parent.parent
@@ -129,3 +135,44 @@ def test_la_doc_cite_l_url_d_autorisation_reelle_du_fournisseur() -> None:
 
     domaine_autorisation = URL_AUTORISATION.removeprefix("https://").split("/")[0]
     assert domaine_autorisation in texte
+
+
+### Téléversement (issue #11) ###
+
+
+def test_la_doc_decrit_le_nommage_du_fichier_depose() -> None:
+    """L'exemple de nom donné à l'utilisateur est celui que le code produit.
+
+    Recopier un exemple à la main laisserait la doc annoncer un nom que le
+    fournisseur ne produit plus après une évolution du nommage.
+    """
+    texte = _texte_de_la_doc()
+
+    assert nom_de_fichier_dropbox("Sauvegarde du soir", "a1b2c3d4") in texte
+    # La raison du slug — des sauvegardes homonymes — est expliquée.
+    assert "slug" in texte.casefold()
+
+
+def test_la_doc_decrit_le_seuil_et_la_taille_de_fragment_du_code() -> None:
+    """Les tailles annoncées à l'utilisateur sont celles que le code applique."""
+    texte = _texte_aplati()
+
+    assert f"{SEUIL_ENVOI_SIMPLE // (1024 * 1024)} Mo" in texte
+    assert f"{TAILLE_FRAGMENT // (1024 * 1024)} Mio" in texte
+    assert "session" in texte.casefold()
+
+
+def test_la_doc_annonce_la_garantie_de_non_ecrasement() -> None:
+    """L'utilisateur doit savoir qu'un fichier existant n'est jamais remplacé."""
+    texte = _texte_aplati().casefold()
+
+    assert "jamais écrasé" in texte or "n'écrase rien" in texte
+
+
+def test_la_doc_decrit_les_nouvelles_tentatives_du_code() -> None:
+    """Le nombre de tentatives annoncé est celui que le fournisseur applique."""
+    texte = _texte_aplati().casefold()
+
+    assert TENTATIVES_MAX == 3
+    assert "trois tentatives" in texte
+    assert "429" in texte

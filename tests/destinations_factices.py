@@ -1,4 +1,4 @@
-"""Fournisseurs de destination factices, entièrement en mémoire (issues #6, #7).
+"""Fournisseurs de destination factices, entièrement en mémoire (issues #6, #7, #9).
 
 Ce module ne fait aucune entrée-sortie : rien n'est lu sur le disque, rien n'est
 envoyé sur le réseau. Il sert à démontrer qu'un fournisseur s'ajoute par le seul
@@ -118,8 +118,18 @@ class DestinationEnMemoire(RemoteDestination):
     - `erreur_a_lever` : erreur levée par toutes les opérations quand elle est
       définie, pour simuler un échec du fournisseur ;
     - `connexions_verifiees` : nombre d'appels réussis à `async_check_connection` ;
+    - `listages` : nombre d'appels à `async_list_backups` — un zéro prouve
+      qu'une destination n'a jamais été jointe (issue #9) ;
+    - `suppressions` : identifiants distants dont la suppression a été *tentée*,
+      dans l'ordre ;
+    - `erreurs_de_suppression` : erreur à lever pour un identifiant distant
+      donné, pour éprouver la tolérance aux échecs de la purge ;
     - `attente_secondes` : durée d'attente simulée pendant un téléversement,
       pour éprouver le délai maximum (issue #8) ;
+    - `attente_de_listage` : durée d'attente simulée avant de répondre au
+      listage, pour éprouver le filet de sécurité de la purge (issue #9) ;
+    - `attentes_de_suppression` : durée d'attente simulée avant de supprimer un
+      identifiant distant donné, même usage ;
     - `octets_recus` : contenu du dernier flux consommé, `None` si le
       téléversement n'a reçu qu'un chemin ;
     - `taille_recue` : nombre d'octets réellement lus dans le flux ;
@@ -135,7 +145,12 @@ class DestinationEnMemoire(RemoteDestination):
         # que l'orchestrateur doit traiter sans compromettre les autres destinations.
         self.erreur_a_lever: Exception | None = None
         self.connexions_verifiees = 0
+        self.listages = 0
+        self.suppressions: list[str] = []
+        self.erreurs_de_suppression: dict[str, Exception] = {}
         self.attente_secondes = 0.0
+        self.attente_de_listage = 0.0
+        self.attentes_de_suppression: dict[str, float] = {}
         self.octets_recus: bytes | None = None
         self.taille_recue: int | None = None
         self.taille_annoncee: int | None = None
@@ -198,14 +213,63 @@ class DestinationEnMemoire(RemoteDestination):
         self.sauvegardes[sauvegarde.remote_id] = sauvegarde
         return sauvegarde
 
+    def ajouter_sauvegarde(
+        self,
+        remote_id: str,
+        *,
+        name: str | None = None,
+        created_at: datetime | None = DATE_FACTICE,
+        slug: str | None = None,
+        size: int | None = 1024,
+        metadata: Mapping[str, Any] | None = None,
+        path: str | None = None,
+    ) -> RemoteBackup:
+        """Dépose une sauvegarde distante sans passer par un téléversement.
+
+        C'est ainsi qu'un test de purge (issue #9) peuple un dossier distant :
+        des sauvegardes datées, et au besoin un fichier « étranger » que
+        l'utilisateur y aurait déposé lui-même — un fichier que rien n'inscrit
+        au registre du fork et qui ne porte aucun marqueur.
+        """
+        sauvegarde = RemoteBackup(
+            remote_id=remote_id,
+            name=name or remote_id,
+            slug=slug,
+            size=size,
+            created_at=created_at,
+            path=path or f"{self.folder}/{remote_id}.tar",
+            metadata=dict(metadata or {}),
+        )
+        self.sauvegardes[sauvegarde.remote_id] = sauvegarde
+        return sauvegarde
+
     async def async_list_backups(self) -> list[RemoteBackup]:
-        """Renvoie les sauvegardes mémorisées."""
+        """Renvoie les sauvegardes mémorisées.
+
+        `attente_de_listage` simule un fournisseur qui ne répond plus : la
+        purge doit alors couper l'appel plutôt que d'attendre sans fin.
+        """
+        self.listages += 1
+        if self.attente_de_listage:
+            await asyncio.sleep(self.attente_de_listage)
         self._verifier_erreur()
         return list(self.sauvegardes.values())
 
     async def async_delete_backup(self, remote_id: str) -> None:
-        """Supprime une sauvegarde mémorisée."""
+        """Supprime une sauvegarde mémorisée.
+
+        La tentative est notée **avant** tout échec : un test peut ainsi
+        vérifier que la purge a poursuivi son chemin après une erreur, ou après
+        le dépassement de délai que simule `attentes_de_suppression`.
+        """
+        self.suppressions.append(remote_id)
+        attente = self.attentes_de_suppression.get(remote_id)
+        if attente:
+            await asyncio.sleep(attente)
         self._verifier_erreur()
+        erreur = self.erreurs_de_suppression.get(remote_id)
+        if erreur is not None:
+            raise erreur
         if remote_id not in self.sauvegardes:
             raise DestinationNotFoundError(
                 f"sauvegarde distante inconnue : « {remote_id} »"
