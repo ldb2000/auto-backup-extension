@@ -425,13 +425,18 @@ Sept points méritent l'attention en écrivant un nouveau test :
    compteur et les attributs d'erreur compris.
 5. **Aucune valeur réelle dans les tests de masquage.** Les jetons employés sont les constantes
    inventées `FAUX_JETON`, `FAUX_JETON_GOOGLE`, `FAUX_RAFRAICHISSEMENT_GOOGLE`,
-   `FAUX_UPLOAD_ID` et `FAUX_JETON_BASE64` ; un test vérifie qu'aucun ne ressort dans l'état ni
-   dans ses attributs, et `assainir_le_message()` est éprouvée séparément sur chaque forme — clé
-   et valeur (`access_token=...`, `"client_secret": "..."`), en-tête (`Bearer ...`), **jeton nu**
-   (sans mot-clé adjacent, ou séparé par une simple espace), URL de session reprenable, et
-   adresse électronique. Un test symétrique vérifie que le français ordinaire n'est **pas**
-   masqué (« token expiré ») et qu'une URL reste lisible : un attribut affiché à l'utilisateur
-   doit rester diagnosticable.
+   `FAUX_UPLOAD_ID` et `FAUX_JETON_BASE64` ; un test
+   (`test_le_message_d_erreur_ne_laisse_pas_fuir_de_jeton`) vérifie qu'aucun ne ressort dans
+   l'état ni dans ses attributs. `assainir_le_message()` délègue au module commun
+   `destinations/masquage.py` et reste éprouvée sur chaque forme (`test_assainir_le_message_*`) :
+   clé et valeur, en-tête `Bearer`, jeton nu, URL de session reprenable, adresse électronique.
+   `test_last_error_suit_le_masquage_commun` vérifie, par l'événement d'échec, que `last_error`
+   égale `masquer()` sur les formes que l'ancienne copie locale laissait fuir (`accessToken: …`,
+   chemins `/backup/…` et `/config/…`, `tokens=[…]`) ;
+   `test_l_erreur_restauree_avec_un_chemin_ou_une_cle_sensible_est_reassainie` fait de même à la
+   restauration. Un test symétrique vérifie que le français ordinaire n'est **pas** masqué
+   (« token expiré ») et qu'une URL reste lisible :
+   un attribut affiché à l'utilisateur doit rester diagnosticable.
 6. **Un ordre de montage déterministe se force en montant l'entité à la main.** Home Assistant
    ajoute les entités d'une destination *après* que le coordinateur a commencé à traiter ses
    événements ; un test de bout en bout laisse la boucle d'événements décider lequel passe en
