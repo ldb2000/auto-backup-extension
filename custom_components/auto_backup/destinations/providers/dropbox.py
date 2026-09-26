@@ -428,6 +428,16 @@ def nom_de_fichier_dropbox(
     return f"{base}{suffixe}"
 
 
+def _taille_annoncee(size: int | None) -> int | None:
+    """Taille annoncée par l'appelant, si elle est exploitable.
+
+    Une taille absente ou négative ne dit rien de la sauvegarde : elle est
+    traitée comme une taille inconnue, ce qui renvoie le dépôt vers la session
+    fragmentée — le seul mode qui fonctionne quelle que soit la taille finale.
+    """
+    return size if size is not None and size >= 0 else None
+
+
 def _chemin_du_dossier(dossier: str) -> str:
     """Chemin Dropbox du dossier de la destination, toujours absolu.
 
@@ -455,8 +465,25 @@ def _argument_de_depot(chemin: str) -> dict[str, Any]:
     return {"path": chemin, "mode": "add", "autorename": False, "mute": True}
 
 
-async def _flux(stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-    """Réémet un flux morceau par morceau, en ignorant les morceaux vides.
+@dataclass(slots=True)
+class _Compteur:
+    """Nombre d'octets réellement lus dans le flux d'une sauvegarde.
+
+    La voie fragmentée découpe le flux elle-même et compte ses fragments au fur
+    et à mesure. La voie simple, elle, confie le flux à `aiohttp`, qui le
+    consomme hors de la vue du fournisseur : sans ce compteur, la seule taille
+    disponible à la fin serait celle **annoncée** par l'appelant, et la
+    vérification finale comparerait alors une annonce à elle-même. Le compteur
+    donne aux deux voies la même valeur — celle des octets vraiment partis.
+    """
+
+    octets: int = 0
+
+
+async def _flux(
+    stream: AsyncIterator[bytes], compteur: _Compteur
+) -> AsyncIterator[bytes]:
+    """Réémet un flux morceau par morceau, en comptant les octets transmis.
 
     Le passage par ce générateur garantit à `aiohttp` un itérable asynchrone —
     un flux peut n'être qu'un itérateur — et met le fournisseur à l'abri d'une
@@ -464,6 +491,7 @@ async def _flux(stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     """
     async for morceau in stream:
         if morceau:
+            compteur.octets += len(morceau)
             yield morceau
 
 
@@ -718,6 +746,12 @@ class DropboxDestination(RemoteDestination):
         - en deçà de `SEUIL_ENVOI_SIMPLE`, une seule requête `files/upload` ;
         - au-delà, ou quand la taille est inconnue, une session fragmentée.
 
+        Quel que soit le mode, ce qui est vérifié à la fin est le nombre
+        d'octets **réellement** transmis, et non la taille annoncée : les deux
+        voies comptent de la même façon, et un écart — que l'annonce vienne d'un
+        appelant qui se trompe ou d'un transfert interrompu — fait échouer le
+        dépôt.
+
         `source` est ignoré : la sauvegarde est toujours lue en flux, ce qui
         fait fonctionner la destination aussi bien sous Supervisor, où le
         fichier n'existe que derrière l'API, que sur une installation Core.
@@ -732,13 +766,13 @@ class DropboxDestination(RemoteDestination):
         chemin = _chemin_distant(self.folder, nom_fichier)
         await self._async_preparer_le_dossier()
 
-        if size is not None and 0 <= size < SEUIL_ENVOI_SIMPLE:
-            charge = await self._async_envoi_simple(chemin, stream, size)
-            envoyes = size
+        annonce = _taille_annoncee(size)
+        if annonce is not None and annonce < SEUIL_ENVOI_SIMPLE:
+            charge, envoyes = await self._async_envoi_simple(chemin, stream, annonce)
         else:
             charge, envoyes = await self._async_envoi_fragmente(chemin, stream)
 
-        self._verifier_la_taille(charge, envoyes, chemin)
+        self._verifier_la_taille(charge, envoyes, chemin, annonce=annonce)
         distante = self._sauvegarde_depuis(
             charge,
             slug=slug,
@@ -784,8 +818,8 @@ class DropboxDestination(RemoteDestination):
 
     async def _async_envoi_simple(
         self, chemin: str, stream: AsyncIterator[bytes], taille: int
-    ) -> Mapping[str, Any]:
-        """Dépose la sauvegarde en une seule requête, corps en flux.
+    ) -> tuple[Mapping[str, Any], int]:
+        """Dépose la sauvegarde en une seule requête et renvoie sa réponse.
 
         La taille annoncée est reprise dans `Content-Length` : sans elle
         `aiohttp` basculerait en `Transfer-Encoding: chunked`, que les points
@@ -796,20 +830,26 @@ class DropboxDestination(RemoteDestination):
         renvoyer après un échec passager. C'est précisément ce que la session
         fragmentée corrige pour les grosses sauvegardes, dont l'envoi coûte
         trop cher pour être abandonné.
+
+        Renvoie la réponse de Dropbox et le nombre d'octets réellement envoyés,
+        comme le fait la session fragmentée : `aiohttp` consomme le flux hors de
+        notre vue, seul le compteur du générateur sait ce qui en est sorti.
         """
         _LOGGER.debug(
-            "Envoi simple vers Dropbox : %s (%d octets)",
+            "Envoi simple vers Dropbox : %s (%d octets annoncés)",
             chemin,
             taille,
         )
-        return await self._async_envoyer(
+        compteur = _Compteur()
+        charge = await self._async_envoyer(
             URL_ENVOI,
             _argument_de_depot(chemin),
-            _flux(stream),
+            _flux(stream, compteur),
             chemin=chemin,
             taille=taille,
             rejouable=False,
         )
+        return charge, compteur.octets
 
     async def _async_envoi_fragmente(
         self, chemin: str, stream: AsyncIterator[bytes]
@@ -936,14 +976,35 @@ class DropboxDestination(RemoteDestination):
         return identifiant
 
     def _verifier_la_taille(
-        self, charge: Mapping[str, Any], envoyes: int, chemin: str
+        self,
+        charge: Mapping[str, Any],
+        envoyes: int,
+        chemin: str,
+        *,
+        annonce: int | None,
     ) -> None:
-        """Compare la taille annoncée par Dropbox aux octets envoyés.
+        """Confronte les octets réellement envoyés à ce qui était attendu.
 
-        Un écart signifie que le fichier déposé n'est pas la sauvegarde : mieux
-        vaut un échec bruyant qu'une archive tronquée que la rétention distante
-        compterait comme une sauvegarde valide.
+        Deux écarts sont possibles, et tous deux signifient que le fichier
+        déposé n'est pas la sauvegarde :
+
+        - le flux n'a pas la taille que l'appelant avait **annoncée**. Sur la
+          voie simple, cette annonce est reprise telle quelle dans
+          `Content-Length` : une requête mal cadrée n'est alors pas une nuance
+          de comptabilité, c'est un dépôt dont le contenu ne correspond plus à
+          son en-tête ;
+        - Dropbox n'a pas enregistré le même nombre d'octets que celui qui est
+          parti, ce qui trahit un transfert interrompu.
+
+        Mieux vaut un échec bruyant qu'une archive tronquée que la rétention
+        distante compterait comme une sauvegarde valide.
         """
+        if annonce is not None and annonce != envoyes:
+            raise DestinationError(
+                f"le dépôt de « {chemin} » vers la destination « {self.name} » est "
+                f"incomplet : {envoyes} octets ont été lus pour {annonce} octets "
+                f"annoncés par l'appelant"
+            )
         taille = _entier(charge.get("size"))
         if taille is None or taille == envoyes:
             return

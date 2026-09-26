@@ -440,6 +440,14 @@ La taille annoncée est aussi reprise dans l'en-tête `Content-Length` de l'envo
 elle, `aiohttp` bascule en `Transfer-Encoding: chunked`, que les points d'entrée de contenu de
 Dropbox ne garantissent pas.
 
+Elle ne fait pour autant **pas foi** : c'est une annonce, pas une mesure. L'envoi simple la
+reprenait comme nombre d'octets envoyés, et la vérification finale comparait alors cette annonce
+à elle-même dès que Dropbox était d'accord avec le flux réel — une annonce fausse passait
+inaperçue sur cette voie, là où la session, qui découpe le flux elle-même, l'aurait vue. Les deux
+voies comptent désormais les octets **réellement** transmis : la session en additionnant ses
+fragments, l'envoi simple via un compteur qui enveloppe le flux confié à `aiohttp` (`_Compteur`),
+puisque le transport le consomme hors de la vue du fournisseur.
+
 #### Fragments de 8 Mio, un seul en mémoire
 
 Dropbox recommande des fragments multiples de 4 Mio. **8 Mio** est le compromis retenu : deux
@@ -456,9 +464,18 @@ requête paraît superflue ; elle ne l'est pas : elle donne un point de validati
 traite de la même façon une sauvegarde vide, une sauvegarde qui tombe pile sur une frontière de
 fragment et le cas courant.
 
-À la fin, la taille enregistrée par Dropbox est comparée aux octets envoyés. Un écart lève une
-`DestinationError` : mieux vaut un échec bruyant qu'une archive tronquée que la rétention
-distante (#9) compterait comme une sauvegarde valide.
+À la fin, deux confrontations ont lieu, sur les deux voies d'envoi indifféremment : les octets
+réellement transmis face à la taille **annoncée** par l'appelant quand elle est connue, puis face
+à la taille **enregistrée par Dropbox**. La première impute l'écart à l'annonce — sur la voie
+simple, cette annonce est le `Content-Length` de la requête, et un corps qui ne la respecte pas
+est un dépôt mal cadré, pas une nuance de comptabilité ; la seconde le met sur le compte du
+transfert. Les deux lèvent une `DestinationError`, avec un message qui dit laquelle a parlé :
+mieux vaut un échec bruyant qu'une archive tronquée que la rétention distante (#9) compterait
+comme une sauvegarde valide.
+
+Une taille annoncée **négative** est traitée comme une taille inconnue (`_taille_annoncee()`) :
+elle ne renseigne rien, n'a donc rien à faire dans un `Content-Length`, et ne doit pas non plus
+être confrontée aux octets envoyés — elle ferait échouer un dépôt intact.
 
 #### Nommage : le nom ne suffit pas, le slug l'accompagne
 

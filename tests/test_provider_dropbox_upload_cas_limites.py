@@ -44,6 +44,7 @@ from test_provider_dropbox_upload import (  # noqa: F401 - fixtures réutilisée
     reponse,
     servir,
     servir_en_consommant,
+    simuler_l_envoi,
     simuler_le_dossier,
     televerser,
 )
@@ -198,7 +199,7 @@ async def test_un_nom_ou_un_slug_avec_slash_ou_points_reste_dans_le_dossier(
     jamais introduire de segment de chemin supplémentaire.
     """
     simuler_le_dossier(aioclient_mock)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    simuler_l_envoi(aioclient_mock)
 
     await televerser(destination, nom=nom, slug=slug)
 

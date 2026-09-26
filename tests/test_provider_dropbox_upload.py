@@ -340,6 +340,34 @@ def servir_lentement(
     return _servir
 
 
+def simuler_l_envoi(
+    aioclient_mock: AiohttpClientMocker, charge: Any = None
+) -> list[bytes]:
+    """Simule `files/upload` en **lisant** le corps de la requête.
+
+    Un vrai serveur consomme le flux qu'on lui envoie ; le simulateur, lui, se
+    contente de mémoriser l'objet reçu sans jamais l'itérer. Sans cette lecture,
+    le compteur d'octets réellement transmis du fournisseur resterait à zéro, et
+    la vérification finale de la taille échouerait sur un dépôt pourtant intact
+    — le simulateur mentirait, pas le code testé.
+
+    Renvoie la liste des corps reçus, dans l'ordre, pour les tests qui vérifient
+    ce qui est réellement parti.
+    """
+    recu: list[bytes] = []
+    aioclient_mock.post(
+        URL_ENVOI,
+        side_effect=servir_en_consommant(
+            reponse(
+                URL_ENVOI,
+                charge=metadonnees_de_fichier() if charge is None else charge,
+            ),
+            recu,
+        ),
+    )
+    return recu
+
+
 def simuler_le_dossier(
     aioclient_mock: AiohttpClientMocker, *, deja_present: bool = False
 ) -> None:
@@ -500,14 +528,14 @@ async def test_une_petite_sauvegarde_part_en_une_seule_requete(
 ) -> None:
     """Critère : en deçà de 150 Mo, une seule requête `files/upload`."""
     simuler_le_dossier(aioclient_mock)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    recu = simuler_l_envoi(aioclient_mock)
 
     await televerser(destination)
 
     envois = appels(aioclient_mock, URL_ENVOI)
     assert len(envois) == 1
     assert not appels(aioclient_mock, URL_SESSION_DEBUT)
-    assert await octets_envoyes(envois[0]) == CONTENU
+    assert recu == [CONTENU]
 
     entetes = envois[0][3]
     assert entetes["Content-Type"] == "application/octet-stream"
@@ -532,7 +560,7 @@ async def test_un_nom_accentue_reste_transportable_par_un_en_tete(
     refuse. Dropbox attend précisément un JSON échappé.
     """
     simuler_le_dossier(aioclient_mock)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    simuler_l_envoi(aioclient_mock)
 
     await televerser(destination, nom="Sauvegarde d'été")
 
@@ -660,6 +688,83 @@ async def test_la_taille_finale_est_verifiee(
         await televerser(destination, taille=None)
 
 
+async def test_l_envoi_simple_compte_les_octets_reellement_transmis(
+    destination: DropboxDestination, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """La voie simple compte le flux, elle ne recopie pas la taille annoncée.
+
+    Elle reprenait l'annonce de l'appelant comme nombre d'octets envoyés : la
+    vérification finale comparait alors cette annonce à elle-même dès que
+    Dropbox était d'accord avec le flux réel. Ici Dropbox confirme exactement ce
+    que le flux contenait, et c'est l'appelant qui se trompe : l'écart doit être
+    imputé à l'annonce, et le message citer les octets réellement lus.
+    """
+    simuler_le_dossier(aioclient_mock)
+    recu = simuler_l_envoi(aioclient_mock)
+
+    with pytest.raises(DestinationError) as echec:
+        await televerser(destination, taille=10)
+
+    message = str(echec.value)
+    assert f"{len(CONTENU)} octets ont été lus" in message
+    assert "10 octets annoncés" in message
+    # Le flux est bien parti en entier : ce n'est pas une troncature réseau.
+    assert recu == [CONTENU]
+
+
+async def test_un_depot_tronque_par_dropbox_est_detecte_en_envoi_simple(
+    destination: DropboxDestination, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """La voie simple compare aussi ce que Dropbox a enregistré au flux envoyé.
+
+    Pendant de `test_la_taille_finale_est_verifiee`, qui n'éprouvait que la
+    session : les deux voies vérifient désormais la même chose, de la même
+    façon, et distinguent une annonce fausse d'un transfert interrompu.
+    """
+    simuler_le_dossier(aioclient_mock)
+    simuler_l_envoi(aioclient_mock, metadonnees_de_fichier(size=12))
+
+    with pytest.raises(DestinationError, match="Dropbox a enregistré 12 octets"):
+        await televerser(destination)
+
+
+async def test_une_taille_annoncee_fausse_est_aussi_detectee_en_session(
+    destination: DropboxDestination, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """La session vérifie elle aussi l'annonce, et pas seulement ses fragments."""
+    fragment = 8192
+    contenu = b"z" * (fragment * 2 + 7)
+    simuler_le_dossier(aioclient_mock)
+    aioclient_mock.post(URL_SESSION_DEBUT, json={"session_id": "session-factice"})
+    aioclient_mock.post(URL_SESSION_AJOUT, text="")
+    aioclient_mock.post(URL_SESSION_FIN, json=metadonnees_de_fichier(size=len(contenu)))
+
+    with (
+        patch(f"{MODULE_DROPBOX}.SEUIL_ENVOI_SIMPLE", fragment),
+        patch(f"{MODULE_DROPBOX}.TAILLE_FRAGMENT", fragment),
+        pytest.raises(DestinationError, match="octets annoncés"),
+    ):
+        await televerser(destination, contenu=contenu, taille=len(contenu) + 1)
+
+
+async def test_une_taille_annoncee_negative_passe_par_la_session(
+    destination: DropboxDestination, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Une taille négative ne dit rien : elle vaut une taille inconnue.
+
+    Elle ne doit ni servir de `Content-Length`, ni être confrontée aux octets
+    envoyés — elle ferait échouer un dépôt pourtant intact.
+    """
+    simuler_le_dossier(aioclient_mock)
+    aioclient_mock.post(URL_SESSION_DEBUT, json={"session_id": "session-factice"})
+    aioclient_mock.post(URL_SESSION_FIN, json=metadonnees_de_fichier())
+
+    distante = await televerser(destination, taille=-1000)
+
+    assert not appels(aioclient_mock, URL_ENVOI)
+    assert distante.size == len(CONTENU)
+
+
 ### Dossier cible ###
 
 
@@ -668,7 +773,7 @@ async def test_le_dossier_cible_est_cree_avant_le_transfert(
 ) -> None:
     """Critère : le dossier configuré est créé s'il n'existe pas."""
     simuler_le_dossier(aioclient_mock)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    simuler_l_envoi(aioclient_mock)
 
     await televerser(destination)
 
@@ -686,7 +791,7 @@ async def test_un_dossier_deja_present_n_interrompt_rien(
 ) -> None:
     """Critère : `path/conflict/folder` est le cas normal, pas une erreur."""
     simuler_le_dossier(aioclient_mock, deja_present=True)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    simuler_l_envoi(aioclient_mock)
 
     distante = await televerser(destination)
 
@@ -1053,7 +1158,7 @@ async def test_une_requete_lente_aboutit_sous_un_delai_confortable(
             reponse(URL_CREATION_DOSSIER, charge={"metadata": {}})
         ),
     )
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    simuler_l_envoi(aioclient_mock)
 
     distante = await televerser(destination)
 
@@ -1068,7 +1173,7 @@ async def test_la_sauvegarde_distante_porte_ce_qu_attend_la_retention(
 ) -> None:
     """Critère : identifiant, chemin, taille, date et métadonnées sont fournis."""
     simuler_le_dossier(aioclient_mock)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    simuler_l_envoi(aioclient_mock)
 
     distante = await televerser(destination)
 
@@ -1093,7 +1198,7 @@ async def test_une_taille_non_numerique_est_ignoree(
 ) -> None:
     """Une taille hors contrat n'invente rien et ne fait pas échouer le dépôt."""
     simuler_le_dossier(aioclient_mock)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier(size="beaucoup"))
+    simuler_l_envoi(aioclient_mock, metadonnees_de_fichier(size="beaucoup"))
 
     distante = await televerser(destination)
 
@@ -1107,7 +1212,7 @@ async def test_une_reponse_sans_identifiant_est_refusee(
     simuler_le_dossier(aioclient_mock)
     charge = metadonnees_de_fichier()
     del charge["id"]
-    aioclient_mock.post(URL_ENVOI, json=charge)
+    simuler_l_envoi(aioclient_mock, charge)
 
     with pytest.raises(DestinationError, match="identifiant"):
         await televerser(destination)
@@ -1131,7 +1236,7 @@ async def test_aucun_jeton_ni_en_tete_d_autorisation_dans_les_journaux(
 ) -> None:
     """Critère : un téléversement en `debug` ne divulgue ni jeton ni en-tête."""
     simuler_le_dossier(aioclient_mock)
-    aioclient_mock.post(URL_ENVOI, json=metadonnees_de_fichier())
+    simuler_l_envoi(aioclient_mock)
 
     with caplog.at_level(logging.DEBUG):
         await televerser(destination)
@@ -1200,13 +1305,7 @@ async def test_le_service_backup_depose_la_sauvegarde_chez_dropbox(
     handler.create_backup = AsyncMock(return_value={"slug": SLUG})
 
     simuler_le_dossier(aioclient_mock)
-    recu: list[bytes] = []
-    aioclient_mock.post(
-        URL_ENVOI,
-        side_effect=servir_en_consommant(
-            reponse(URL_ENVOI, charge=metadonnees_de_fichier()), recu
-        ),
-    )
+    recu = simuler_l_envoi(aioclient_mock)
 
     succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
     echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)

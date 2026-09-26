@@ -196,9 +196,9 @@ complète dépasse très souvent. Auto Backup choisit donc tout seul :
 | 150 Mo et plus, ou taille inconnue | Une **session d'envoi** : la sauvegarde est découpée en fragments de 8 Mio, envoyés l'un après l'autre, puis validés en bloc. |
 
 Dans les deux cas la sauvegarde n'est **jamais chargée entièrement en mémoire** : elle est lue
-et envoyée au fil de l'eau. À la fin d'une session, la taille enregistrée par Dropbox est
-comparée à ce qui a été envoyé ; en cas d'écart, le téléversement est déclaré en échec plutôt
-que de laisser passer une archive tronquée.
+et envoyée au fil de l'eau. Et dans les deux cas, à la fin du dépôt, la taille enregistrée par
+Dropbox est comparée au nombre d'octets réellement partis ; en cas d'écart, le téléversement est
+déclaré en échec plutôt que de laisser passer une archive tronquée.
 
 La taille est « inconnue » sur une installation supervisée quand le Supervisor n'annonce pas la
 taille du téléchargement : la session d'envoi est alors utilisée par précaution.
@@ -239,7 +239,8 @@ pour la requête qui transporte la sauvegarde, et vous n'avez rien d'autre à r�
 | Dropbox ouvre une page « invalid redirect_uri » | L'URI déclarée ne correspond pas exactement (protocole, port, `/` final). |
 | « un fichier nommé … existe déjà chez Dropbox » | Le dossier contient déjà une sauvegarde portant ce nom et ce slug. Auto Backup n'écrase rien : supprimez ou renommez le fichier chez Dropbox si vous voulez le remplacer. |
 | « l'espace de stockage Dropbox … est saturé » | Votre compte Dropbox est plein. Libérez de la place, ou réduisez la rétention distante de la destination. |
-| « le dépôt de … est incomplet » | La taille enregistrée par Dropbox ne correspond pas à ce qui a été envoyé (transfert interrompu). Le fichier partiel reste chez Dropbox : supprimez-le avant de relancer. |
+| « le dépôt de … est incomplet : Dropbox a enregistré … » | La taille enregistrée par Dropbox ne correspond pas à ce qui a été envoyé (transfert interrompu). Le fichier partiel reste chez Dropbox : supprimez-le avant de relancer. |
+| « le dépôt de … est incomplet : … octets ont été lus pour … annoncés » | La sauvegarde lue n'avait pas la taille que Home Assistant avait annoncée. Rien n'est déposé de fiable : relancez la sauvegarde, et signalez le cas s'il se reproduit. |
 | « délai de téléversement dépassé » | La sauvegarde n'a pas fini de partir dans le temps imparti. Augmentez-le dans **Configurer → Réglages du téléversement**. |
 
 Le journal détaillé s'active avec :
