@@ -7,7 +7,8 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
 - **[ADR 0001 — Socle des destinations distantes](adr/0001-destinations-distantes.md)** :
   Architecture décisionnelle du support des destinations cloud (Dropbox, Google Drive).
   Couvre la persistance (entry.options), le registre de fournisseurs, la hiérarchie d'erreurs,
-  et la validation sécurisée des chemins distants en POSIX normalisé.
+  la validation sécurisée des chemins distants en POSIX normalisé, le téléversement après
+  création et la rétention distante (registre de provenance, branchement du service `purge`).
 
 ## Destinations distantes
 

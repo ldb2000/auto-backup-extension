@@ -166,6 +166,11 @@ class RemoteDestination(ABC):
 
         Seules les sauvegardes créées par Auto Backup sont renvoyées : les
         fichiers déposés par l'utilisateur ne doivent jamais être purgés.
+
+        L'implémentation **borne elle-même ses appels réseau** (délai de la
+        requête HTTP, nombre de pages parcourues) : le coordinateur de purge
+        ne pose qu'un filet de sécurité grossier (`DEFAULT_PURGE_TIMEOUT`), qui
+        n'a à se déclencher que si le fournisseur ne l'a pas fait.
         """
 
     @abstractmethod
@@ -173,6 +178,10 @@ class RemoteDestination(ABC):
         """Supprime la sauvegarde distante `remote_id`.
 
         Lève `DestinationNotFoundError` si elle n'existe pas (ou plus).
+
+        Comme pour le listage, l'implémentation **borne elle-même ses appels
+        réseau** ; le délai du coordinateur de purge (`DEFAULT_PURGE_TIMEOUT`)
+        n'est qu'un filet de sécurité.
         """
 
     def __repr__(self) -> str:

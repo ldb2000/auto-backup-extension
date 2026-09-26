@@ -21,16 +21,20 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
 capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement et dépôt
-effectif sur Google Drive.** L'option `upload_to` des services de sauvegarde envoie la sauvegarde
-créée vers les destinations configurées (voir « Téléversement des sauvegardes » ci-dessous).
+**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement, dépôt
+effectif sur Google Drive et rétention distante.** L'option `upload_to` des services de sauvegarde
+envoie la sauvegarde créée vers les destinations configurées (voir « Téléversement des
+sauvegardes » ci-dessous), et chaque destination applique sa propre rétention aux sauvegardes
+qu'elle a reçues (voir « Rétention distante »).
 
 - **Dropbox** : la **connexion du compte est disponible** — voir le guide
-  [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; le téléversement et la purge
-  distante arrivent avec les issues #11 et #12.
+  [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; l'envoi effectif du fichier et sa
+  suppression chez Dropbox arrivent avec les issues #11 et #12.
 - **Google Drive** : la **connexion du compte et le téléversement sont disponibles** — voir le
-  guide [Connecter Google Drive](docs/destinations/google-drive.md) ; le listage et la purge
-  distante arrivent avec les issues #15 et #9.
+  guide [Connecter Google Drive](docs/destinations/google-drive.md) ; le listage et la suppression
+  chez Google arrivent avec l'issue #15. Tant qu'ils manquent, la rétention distante ne peut pas
+  s'appliquer à une destination Google Drive : elle est configurable, mais aucune sauvegarde n'y
+  est encore supprimée.
 
 La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
@@ -89,6 +93,51 @@ nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`).
 
+### Rétention distante
+
+Chaque destination a **sa propre rétention**, réglée à son ajout : une durée de conservation en
+jours, un nombre maximum de sauvegardes, ou les deux. Les deux se combinent : les sauvegardes
+trop anciennes partent d'abord, puis, s'il en reste plus que le nombre autorisé, les plus
+anciennes du lot restant sont supprimées jusqu'à revenir sous la limite. Une destination sans
+aucune rétention n'est jamais purgée.
+
+**Rien de ce que vous avez déposé vous-même n'est supprimé.** Auto Backup tient un registre
+persistant des sauvegardes qu'il a lui-même téléversées (dans le stockage de Home Assistant,
+`auto_backup.remote_backups`) et ne purge que celles-là — ou celles qui portent son marqueur
+dans les métadonnées du fournisseur. Tout autre fichier présent dans le dossier distant est
+ignoré par la purge, quels que soient son âge et son nom.
+
+La purge distante se déclenche :
+
+- **après chaque téléversement réussi**, si l'option **purge automatique** (`auto_purge`) est
+  active dans les réglages des sauvegardes — c'est la même option qui commande la purge locale ;
+  désactivée, aucune suppression distante automatique n'a lieu ;
+- **à chaque appel du service `auto_backup.purge`**, qui purge d'abord les sauvegardes locales
+  expirées, comme auparavant, puis chaque destination distante configurée.
+
+Une destination en attente de ré-autorisation n'est pas contactée : elle est sautée, avec un
+avertissement dans le journal, et les autres destinations sont purgées normalement. Un fichier
+déjà disparu chez le fournisseur est traité comme purgé (avertissement, entrée retirée du
+registre) et une suppression en échec n'interrompt jamais la purge des suivantes.
+
+**Événement** : `auto_backup.remote_purge` est émis **après chaque série de suppressions qui a
+supprimé au moins un fichier**, avec les champs `destination` (identifiant), `destination_name`
+(nom lisible) et `remote_ids` (liste des identifiants distants supprimés). Aucun événement n'est
+émis pour une destination où rien n'a été supprimé.
+
+```yaml
+automation:
+  triggers:
+    - trigger: event
+      event_type: auto_backup.remote_purge
+  actions:
+    - action: persistent_notification.create
+      data:
+        message: >-
+          {{ trigger.event.data.remote_ids | length }} sauvegarde(s) supprimée(s)
+          de {{ trigger.event.data.destination_name }}.
+```
+
 ## Développement
 
 Le projet utilise [`uv`](https://docs.astral.sh/uv/) et Python 3.14 (version épinglée dans
@@ -109,9 +158,12 @@ La version de Home Assistant utilisée pour les tests est celle qu'épingle
 figées dans `uv.lock`). C'est ce qui fixe le plancher de développement à Python 3.14.2,
 exigé par Home Assistant >= 2026.3.
 
-Ce plancher ne concerne que l'environnement de développement et de test. La version minimale
-de Home Assistant annoncée aux utilisateurs de l'intégration reste **2025.1.0**, déclarée dans
-`hacs.json`.
+La version minimale de Home Assistant annoncée aux utilisateurs de l'intégration est
+**2026.3.0**, déclarée dans `hacs.json` : les destinations distantes importent des exceptions
+OAuth2 apparues dans cette version. Home Assistant 2026.3 exigeant lui aussi Python 3.14.2, le
+plancher de développement et celui des utilisateurs coïncident aujourd'hui. Ils restent deux
+planchers distincts : le dépôt suit la dernière version de Home Assistant, alors que la version
+annoncée ne bouge que sur décision explicite.
 
 Le répertoire `custom_components/auto_backup/` est exclu du reformatage `ruff` pour rester
 identique à l'upstream (voir [`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
