@@ -743,6 +743,11 @@ async def test_une_taille_inexploitable_ne_disqualifie_pas_la_sauvegarde(
         ("Sauvegarde [ancienne]", "deadbeef"),
         ("Sauvegardé à Noël", "éàü"),
         ("N" * 400, "0123456789"),
+        # Slug « inhabituel » : ponctuation, espace et accent mêlés — rien de
+        # tout cela n'est un caractère hexadécimal, mais `_assaini()` ne filtre
+        # que ce que Dropbox refuse dans un nom de fichier, pas ce qu'un slug
+        # « normal » contiendrait.
+        ("Sauvegarde du matin", "a1-b_2.c 3!éàü"),
     ],
 )
 def test_la_convention_reconnait_exactement_ce_que_le_depot_produit(
@@ -767,9 +772,16 @@ def test_la_convention_reconnait_exactement_ce_que_le_depot_produit(
         "vacances.jpg",
         "documents.tar",
         "Sauvegarde [].tar",
+        "[].tar",
         "[a1b2c3d4].tar",
         "Sauvegarde [a1b2c3d4].tar.txt",
         "Sauvegarde a1b2c3d4.tar",
+        "Sauvegarde [a1b2c3d4]",
+        # Crochets imbriqués : le groupe capturé ne peut pas contenir de
+        # crochet ouvrant, donc aucune des deux lectures possibles du nom
+        # n'aboutit à un groupe valide suivi de « .tar ».
+        "Sauvegarde [[imbriqué]].tar",
+        "Sauvegarde [ext[erne]].tar",
         f"Sauvegarde [{'s' * 80}].tar",
         "S" * 250 + " [a1b2c3d4].tar",
     ],
@@ -787,6 +799,108 @@ def test_un_depot_sans_slug_n_est_reconnaissable_que_par_le_registre() -> None:
     montre qu'elle suffit.
     """
     assert slug_de_la_convention(nom_de_fichier_dropbox("Sauvegarde")) is None
+
+
+### Risque assumé : un nom d'utilisateur conforme à la convention ###
+
+
+@pytest.mark.parametrize(
+    "nom",
+    [
+        # Un nom de vacances suivi d'une année entre crochets : rien à voir
+        # avec un dépôt d'Auto Backup, et pourtant la forme est exactement
+        # celle que `slug_de_la_convention()` reconnaît.
+        "photos [2026].tar",
+        "backup [x].tar",
+    ],
+)
+def test_un_nom_d_utilisateur_conforme_a_la_convention_reste_reconnu(
+    nom: str,
+) -> None:
+    """Risque assumé et documenté : la forme du nom est le seul juge.
+
+    `docs/destinations/dropbox.md` (« Ce qui n'est jamais touché ») avertit
+    explicitement l'utilisateur : un fichier qu'il aurait lui-même nommé
+    « … [quelque chose].tar » serait pris pour une sauvegarde d'Auto Backup.
+    Ce test ne dénonce pas un défaut — il fige la frontière exacte du risque
+    accepté, pour qu'une évolution du motif ne l'élargisse pas en silence : le
+    risque reste borné au dossier de la destination (jamais récursif) et à
+    cette forme précise, ni plus ni moins permissive.
+    """
+    assert slug_de_la_convention(nom) is not None
+
+
+async def test_la_purge_supprime_un_nom_d_utilisateur_conforme_a_la_convention(
+    hass: HomeAssistant,
+    demarrer: Callable[..., Awaitable[MockConfigEntry]],
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Conséquence de bout en bout du risque assumé ci-dessus.
+
+    Le fichier n'a jamais été déposé par Auto Backup (il n'est pas au
+    registre) mais son nom suit la convention par coïncidence : la purge le
+    supprime comme n'importe quel orphelin. C'est exactement ce que la
+    documentation demande à l'utilisateur d'éviter en ne nommant pas ses
+    propres fichiers de cette façon.
+    """
+    await demarrer(**{CONF_RETENTION_DAYS: 1})
+    ancienne = dt_util.utcnow() - timedelta(days=30)
+    simuler_le_listage(
+        aioclient_mock,
+        page(entree_de_fichier(IDS[0], "photos [2026].tar", date=ancienne.isoformat())),
+    )
+    simuler_la_suppression(aioclient_mock)
+
+    await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+    await hass.async_block_till_done()
+
+    supprimes = [
+        argument(appel)["path"] for appel in appels(aioclient_mock, URL_SUPPRESSION)
+    ]
+    assert supprimes == [IDS[0]]
+
+
+### Renommage d'un fichier déjà déposé ###
+
+
+async def test_un_orphelin_renomme_cesse_d_etre_reconnu(
+    destination: DropboxDestination, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Conséquence assumée, documentée dans les « Limites connues ».
+
+    L'orphelin n'est pas au registre : sa seule voie de reconnaissance est son
+    nom. Une fois renommé chez Dropbox en dehors de la convention, plus rien
+    ne le rattache au fork — il redevient un fichier étranger comme un autre,
+    et ne sera plus jamais purgé automatiquement.
+    """
+    simuler_le_listage(
+        aioclient_mock, page(entree_de_fichier(IDS[0], "mon fichier renommé"))
+    )
+
+    assert await destination.async_list_backups() == []
+
+
+async def test_un_fichier_du_registre_reste_reconnu_apres_renommage(
+    hass: HomeAssistant,
+    destination: DropboxDestination,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Nuance de la limite ci-dessus : le registre, lui, survit au renommage.
+
+    L'identifiant Dropbox est stable même si le fichier est déplacé ou
+    renommé (cf. `async_delete_backup()`) : une sauvegarde inscrite au
+    registre par son `remote_id` reste donc reconnue quel que soit son nom
+    actuel. Seul l'orphelin reconnu par son seul nom perd la partie.
+    """
+    await _inscrire(hass, IDS[0], NOMS[0], slug=SLUGS[0])
+    simuler_le_listage(
+        aioclient_mock, page(entree_de_fichier(IDS[0], "mon fichier renommé"))
+    )
+
+    (sauvegarde,) = await destination.async_list_backups()
+
+    assert sauvegarde.remote_id == IDS[0]
+    assert sauvegarde.metadata["provenance"] == "registre"
 
 
 ### Suppression ###
@@ -1114,6 +1228,73 @@ async def test_une_purge_sans_rien_a_supprimer_ne_journalise_aucune_trace(
         enr.getMessage() for enr in caplog.records if enr.levelno >= logging.ERROR
     ] == []
     assert not appels(aioclient_mock, URL_SUPPRESSION)
+
+
+async def test_une_troncature_de_pagination_ne_fait_pas_echouer_la_retention_par_nombre(
+    hass: HomeAssistant,
+    demarrer: Callable[..., Awaitable[MockConfigEntry]],
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Une pagination tronquée ne fait pas planter la rétention par nombre.
+
+    `PAGES_MAX` coupe le listage après la première page : la deuxième page,
+    qui porterait une troisième sauvegarde, n'est jamais interrogée. La
+    rétention par nombre (`retention_count`) ne voit donc que deux
+    sauvegardes — elle doit calculer sur ce qui est **visible**, sans jamais
+    lever d'exception ni supprimer plus que ce que le nombre de survivants
+    autorise. La sauvegarde de la page non vue reste simplement en place
+    jusqu'à la prochaine purge, comme le documente `docs/destinations/
+    dropbox.md`.
+    """
+    await demarrer(**{CONF_RETENTION_COUNT: 1})
+    await _inscrire(hass, IDS[0], NOMS[0], slug=SLUGS[0], age_en_jours=20)
+    await _inscrire(hass, IDS[1], NOMS[1], slug=SLUGS[1], age_en_jours=10)
+    await _inscrire(hass, IDS[2], NOMS[2], slug=SLUGS[2], age_en_jours=30)
+    simuler_le_listage(
+        aioclient_mock,
+        page(
+            entree_de_fichier(
+                IDS[0],
+                NOMS[0],
+                date=(dt_util.utcnow() - timedelta(days=20)).isoformat(),
+            ),
+            entree_de_fichier(
+                IDS[1],
+                NOMS[1],
+                date=(dt_util.utcnow() - timedelta(days=10)).isoformat(),
+            ),
+            curseur="curseur-page-2",
+            suite=True,
+        ),
+        # Jamais interrogée : la troncature intervient avant.
+        page(
+            entree_de_fichier(
+                IDS[2],
+                NOMS[2],
+                date=(dt_util.utcnow() - timedelta(days=30)).isoformat(),
+            )
+        ),
+    )
+    simuler_la_suppression(aioclient_mock)
+
+    with patch(f"{MODULE_DROPBOX}.PAGES_MAX", 1), caplog.at_level(logging.WARNING):
+        await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+        await hass.async_block_till_done()
+
+    assert not appels(aioclient_mock, URL_LISTAGE_SUITE)
+    assert "tronqué" in caplog.text
+    supprimes = [
+        argument(appel)["path"] for appel in appels(aioclient_mock, URL_SUPPRESSION)
+    ]
+    # Sur les deux sauvegardes vues, une seule est en trop pour un
+    # `retention_count` de 1 : la plus ancienne des deux visibles part, la
+    # troisième (page non vue) n'est même pas candidate ce tour-ci.
+    assert supprimes == [IDS[0]]
+    assert [entree.remote_id for entree in _registre(hass).entrees(DESTINATION_ID)] == [
+        IDS[1],
+        IDS[2],
+    ]
 
 
 ### Journaux ###
