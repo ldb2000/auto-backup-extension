@@ -35,7 +35,8 @@
             "fournisseur_invalide": "The chosen provider is no longer available or does not support the requested authorisation.",
             "configuration_invalide": "The destination configuration could not be saved.",
             "autorisation_annulee": "Authorisation was refused or cancelled at the provider: no destination was created and nothing was changed. You can start “Add a destination” again whenever you like.",
-            "echec_fournisseur": "The provider rejected the first request: {detail}."
+            "echec_fournisseur": "The provider rejected the first request: {detail}.",
+            "changement_de_compte_annule": "Account change not confirmed: nothing was saved. The destination keeps its original account and its previous authorisation."
         },
         "error": {
             "identifiants_invalides": "Enter your application's client ID and secret.",
@@ -55,6 +56,7 @@
                     "reautoriser_destination": "Re-authorise a destination",
                     "supprimer_destination": "Remove a destination",
                     "reglages_televersement": "Upload settings",
+                    "reglages_notifications": "Notification settings",
                     "init": "Backup settings"
                 }
             },
@@ -94,11 +96,25 @@
                     "destination_id": "Destination"
                 }
             },
+            "confirmer_changement_de_compte": {
+                "title": "Account change",
+                "description": "The authorisation you just granted is for a different account than the one the destination “{destination}” uses.\n\nPrevious account: {ancien_compte}\nNew account: {nouveau_compte}\n\nIf you confirm, the destination will send backups to the new account from now on. Backups already stored on the previous account will no longer be listed or purged by Auto Backup: they stay with the provider, for you to manage.\n\nWithout confirmation nothing is saved: the destination keeps its account and its previous authorisation.",
+                "data": {
+                    "confirmer": "I confirm the account change"
+                }
+            },
             "supprimer_destination": {
                 "title": "Remove a destination",
                 "description": "The configuration and authorisation of the chosen destinations will be erased. Backups already uploaded to the provider are not deleted.",
                 "data": {
                     "destinations": "Destinations to remove"
+                }
+            },
+            "reglages_notifications": {
+                "title": "Notification settings",
+                "description": "When a backup definitively fails to reach a remote destination, Auto Backup can show a persistent notification naming the destination, the backup and the cause. A destination never has more than one such notification: it is updated on each new failure and disappears as soon as an upload succeeds.\n\nTurned off, notifications are no longer created: the “auto_backup.upload_failed” event, the error log and the repair issue reporting a destination to re-authorise are all kept.",
+                "data": {
+                    "notify_on_failure": "Notify upload failures and access to renew"
                 }
             },
             "reglages_televersement": {

@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from aiohttp import ClientError
@@ -63,10 +63,14 @@ from custom_components.auto_backup.destinations import (
     unregister_provider,
 )
 from custom_components.auto_backup.destinations.flow import (
+    COMPTE_INCONNU,
     IDENTIFIANT_PROVISOIRE,
     GestionDesDestinationsMixin,
+    _description_du_compte,
     _identifiant_disponible,
+    _identite_du_compte,
     _libelle_du_fournisseur,
+    _memes_comptes,
     _retention,
 )
 from custom_components.auto_backup.destinations.providers.dropbox import (
@@ -205,6 +209,7 @@ async def test_le_menu_s_adapte_aux_destinations_existantes(
         "reautoriser_destination",
         "supprimer_destination",
         "reglages_televersement",
+        "reglages_notifications",
         "init",
     ]
 
@@ -783,6 +788,271 @@ async def test_la_reautorisation_conserve_les_donnees_du_compte(
     assert persistee[CONF_FOLDER] == attendue[CONF_FOLDER]
     assert persistee[CONF_RETENTION_DAYS] == attendue[CONF_RETENTION_DAYS]
     assert persistee[CONF_RETENTION_COUNT] == attendue[CONF_RETENTION_COUNT]
+
+
+### Changement de compte à la ré-autorisation (issue #17) ###
+
+# Le compte renvoyé par le fournisseur après une ré-autorisation menée sur un
+# autre compte que celui d'origine.
+DONNEES_D_UN_AUTRE_COMPTE = {"account_id": "compte-factice-9999"}
+
+
+def _fournisseur_renvoyant(donnees: dict[str, Any] | None) -> Any:
+    """Remplace le crochet `async_donnees_du_fournisseur()` du fournisseur factice."""
+    return patch.object(
+        DestinationOAuthEnMemoire,
+        "async_donnees_du_fournisseur",
+        AsyncMock(return_value=donnees),
+    )
+
+
+async def _entree_avec_compte(
+    hass: HomeAssistant, donnees: dict[str, Any] | None
+) -> MockConfigEntry:
+    """Entrée portant une destination OAuth2 rattachée à ce compte."""
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={CONF_DESTINATIONS: [config_oauth_factice(provider_data=donnees)]},
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+    return entree
+
+
+async def _reautoriser(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> dict[str, Any]:
+    """Déroule la ré-autorisation jusqu'au retour du fournisseur."""
+    resultat = await ouvrir_les_options(entree.entry_id, "reautoriser_destination")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_DESTINATION_ID: "destination_oauth"}
+    )
+    resultat = await _retour_du_fournisseur(
+        hass, resultat, code=CODE_AUTORISATION_FACTICE
+    )
+    await hass.async_block_till_done()
+    return resultat
+
+
+async def test_un_changement_de_compte_est_confirme_avant_enregistrement(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Critère : l'interface nomme les deux comptes et prévient de l'effet.
+
+    Les sauvegardes déposées sur l'ancien compte ne seront plus ni listées ni
+    purgées : l'utilisateur doit l'avoir lu avant que la destination change de
+    compte.
+    """
+    entree = await _entree_avec_compte(hass, DONNEES_DU_COMPTE)
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    with _fournisseur_renvoyant(DONNEES_D_UN_AUTRE_COMPTE):
+        resultat = await _reautoriser(hass, entree, ouvrir_les_options)
+
+        assert resultat["type"] is FlowResultType.FORM
+        assert resultat["step_id"] == "confirmer_changement_de_compte"
+        placeholders = resultat["description_placeholders"]
+        assert placeholders["ancien_compte"] == DONNEES_DU_COMPTE["account_id"]
+        assert (
+            placeholders["nouveau_compte"] == (DONNEES_D_UN_AUTRE_COMPTE["account_id"])
+        )
+        assert placeholders["destination"] == "Destination OAuth"
+        # Rien n'est encore écrit : l'utilisateur n'a pas répondu.
+        (inchangee,) = entree.options[CONF_DESTINATIONS]
+        assert inchangee[CONF_PROVIDER_DATA] == DONNEES_DU_COMPTE
+
+        resultat = await hass.config_entries.options.async_configure(
+            resultat["flow_id"], {"confirmer": True}
+        )
+        await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_PROVIDER_DATA] == DONNEES_D_UN_AUTRE_COMPTE
+    assert persistee[CONF_TOKEN]["access_token"] == "acces-factice-2"
+    # Le reste de la destination n'a pas bougé.
+    assert persistee[CONF_NAME] == config_oauth_factice()[CONF_NAME]
+    assert persistee[CONF_FOLDER] == config_oauth_factice()[CONF_FOLDER]
+
+
+async def test_un_changement_de_compte_refuse_n_ecrit_rien(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Critère : sans confirmation, ni le compte ni le jeton ne sont remplacés."""
+    entree = await _entree_avec_compte(hass, DONNEES_DU_COMPTE)
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+    avant = list(entree.options[CONF_DESTINATIONS])
+
+    with _fournisseur_renvoyant(DONNEES_D_UN_AUTRE_COMPTE):
+        resultat = await _reautoriser(hass, entree, ouvrir_les_options)
+        resultat = await hass.config_entries.options.async_configure(
+            resultat["flow_id"], {"confirmer": False}
+        )
+        await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "changement_de_compte_annule"
+    assert entree.options[CONF_DESTINATIONS] == avant
+
+
+async def test_le_meme_compte_ne_demande_aucune_confirmation(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Ré-autoriser le même compte reste un parcours sans question."""
+    entree = await _entree_avec_compte(hass, DONNEES_DU_COMPTE)
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    with _fournisseur_renvoyant(dict(DONNEES_DU_COMPTE)):
+        resultat = await _reautoriser(hass, entree, ouvrir_les_options)
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_PROVIDER_DATA] == DONNEES_DU_COMPTE
+
+
+async def test_une_donnee_de_compte_enrichie_n_est_pas_un_changement(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Une clé de plus sur le même compte ne déclenche pas de confirmation."""
+    entree = await _entree_avec_compte(hass, DONNEES_DU_COMPTE)
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+    enrichies = {**DONNEES_DU_COMPTE, "email": "camille.martin@exemple.test"}
+
+    with _fournisseur_renvoyant(enrichies):
+        resultat = await _reautoriser(hass, entree, ouvrir_les_options)
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_PROVIDER_DATA] == enrichies
+
+
+async def test_un_fournisseur_muet_conserve_le_compte_enregistre(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Sans donnée renvoyée, le compte d'origine est conservé, sans question.
+
+    C'est le cas d'un fournisseur qui n'implémente pas le crochet : il n'a rien
+    à dire du compte, ce n'est pas une raison d'oublier celui qui est connu.
+    """
+    entree = await _entree_avec_compte(hass, DONNEES_DU_COMPTE)
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    with _fournisseur_renvoyant(None):
+        resultat = await _reautoriser(hass, entree, ouvrir_les_options)
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_PROVIDER_DATA] == DONNEES_DU_COMPTE
+
+
+async def test_un_premier_compte_connu_ne_demande_aucune_confirmation(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Une destination sans compte connu en reçoit un, sans confirmation.
+
+    Rien ne permettrait de dire qu'elle a « changé » de compte : elle n'en
+    avait aucun d'enregistré, par exemple parce qu'elle date d'avant #10.
+    """
+    entree = await _entree_avec_compte(hass, None)
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    with _fournisseur_renvoyant(DONNEES_D_UN_AUTRE_COMPTE):
+        resultat = await _reautoriser(hass, entree, ouvrir_les_options)
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_PROVIDER_DATA] == DONNEES_D_UN_AUTRE_COMPTE
+
+
+async def test_une_destination_supprimee_pendant_la_confirmation_interrompt_le_flux(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    fournisseur_oauth_factice: str,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """La destination peut disparaître pendant que la question est posée."""
+    entree = await _entree_avec_compte(hass, DONNEES_DU_COMPTE)
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+
+    with _fournisseur_renvoyant(DONNEES_D_UN_AUTRE_COMPTE):
+        resultat = await _reautoriser(hass, entree, ouvrir_les_options)
+        assert resultat["step_id"] == "confirmer_changement_de_compte"
+
+        hass.config_entries.async_update_entry(
+            entree,
+            options={
+                CONF_AUTO_PURGE: True,
+                CONF_BACKUP_TIMEOUT: DEFAULT_BACKUP_TIMEOUT,
+                CONF_DESTINATIONS: [],
+            },
+        )
+        await hass.async_block_till_done()
+
+        resultat = await hass.config_entries.options.async_configure(
+            resultat["flow_id"], {"confirmer": True}
+        )
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "destination_inconnue"
+
+
+### Identité d'un compte ###
+
+
+def test_l_identite_ne_retient_que_les_cles_identifiantes() -> None:
+    """Le quota ou le nom d'affichage ne disent pas de quel compte il s'agit."""
+    identite = _identite_du_compte(
+        {"account_id": " compte-factice-0000 ", "quota": 42, "display_name": ""}
+    )
+
+    assert identite == {"account_id": "compte-factice-0000"}
+
+
+def test_deux_identites_sans_cle_commune_ne_sont_pas_le_meme_compte() -> None:
+    """Sans clé comparable, la question est posée plutôt que tranchée."""
+    assert _memes_comptes({"account_id": "a"}, {"email": "b@exemple.test"}) is False
+
+
+def test_un_compte_sans_donnee_est_dit_non_identifie() -> None:
+    """Les placeholders de l'étape nomment toujours les deux côtés."""
+    assert _description_du_compte({}) == COMPTE_INCONNU
 
 
 async def test_sans_destination_oauth_la_reautorisation_est_impossible(
