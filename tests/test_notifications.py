@@ -240,6 +240,32 @@ async def test_un_succes_vers_une_autre_destination_ne_retire_rien(
     assert _notification_d_echec(hass) is not None
 
 
+async def test_un_succes_sans_echec_prealable_ne_cree_rien(
+    hass: HomeAssistant,
+    entree_notifiante: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Un succès isolé, sans échec préalable, ne crée rien et ne plante pas.
+
+    Rien ne distingue cette destination d'une autre qui n'aurait jamais connu
+    de panne : son compteur d'échecs est déjà à zéro, et le premier événement
+    qu'elle reçoit est un succès.
+    """
+    assert hass.data[DATA_NOTIFICATIONS].echecs_consecutifs(DESTINATION) == 0
+
+    with caplog.at_level(logging.ERROR):
+        await _succes(hass)
+
+    assert _notification_d_echec(hass) is None
+    assert hass.data[DATA_NOTIFICATIONS].echecs_consecutifs(DESTINATION) == 0
+    assert not caplog.records
+    assert not [
+        identifiant
+        for identifiant in _notifications(hass)
+        if identifiant.startswith("auto_backup_")
+    ]
+
+
 async def test_un_evenement_sans_destination_est_ignore(
     hass: HomeAssistant, entree_notifiante: MockConfigEntry
 ) -> None:
@@ -273,6 +299,34 @@ async def test_une_sauvegarde_sans_nom_reste_notifiable(
     notification = _notification_d_echec(hass)
     assert notification is not None
     assert SLUG in notification["message"]
+
+
+async def test_un_echec_puis_la_suppression_de_la_destination_retire_l_alerte(
+    hass: HomeAssistant,
+    entree_notifiante: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Supprimer une destination en échec retire aussi son alerte.
+
+    À la différence de `test_la_suppression_d_une_destination_efface_sa_notification`
+    (destination déjà signalée en ré-authentification, pour laquelle l'échec ne
+    crée justement **pas** de notification), cette destination n'a jamais eu de
+    problème d'autorisation : sa notification d'échec existe bel et bien avant
+    la suppression, et c'est elle que la suppression doit retirer.
+    """
+    await _echec(hass)
+    assert _notification_d_echec(hass) is not None
+
+    resultat = await ouvrir_les_options(
+        entree_notifiante.entry_id, "supprimer_destination"
+    )
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_DESTINATIONS: [DESTINATION]}
+    )
+    await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    assert _notification_d_echec(hass) is None
 
 
 ### Option `notify_on_failure` ###
