@@ -49,7 +49,8 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
-| `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, masquage des secrets. |
+| `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés. |
+| `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, réserves assumées, troncature. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
@@ -273,9 +274,15 @@ Quatre points à connaître :
    générale des tests de destinations s'applique ici aussi : un test qui bascule
    `notify_on_failure` par `async_update_entry()` doit conserver `auto_purge` et
    `backup_timeout`, que l'écouteur upstream lit sans valeur de repli.
-4. **Le masquage se teste avec de faux secrets.** La cause d'échec employée contient un jeton
-   porteur, un `refresh_token` et un chemin `/config/...` inventés ; le test vérifie qu'aucun
-   n'apparaît dans la notification, que `***` y figure, et que la phrase reste lisible.
+4. **Le masquage se teste ailleurs, vecteur par vecteur.** `destinations/masquage.py` est le
+   point unique du fork : ses motifs sont éprouvés dans `tests/test_masquage.py`, qui rejoue les
+   valeurs hostiles relevées par l'audit de sécurité (jeton Dropbox nu, jetons Google, URL de
+   session reprenable, adresse électronique, suite base64 sans mot-clé), les formes déjà
+   couvertes, et les réserves assumées — chacune avec son test, pour qu'un changement de
+   comportement soit visible plutôt que silencieux. Ne restent dans
+   `tests/test_notifications.py` que les tests de **traversée** : chacun des trois champs
+   affichés (nom de la destination, nom de la sauvegarde, cause) passe bien par le masquage,
+   dans la notification d'échec comme dans celle de ré-authentification.
 
 ## Tester un changement de compte à la ré-autorisation
 

@@ -725,15 +725,71 @@ Assistant restent émis** : l'utilisateur qui coupe les notifications pilote ses
 autrement, il ne renonce pas au signalement. Le choix est relu dans l'entrée à chaque échec : il
 s'applique sans redémarrage, comme `upload_timeout`.
 
-### Masquage défensif, parce que le texte vient du fournisseur
+### `destinations/masquage.py` : un seul masquage pour tout le fork
 
 Le fork ne met aucun secret dans ses propres messages (décision 4), mais la cause d'un échec est
-souvent une phrase renvoyée par une API. `masquer_les_secrets()` remplace donc par `***`, avant
-affichage : un jeton porteur (`Bearer ...`), la valeur d'une clé dont le nom contient `token`,
-`secret`, `password` ou `api_key`, et les chemins de fichiers absolus (`/config/...`,
-`/backup/...`). Le nom de la clé est conservé : il aide à comprendre l'échec sans rien
-divulguer. Le masquage porte aussi sur les noms affichés, et épargne les URL, qui ne sont pas
-des chemins locaux.
+souvent une phrase renvoyée par une API, que le fork ne contrôle pas et affiche pourtant à des
+endroits durables et lisibles par tous. Tout texte de cette sorte traverse `masquer()`.
+
+**Pourquoi un module partagé plutôt qu'une fonction par module.** Le masquage a d'abord été écrit
+deux fois : `masquer_les_secrets()` pour les notifications (#17) et `assainir_le_message()` pour
+les attributs d'entité (#16). Les deux couvertures divergeaient **dans les deux sens** — #16
+masquait les adresses électroniques, les jetons nus (`sl.`, `ya29.`, `1//`), `upload_id` et les
+suites opaques que #17 laissait passer ; #17 masquait les chemins locaux absolus que #16 laissait
+passer. Le même message d'un fournisseur aurait donc été masqué différemment selon qu'il
+atterrissait dans une notification persistante ou dans l'attribut `last_error` d'une entité :
+deux niveaux de protection pour une seule donnée, et une faille dans chacun. Un duplicata de code
+de sécurité est une faille en soi. `destinations/masquage.py` est donc le **point unique** du
+fork, et porte l'**union stricte** des deux implémentations :
+
+| Passe | Ce qu'elle masque | Venait de |
+| --- | --- | --- |
+| 1 | adresses électroniques (donnée personnelle) | #16 |
+| 2 | en-têtes `Bearer` et `Basic` | #16 et #17 |
+| 3 | affectation d'une clé sensible, `upload_id` compris, séparateur `=`, `:` ou espace | #16 et #17 |
+| 4 | formes connues de jetons, même nus : `sl.`, `ya29.`, `1//` | #16 |
+| 5 | chemins de fichiers absolus des racines usuelles (`/config/...`, `/backups/...`) | #17 |
+| 6 | suites opaques de vingt caractères et plus | #16 |
+| — | troncature facultative (`longueur_max`) | #16 |
+
+Le nom de la clé est conservé : il aide à comprendre l'échec sans rien divulguer. Les URL sont
+épargnées, n'étant pas des chemins locaux, et le masquage porte sur **tout** ce qui est affiché —
+la cause, mais aussi le nom de la destination et celui de la sauvegarde.
+
+Trois formes ont été ajoutées au passage, qu'aucune des deux implémentations ne couvrait : les
+clés en `camelCase` ou à tiret (`accessToken`, `access-token`) et leurs pluriels (`tokens=[...]`),
+qui sont la norme des API JSON ; la valeur d'une collection entière, sans quoi seul son premier
+élément était masqué et le reste de la liste fuyait ; et une racine de chemin au pluriel
+(`/backups/nuit.tar`), que l'ordre de l'alternative réduisait à un masquage partiel laissant sortir
+le nom de la sauvegarde.
+
+**Réserves assumées, reprises de #16 et documentées en tête de module.** Le masquage est
+volontairement large — « code=500 » devient « code=*** » — mais épargne le mot ordinaire qui suit
+un mot-clé séparé par une simple espace (« token expiré », « code de la sauvegarde ») : le masquer
+n'aurait rien protégé et aurait rendu les notifications françaises illisibles. Trois angles morts
+subsistent, chacun avec son test :
+
+- un secret en base64 **standard** est découpé par `/`, `=` et `.`, exclus du jeu de la dernière
+  passe pour ne pas masquer les URL : il peut n'être masqué que partiellement, **voire pas du
+  tout** si ses tronçons font chacun moins de vingt caractères. Non exploitable aujourd'hui,
+  Dropbox et Google émettant du base64url (`-` et `_`, jamais `/`), leurs formes étant de surcroît
+  reconnues par la passe 4 ;
+- une valeur de moins de vingt caractères voisine d'un mot-clé **non listé** (« session id
+  sess_AbCdEf12 expired ») ou séparée d'un mot-clé listé par un mot intercalé (« secret is
+  <valeur> ») ne déclenche aucune passe. Les motifs ne sont **pas** étendus pour tolérer des mots
+  intercalés : le gain est nul sur les deux fournisseurs intégrés, dont les jetons sont longs et
+  reconnus par leur forme, et le coût serait une salve de faux positifs sur les phrases
+  françaises que la réserve ci-dessus protège justement. À revoir avec l'arrivée d'un fournisseur
+  aux jetons courts ;
+- un mot français de vingt caractères ou plus à capitale initiale passe pour une suite opaque.
+
+**Ce que l'issue #16 doit faire à sa fusion.** La branche `issue-16-entites-destinations` n'est
+pas fusionnée au moment où ce module est créé, et y garde son propre `assainir_le_message()`. Elle
+doit y **déléguer** : `assainir_le_message(message)` devient l'enveloppe qui ramène `None` et une
+chaîne vide à `cause inconnue`, puis appelle `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`.
+Aucun motif ne doit rester dans `entities.py` — c'est précisément la divergence que ce module
+supprime. L'ordre de fusion retenu est #17 puis #16, pour que #16 adopte ce module au moment de sa
+propre fusion.
 
 **Textes en français dans le code.** Une notification persistante n'a pas de clé de traduction
 côté Home Assistant, contrairement aux problèmes et aux étapes du flux d'options : ses libellés
@@ -860,6 +916,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   vivent dans `translations/fr.json`, qui n'a pas encore de section `services` au moment de #8 ;
   la traduction du champ y sera ajoutée en #18 pour que la formulation côté utilisateur soit
   cohérente.
+
+- **Délégation du masquage par les entités d'état (issue #16)** : `destinations/masquage.py` est le
+  point unique de masquage du fork depuis #17 (voir la section « Un seul masquage pour tout le
+  fork » ci-dessus), mais la branche `issue-16-entites-destinations` n'est pas fusionnée et garde
+  son propre `assainir_le_message()`. **À faire à la fusion de #16** : en faire une enveloppe qui
+  ramène `None` et la chaîne vide à `cause inconnue`, puis appelle
+  `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` ; aucun motif ne doit rester dans
+  `entities.py`. L'ordre de fusion retenu est #17 puis #16.
 
 - **Destination à ré-autoriser lors d'une purge (issue #9)** : une destination en attente de
   ré-authentification (décision 4 de cet ADR) ne doit pas être contactée lors d'une opération de

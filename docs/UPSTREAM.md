@@ -37,7 +37,9 @@ typées, registre de fournisseurs et gestionnaire de destinations (issue #6), pu
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
 d'interface du flux d'options (`flow.py`, issue #7), puis l'orchestration du téléversement
 après création (`destinations/upload.py`, issue #8) et, depuis l'issue #17, les notifications
-persistantes des échecs et des accès révoqués (`destinations/notifications.py`). Les fournisseurs réellement livrés vivent
+persistantes des échecs et des accès révoqués (`destinations/notifications.py`) ainsi que le point
+unique de masquage des secrets du fork (`destinations/masquage.py`), que doit appeler tout code
+affichant un texte venu d'un fournisseur. Les fournisseurs réellement livrés vivent
 dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10, Google Drive depuis
 l'issue #13 — et sont enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé
 par `async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
