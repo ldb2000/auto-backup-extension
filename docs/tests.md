@@ -49,6 +49,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
+| `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
 | `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
@@ -108,7 +109,7 @@ Les tests du **socle** s'appuient sur le fournisseur factice de
 [`tests/destinations_factices.py`](../tests/destinations_factices.py), entièrement en mémoire :
 aucun fichier n'est lu, aucun appel réseau n'est fait. Ils démontrent qu'un fournisseur s'ajoute
 par le seul registre, sans rien changer au cœur de l'intégration. Un **fournisseur réel** se
-teste autrement : voir [Tester un fournisseur réel](#tester-un-fournisseur-réel-google-drive).
+teste autrement : voir [Tester un fournisseur réel](#tester-un-fournisseur-réel).
 
 ```python
 async def test_mon_comportement(hass, fournisseur_factice):
@@ -239,6 +240,59 @@ Cinq points méritent l'attention en écrivant un nouveau test :
 
    `wraps=` garde le comportement réel : seule la valeur reçue est inspectée.
 
+## Tester la purge distante
+
+`tests/test_purge_distante.py` couvre l'issue #9. Le montage est plus léger que celui du
+téléversement : les sauvegardes distantes sont **déposées directement** chez le fournisseur
+factice par `destination.ajouter_sauvegarde()`, sans créer ni téléverser quoi que ce soit.
+
+```python
+# Déposée chez le fournisseur *et* inscrite au registre : purgeable.
+await _deposer(hass, destination, "vieille", jours=10)
+# Déposée par l'utilisateur, inconnue du registre : intouchable.
+await _deposer(hass, destination, "photos", jours=99, inscrire=False)
+
+supprimes = await _coordinateur(hass).async_purger_toutes()
+```
+
+Cinq points à connaître :
+
+1. **Le registre décide de ce qui est purgeable.** `_deposer(..., inscrire=False)` simule un
+   fichier que l'utilisateur aurait déposé lui-même : il ne figure pas au registre du fork
+   (`hass.data[DATA_REMOTE_BACKUPS]`) et ne doit **jamais** être supprimé. La seconde voie, le
+   marqueur `auto_backup` posé dans `RemoteBackup.metadata`, se teste avec
+   `metadata=marqueur_auto_backup()`.
+2. **Le fournisseur factice note les tentatives.** `destination.suppressions` liste les
+   identifiants dont la suppression a été *tentée*, dans l'ordre, y compris celles qui ont
+   échoué ; `destination.listages` compte les appels à `async_list_backups()`, et un zéro prouve
+   qu'une destination n'a jamais été jointe (ré-authentification requise, aucune rétention
+   configurée). `destination.erreurs_de_suppression[remote_id] = ...` programme l'échec d'une
+   suppression précise, `destination.erreur_a_lever` celui de toutes les opérations.
+3. **Le stockage est celui de `hass_storage`.** Le registre est un `Store` Home Assistant
+   (`auto_backup.remote_backups`) : son contenu est lisible dans la fixture `hass_storage`, et
+   un rechargement de l'entrée (`async_reload`) prouve qu'il survit à un redémarrage.
+4. **Le service `purge` fait les deux purges.** Pour prouver que la purge locale upstream n'a pas
+   été perdue en route, le test garnit `gestionnaire._snapshots` d'une sauvegarde expirée et
+   remplace `gestionnaire._handler.remove_backup` par un `AsyncMock` : l'appel du service doit
+   déclencher la suppression locale (et l'événement `auto_backup.purged_backups`) **et** la
+   suppression distante.
+5. **Un appel qui ne revient pas se simule, il ne s'attend pas.** Les appels réseau de la purge
+   sont bornés par `DEFAULT_PURGE_TIMEOUT` (300 s). Pour éprouver ce filet de sécurité, le délai
+   est ramené à quelques millisecondes par l'aide `_delai_de_purge()` du fichier de tests, et
+   c'est le fournisseur factice qui simule le fournisseur muet — `attente_de_listage` pour le
+   listage, `attentes_de_suppression[remote_id]` pour une suppression précise :
+
+   ```python
+   destination.attentes_de_suppression["figee"] = 30
+
+   with _delai_de_purge(0.01):
+       supprimes = await _coordinateur(hass).async_purger_toutes()
+   ```
+
+   L'attente réelle est donc de quelques millisecondes, pas de 300 secondes. Le même principe
+   vaut pour le téléversement, où c'est l'option `upload_timeout` qui est réglée à `0.01` et
+   `attente_secondes` qui fait patienter.
+
 ## Tester un fournisseur réel
 
 Deux fournisseurs sont livrés : Dropbox
@@ -363,16 +417,23 @@ jeton ne doit apparaître, même en `debug`.
 Le dépôt se développe et se teste sur l'interpréteur exigé par la dernière version de Home
 Assistant (`requires-python` dans `pyproject.toml`, aujourd'hui **3.14**). L'intégration est en
 revanche **installée** chez des utilisateurs dont le plancher annoncé est celui de `hacs.json` :
-**Home Assistant 2025.1, qui tourne sous Python 3.12**.
+**Home Assistant 2026.3, qui exige Python 3.14.2** (plancher relevé de 2025.1.0 par l'issue
+#28).
 
 **Règle : tout ce qui vit sous `custom_components/auto_backup/` doit rester analysable par
-Python 3.12.** Une syntaxe plus récente ne casse rien en développement, mais lève une
+Python 3.14.** Une syntaxe plus récente ne casse rien en développement, mais lève une
 `SyntaxError` au chargement de l'intégration chez ces utilisateurs, avant l'exécution de la
 moindre ligne de logique. La règle ne s'applique qu'au code livré : `tests/` et les scripts du
 dépôt ne tournent que sur l'interpréteur de développement.
 
+Les deux planchers coïncident depuis #28, mais ils restent indépendants : le dépôt suit la
+dernière version de Home Assistant, alors que la version annoncée dans `hacs.json` ne bouge que
+sur décision explicite. Ils divergeront de nouveau dès la prochaine version de Python, et la
+règle ci-dessus redeviendra contraignante — d'où le maintien du garde-fou.
+
 Le piège rencontré sur l'issue #13 est la PEP 758 : `except A, B:` sans parenthèses, valide à
-partir de Python 3.14 seulement. On écrit donc :
+partir de Python 3.14 seulement. Elle passerait le plancher actuel, mais le dépôt garde la forme
+parenthésée, valide sur toutes les versions :
 
 ```python
 except (ClientError, ValueError, UnicodeDecodeError) as err:
@@ -385,16 +446,23 @@ journal `debug`) : la cible de `ruff format` est l'interpréteur de développeme
 qu'il juge superflues sur une clause sans `as`.
 
 Le garde-fou est [`tests/test_compatibilite_python.py`](../tests/test_compatibilite_python.py) :
-il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 12))` et
+il analyse chaque module de l'intégration avec `ast.parse(..., feature_version=(3, 14))` et
 échoue en nommant le fichier, la ligne et la construction fautive. Deux tests l'accompagnent :
-l'un vérifie que le garde-fou refuse bien un extrait écrit en PEP 758 (sans quoi il pourrait
-passer à côté de ce qu'il surveille), l'autre relie le plancher testé à `hacs.json` — monter la
-version minimale de Home Assistant annoncée oblige à revoir `PLANCHER_UTILISATEUR` et cette
-section plutôt qu'à les laisser diverger en silence.
+l'un vérifie que le mécanisme refuse bien une syntaxe postérieure au plancher qu'on lui donne
+(sans quoi le garde-fou pourrait passer à côté de ce qu'il surveille), l'autre relie le plancher
+testé à `hacs.json` — monter la version minimale de Home Assistant annoncée oblige à revoir
+`PLANCHER_UTILISATEUR` et cette section plutôt qu'à les laisser diverger en silence.
+
+Ce premier test s'exerce sur Python 3.13, une version *antérieure* au plancher, et non sur le
+plancher lui-même : la PEP 758 étant valide en 3.14, plus aucune syntaxe connue ne lui est
+postérieure, et CPython borne de toute façon `feature_version` à la version de l'interpréteur
+courant. Il démontre donc que le mécanisme mord toujours, sans prétendre que 3.13 soit le
+plancher contrôlé.
 
 Limite assumée : `feature_version` est donnée pour « best effort » par CPython et ne couvre pas
 l'intégralité des évolutions de syntaxe. Ce garde-fou ne remplace pas une exécution réelle sur
-le plancher, mais il est instantané et bloque la régression la plus probable.
+le plancher, mais il est instantané et bloque la régression la plus probable le jour où les deux
+planchers divergeront de nouveau.
 
 ## Modifier l'intégration importée
 
@@ -422,7 +490,10 @@ Ces tests couvrent le comportement upstream importé (configuration, services, o
 entités), le socle des destinations distantes (contrat, registre, persistance), leur
 autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression), le
 téléversement après création (lecture en flux, événements, échecs, délai maximum), la connexion
-d'un compte Google Drive (issue #13) et le dépôt réel d'une sauvegarde chez Dropbox (issue #11).
-Le téléversement vers Google Drive (#14), le listage et la purge distante (#12, #15) sont testés
-par leurs issues respectives.
+d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
+la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant) et le
+dépôt réel d'une sauvegarde chez Dropbox (issue #11). L'envoi effectif d'un fichier chez Google
+Drive (#14), le listage et la suppression chez chaque fournisseur (#12 et #15) sont testés par
+leurs issues respectives.
+
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).
