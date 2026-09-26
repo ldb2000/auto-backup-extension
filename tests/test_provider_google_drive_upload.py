@@ -88,6 +88,7 @@ from custom_components.auto_backup.destinations.providers.google_drive_upload im
     URL_FICHIERS,
     entete_content_range,
     nom_du_fichier,
+    requete_de_dossier,
 )
 
 ### Valeurs de test : toutes inventées, aucune ne désigne un compte réel. ###
@@ -500,6 +501,23 @@ def test_le_nom_du_fichier_reste_lisible_et_unique(
     assert nom_du_fichier(nom, slug) == attendu
 
 
+def test_une_apostrophe_dans_le_dossier_est_echappee_pour_google() -> None:
+    """Sans échappement, l'apostrophe romprait la chaîne littérale de la requête.
+
+    `chemin_de_dossier()` interdit aujourd'hui l'apostrophe dans un dossier
+    saisi par le flux (issue #6) : ce cas ne peut donc pas survenir avec un
+    dossier configuré aujourd'hui. `requete_de_dossier()` reste néanmoins la
+    seule barrière pour un dossier persisté avant cette restriction.
+    """
+    requete = requete_de_dossier("Sauvegarde d'automne", "root")
+
+    assert requete == (
+        "name = 'Sauvegarde d\\'automne' and mimeType = "
+        "'application/vnd.google-apps.folder' and 'root' in parents "
+        "and trashed = false"
+    )
+
+
 ### Dossier cible ###
 
 
@@ -635,6 +653,34 @@ async def test_un_dossier_deja_cree_est_retrouve_sans_etre_recree(
 
     assert faux.creations == []
     assert faux.sessions[0]["parents"] == ["dossier-existant"]
+
+
+async def test_un_segment_de_dossier_avec_une_apostrophe_est_echappe_sur_le_reseau(
+    hass: HomeAssistant,
+    entree_google: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """La requête `q` envoyée à Google échappe l'apostrophe du nom de dossier.
+
+    `chemin_de_dossier()` interdit aujourd'hui l'apostrophe dans un dossier
+    saisi par le flux (issue #6) : ce cas ne peut pas survenir avec un dossier
+    configuré aujourd'hui. Il reste couvert ici en appelant directement
+    `async_resoudre_le_dossier()`, seule barrière pour un dossier persisté
+    avant cette restriction.
+    """
+    faux = _FauxDrive(aioclient_mock)
+    session = _destination(hass).session
+
+    identifiant = await google_drive_upload.async_resoudre_le_dossier(
+        session, "Sauvegarde d'automne"
+    )
+
+    (_, url_recherche, _, _) = _appels(aioclient_mock, URL_FICHIERS)[0]
+    requete = url_recherche.query["q"]
+    assert "name = 'Sauvegarde d\\'automne'" in requete
+    # Le dossier est bien créé sous son nom réel, apostrophe comprise.
+    assert faux.creations[0]["name"] == "Sauvegarde d'automne"
+    assert identifiant == "dossier-1"
 
 
 ### Envoi resumable ###

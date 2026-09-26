@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CONF_CLIENT_ID, CONF_CLIENT_SECRET, CONF_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -37,7 +38,13 @@ from custom_components.auto_backup.destinations import (
     async_persist_provider_data,
     preserve_fork_options,
 )
-from destinations_factices import PROVIDER_FACTICE, config_factice
+from destinations_factices import (
+    CLIENT_ID_FACTICE,
+    CLIENT_SECRET_FACTICE,
+    PROVIDER_FACTICE,
+    config_factice,
+    config_oauth_factice,
+)
 
 
 @pytest.fixture
@@ -291,6 +298,42 @@ async def test_les_donnees_du_fournisseur_completent_les_options_upstream(
 
     assert entree_avec_compte.options[CONF_AUTO_PURGE] is True
     assert entree_avec_compte.options[CONF_BACKUP_TIMEOUT] == DEFAULT_BACKUP_TIMEOUT
+
+
+async def test_le_jeton_et_le_secret_client_survivent_a_la_fusion(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_oauth_factice: str,
+) -> None:
+    """Le jeton et le `client_secret` ne sont pas dans `provider_data` : ils
+    n'ont donc aucune raison de bouger quand celui-ci est fusionné.
+
+    C'est le cas réel de Google Drive (issue #14) : le jeton et le secret
+    client sont écrits une fois par le flux OAuth2 (issue #13), puis le
+    fournisseur y ajoute l'identifiant de son dossier cible à chaque
+    téléversement, sans jamais repasser par ce flux.
+    """
+    config_initiale = config_oauth_factice()
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={CONF_DESTINATIONS: [config_initiale]},
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+
+    async_persist_provider_data(
+        hass, "destination_oauth", {"folder_id": "dossier-distant"}
+    )
+    await hass.async_block_till_done()
+
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_CLIENT_ID] == CLIENT_ID_FACTICE
+    assert persistee[CONF_CLIENT_SECRET] == CLIENT_SECRET_FACTICE
+    assert persistee[CONF_TOKEN] == config_initiale[CONF_TOKEN]
+    assert persistee.get(CONF_PROVIDER_DATA) == {"folder_id": "dossier-distant"}
 
 
 async def test_le_flux_d_options_conserve_les_destinations(
