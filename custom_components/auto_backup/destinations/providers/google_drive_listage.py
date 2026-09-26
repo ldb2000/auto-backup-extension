@@ -35,6 +35,11 @@ les fichiers comme lui.
 - **Il ne fait pas confiance au seul filtre envoyé à Google.** Marqueur, corbeille
   et type MIME sont revérifiés sur chaque fichier reçu : une requête `q` mal
   composée ne doit pas pouvoir rendre purgeable un fichier étranger.
+- **Il ne compte jamais deux fois la même sauvegarde.** La pagination de Drive
+  n'est pas un instantané : un dépôt concurrent ou un réordonnancement peut faire
+  apparaître un fichier sur deux pages. Le compter deux fois ferait croire à la
+  rétention en nombre qu'il y a une sauvegarde de trop, et lui ferait supprimer
+  une sauvegarde qui devait rester.
 
 ## Bornes
 
@@ -248,12 +253,20 @@ async def async_lister_les_sauvegardes(
     de `PAGES_MAX`. Un fichier sans identifiant exploitable est ignoré plutôt que
     de faire échouer tout le listage : la purge des autres sauvegardes reste plus
     utile qu'un abandon.
+
+    Une sauvegarde déjà vue n'est comptée qu'une fois. La pagination de Drive ne
+    garantit pas un instantané : un téléversement concurrent, ou un simple
+    réordonnancement côté Google, peut faire apparaître le même fichier sur deux
+    pages. Le laisser passer deux fois ferait croire à la rétention en nombre
+    qu'il y a une sauvegarde de plus que la réalité, et lui ferait supprimer une
+    sauvegarde qui devait être conservée.
     """
     identifiant_du_dossier = await async_dossier_cible(
         session, dossier, dossier_id=dossier_id, memoriser=memoriser
     )
 
     sauvegardes: list[RemoteBackup] = []
+    vues: set[str] = set()
     jeton_de_page: str | None = None
     pages = 0
     while True:
@@ -265,9 +278,7 @@ async def async_lister_les_sauvegardes(
             if not isinstance(fichier, Mapping) or not _est_une_sauvegarde(fichier):
                 continue
             try:
-                sauvegardes.append(
-                    sauvegarde_distante_du_fichier(fichier, dossier=dossier)
-                )
+                distante = sauvegarde_distante_du_fichier(fichier, dossier=dossier)
             except DestinationError as err:
                 # Un fichier illisible (identifiant absent) n'est pas une raison
                 # d'abandonner les autres : il ne sera simplement pas purgé.
@@ -276,6 +287,16 @@ async def async_lister_les_sauvegardes(
                     dossier,
                     err,
                 )
+                continue
+            if distante.remote_id in vues:
+                _LOGGER.debug(
+                    "Sauvegarde distante « %s » déjà vue sur une page précédente : "
+                    "elle n'est comptée qu'une fois",
+                    distante.remote_id,
+                )
+                continue
+            vues.add(distante.remote_id)
+            sauvegardes.append(distante)
 
         jeton_de_page = texte_optionnel(charge.get("nextPageToken"))
         if jeton_de_page is None:

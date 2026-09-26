@@ -577,6 +577,40 @@ async def test_une_sauvegarde_sans_taille_ni_date_reste_listee(
     assert distante.created_at is None
 
 
+async def test_une_sauvegarde_vue_sur_deux_pages_n_est_comptee_qu_une_fois(
+    hass: HomeAssistant,
+    integration_backup: None,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """La pagination de Drive n'est pas un instantané, et ça compte.
+
+    Un dépôt concurrent ou un simple réordonnancement côté Google peut faire
+    apparaître le même fichier sur deux pages. Le compter deux fois ferait croire
+    à `retention_count` qu'il y a une sauvegarde de trop — et lui ferait supprimer
+    une sauvegarde qui devait rester.
+    """
+    await _entree(hass, **{CONF_RETENTION_COUNT: 2})
+    doublon = fichier_drive("revenante", jours=5)
+    faux = _FauxDrive(
+        aioclient_mock,
+        fichiers=[doublon, fichier_drive("autre", jours=1), doublon],
+        par_page=2,
+    )
+    caplog.set_level(logging.DEBUG)
+
+    distantes = await _destination(hass).async_list_backups()
+
+    assert [distante.remote_id for distante in distantes] == ["revenante", "autre"]
+    assert "déjà vue sur une page précédente" in caplog.text
+
+    # Et la conséquence : la rétention en garde deux, donc ne supprime rien.
+    await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+    await hass.async_block_till_done()
+
+    assert faux.supprimes == []
+
+
 async def test_le_listage_borne_le_nombre_de_pages_parcourues(
     hass: HomeAssistant,
     entree_drive: MockConfigEntry,
@@ -596,7 +630,8 @@ async def test_le_listage_borne_le_nombre_de_pages_parcourues(
         distantes = await _destination(hass).async_list_backups()
 
     assert len(faux.jetons_recus) == PAGES_MAX
-    assert [distante.remote_id for distante in distantes] == ["unique"] * PAGES_MAX
+    # Le même fichier revient à chaque page : il n'est compté qu'une fois.
+    assert [distante.remote_id for distante in distantes] == ["unique"]
     assert f"après {PAGES_MAX} pages" in caplog.text
 
 

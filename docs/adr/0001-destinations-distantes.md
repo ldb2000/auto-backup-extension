@@ -1343,6 +1343,17 @@ garde-fou du coordinateur. Le dépassement est signalé par un avertissement et 
 sur ce qui a été lu : elle ne supprime que ce qu'elle a **vu**, jamais sur une présomption, et un
 listage tronqué ne conduit donc jamais à supprimer de trop.
 
+### Une sauvegarde vue deux fois n'est comptée qu'une fois
+
+La pagination de `files.list` n'est pas un instantané : un téléversement concurrent — le cas
+normal, la purge suivant justement un dépôt — ou un simple réordonnancement côté Google peut faire
+apparaître un fichier sur deux pages. Le listage dédoublonne donc sur `remote_id`.
+
+Ce n'est pas une coquetterie : `retention_count` compte ce que le listage renvoie. Un doublon
+aurait fait conclure qu'il y a une sauvegarde **de trop**, et fait supprimer une sauvegarde qui
+devait rester — un effet de bord d'autant plus vicieux qu'il ne se produit que sous concurrence,
+donc jamais dans un test qui ne l'a pas cherché.
+
 ### Un listage peut créer le dossier
 
 `async_dossier_cible()` retrouve **ou crée** la hiérarchie du dossier quand aucun identifiant
