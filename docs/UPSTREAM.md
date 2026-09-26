@@ -36,8 +36,11 @@ absent de l'upstream : contrat commun des destinations distantes, types de donn�
 typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis autorisation
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
 d'interface du flux d'options (`flow.py`, issue #7), l'orchestration du téléversement
-après création (`destinations/upload.py`, issue #8), enfin la rétention et la purge distantes
-(`destinations/retention.py`, issue #9). Les fournisseurs réellement livrés vivent
+après création (`destinations/upload.py`, issue #8), la rétention et la purge distantes
+(`destinations/retention.py`, issue #9) et, depuis l'issue #17, les notifications persistantes
+des échecs et des accès révoqués (`destinations/notifications.py`) ainsi que le point unique de
+masquage des secrets du fork (`destinations/masquage.py`), que doit appeler tout code affichant
+un texte venu d'un fournisseur. Les fournisseurs réellement livrés vivent
 dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10, Google Drive depuis
 l'issue #13 — et sont enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé
 par `async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
@@ -92,7 +95,12 @@ caractère près.
   `DATA_REMOTE_BACKUPS`, `DATA_REMOTE_PURGE`, `ATTR_CREATED_AT`, `ATTR_REMOTE_IDS` et
   `DEFAULT_PURGE_TIMEOUT` — ce dernier borne les appels réseau de la purge et n'est
   **pas** inscrit dans `CLES_DU_FORK` : ce n'est pas une option d'entrée, rien ne le persiste.
-  L'ordre du fichier est donc : #6, #8, #7, #10/#13, puis #9.
+  L'issue #17 ferme le bloc avec les notifications persistantes : l'import de type
+  `GestionnaireDeNotifications`, `DATA_NOTIFICATIONS`, `NOTIFICATION_UPLOAD_PREFIX`,
+  `NOTIFICATION_REAUTH_PREFIX`, `CONF_NOTIFY_ON_FAILURE`, `DEFAULT_NOTIFY_ON_FAILURE`, et la
+  seule réécriture de `CLES_DU_FORK` du fichier — `CLES_DU_FORK = (*CLES_DU_FORK,
+  CONF_NOTIFY_ON_FAILURE)`, faite sur place plutôt qu'en remontant modifier la définition de #8.
+  L'ordre du fichier est donc : #6, #8, #7, #10/#13, #9, puis #17.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
@@ -108,7 +116,10 @@ caractère près.
   d'inscription des services, qui ré-inscrit `auto_backup.purge` avec un gestionnaire enveloppant
   celui de l'upstream (purge locale d'abord, purge distante ensuite). La boucle upstream et
   `async_unload_entry()` restent intacts : le service est retiré par son nom, comme les trois
-  autres. Tout cela est ajouté, à une ré-indentation près, décrite juste en dessous.
+  autres. L'issue #17 y ajoute deux lignes de plus, sur le même modèle : l'import
+  d'`async_setup_notifications()` et son appel dans `async_setup_entry`, qui branche les
+  notifications persistantes sur les événements de téléversement. Tout cela est ajouté, à une
+  ré-indentation près, décrite juste en dessous.
 - `custom_components/auto_backup/services.yaml` : un champ `upload_to` ajouté aux services
   `backup`, `backup_full` et `backup_partial` (défini une fois avec l'ancre YAML `&upload_to`,
   référencé deux fois), à la fin de la liste des champs de chacun. Aucun champ upstream n'est
@@ -142,11 +153,15 @@ caractère près.
   bloc du fork** : `options.abort.autorisation_annulee` (l'utilisateur a refusé ou fermé l'écran
   d'autorisation) et `options.abort.echec_fournisseur`, où le fournisseur explique en français
   ce qui a échoué à sa première requête (API Drive non activée, par exemple).
+  L'issue #17 y ajoute l'étape `reglages_notifications` et son entrée de menu, l'étape
+  `confirmer_changement_de_compte` et l'abandon `options.abort.changement_de_compte_annule`.
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
   `sk`, `ur`) ne sont pas touchées : Home Assistant retombe sur l'anglais pour les clés
-  absentes, et leur traduction relève de l'issue #17.
+  absentes. Leur traduction n'est rattachée à aucune issue à ce jour — la mention de l'issue #17
+  qui figurait ici visait les notifications, qui n'ont finalement aucune clé de traduction
+  (voir l'ADR, section « Notifications des échecs et des accès révoqués »).
 - Le fork enregistre une vue HTTP propre, `/auth/auto_backup/callback`, au moment où une
   autorisation OAuth2 démarre. Elle est nécessaire parce que la vue standard
   (`/auth/external/callback`) ne sait reprendre qu'un *config flow*, alors que les destinations
@@ -238,6 +253,10 @@ Deux conséquences, valables pour toute option que le fork ajoutera :
 - la clé doit figurer dans `CLES_DU_FORK` (`const.py`), sans quoi le premier enregistrement du
   formulaire upstream l'effacerait en silence — c'est exactement ce qui arrivait à
   `upload_timeout` avant l'issue #8.
+
+L'option `notify_on_failure` de l'issue #17 suit exactement ce modèle : sa propre étape
+(`reglages_notifications`), son écriture par `options_avec_reglage()`, sa clé dans
+`CLES_DU_FORK`. Le formulaire upstream reste intact.
 
 ### Comment ces écarts sont contrôlés
 

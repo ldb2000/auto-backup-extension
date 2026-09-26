@@ -23,6 +23,7 @@ from custom_components.auto_backup.const import (
     CONF_AUTO_PURGE,
     CONF_BACKUP_TIMEOUT,
     CONF_DESTINATIONS,
+    CONF_NOTIFY_ON_FAILURE,
     CONF_PROVIDER_DATA,
     CONF_UPLOAD_TIMEOUT,
     DATA_DESTINATIONS,
@@ -369,7 +370,11 @@ def test_le_report_couvre_toutes_les_options_du_fork() -> None:
     suivante est donc couverte sans qu'il faille revenir ici, et elle échouera
     tant qu'elle n'est pas reportée.
     """
-    assert set(CLES_DU_FORK) == {CONF_DESTINATIONS, CONF_UPLOAD_TIMEOUT}
+    assert set(CLES_DU_FORK) == {
+        CONF_DESTINATIONS,
+        CONF_UPLOAD_TIMEOUT,
+        CONF_NOTIFY_ON_FAILURE,
+    }
 
     existantes = {cle: f"valeur de {cle}" for cle in CLES_DU_FORK}
     reportees = preserve_fork_options(

@@ -2,7 +2,7 @@
 
 Quand le fournisseur refuse de rafraîchir un jeton (accès révoqué, application
 supprimée, `invalid_grant`), la destination concernée devient inutilisable tant
-que l'utilisateur ne l'a pas ré-autorisée. Deux choses se produisent alors, et
+que l'utilisateur ne l'a pas ré-autorisée. Trois choses se produisent alors, et
 elles sont **propres à cette destination** : les autres continuent de
 fonctionner.
 
@@ -15,8 +15,14 @@ fonctionner.
    fournisseur, ce qui se fait par « Ré-autoriser une destination » dans les
    options de l'intégration. Le choix est justifié dans
    `docs/adr/0001-destinations-distantes.md`.
+3. Depuis l'issue #17, une **notification persistante** accompagne le problème
+   (`destinations/notifications.py`) : le problème signale la destination dans
+   l'interface des intégrations, la notification la porte à l'écran d'accueil.
+   Les deux ne se doublent pas — même panne, même marche à suivre — et l'option
+   `notify_on_failure` ne coupe que la seconde.
 
-Le problème disparaît dès que la destination est ré-autorisée ou supprimée.
+Le problème disparaît dès que la destination est ré-autorisée ou supprimée, et
+la notification avec lui.
 """
 
 from __future__ import annotations
@@ -33,6 +39,10 @@ from ..const import (
     ISSUE_REAUTH_PREFIX,
 )
 from .models import DestinationConfig
+from .notifications import (
+    async_effacer_les_notifications,
+    async_notifier_la_reauthentification,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,6 +99,10 @@ def async_signaler_la_reauthentification(
             "fournisseur": config.provider,
         },
     )
+    # Le problème signale la destination dans l'interface des intégrations ; la
+    # notification (issue #17) la porte à l'écran d'accueil. Les deux décrivent
+    # la même panne et disparaissent ensemble (`async_effacer_la_reauthentification`).
+    async_notifier_la_reauthentification(hass, config)
 
 
 @callback
@@ -105,6 +119,9 @@ def async_effacer_la_reauthentification(
     if gestionnaire is not None:
         gestionnaire.async_effacer_la_reauthentification(destination_id)
     ir.async_delete_issue(hass, DOMAIN, identifiant_du_probleme(destination_id))
+    # Les notifications de la destination partent avec le problème (issue #17) :
+    # celle qui invite à la ré-autoriser comme celle d'un échec de téléversement.
+    async_effacer_les_notifications(hass, destination_id)
 
 
 @callback
