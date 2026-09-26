@@ -717,8 +717,9 @@ purger que les siennes.
 des propriétés à un fichier (`property groups`, `appProperties`). Un fournisseur les pose au
 téléversement, la purge les relit au listage. La preuve voyage alors **avec le fichier** : elle
 survit à la perte du registre. Mais elle dépend de ce que chaque API sait stocker — souvent des
-chaînes seulement, parfois rien — et les fournisseurs réels ne posent ce marqueur qu'à partir
-des issues #12 et #15.
+chaînes seulement, parfois rien — et elle n'est exploitable qu'une fois le fournisseur capable de
+**lister**. Google Drive pose le marqueur depuis #14 mais ne lit rien avant #15 ; Dropbox attend
+#12 pour les deux.
 
 **Décision : B *et* C, en « ou » logique.** Une sauvegarde distante n'est candidate à la purge
 que si elle est **inscrite au registre** *ou* si elle **porte le marqueur** `auto_backup`. Les
@@ -835,6 +836,122 @@ parcourues, nombre de tentatives. Le coordinateur ne pose qu'un garde-fou grossi
 recours si un fournisseur a oublié le sien. Une valeur généreuse est donc la bonne : trop
 courte, elle couperait un listage légitimement lent sur un dossier bien rempli.
 
+## Téléversement vers Google Drive (issue #14)
+
+Le fournisseur de #13 savait s'autoriser et s'identifier ; #14 lui donne son `async_upload()`.
+Le code vit dans `destinations/providers/google_drive_upload.py`, importé **dans**
+`GoogleDriveDestination.async_upload()` : ce module s'appuie sur les primitives de
+`google_drive.py` (appel authentifié, traduction des erreurs, signalement d'un 401), un import au
+niveau du module refermerait donc un cycle. La règle de #13 tient toujours : aucun SDK, tout passe
+par la session aiohttp partagée du cœur.
+
+### Le dossier cible est créé par l'intégration, et son identifiant est mémorisé
+
+La portée `drive.file` n'ouvre l'accès **qu'aux fichiers créés par l'application**. Un dossier que
+l'utilisateur a créé à la main dans son Drive est donc invisible : `files.list` ne le renvoie
+jamais, et aucun réglage ne peut y changer quoi que ce soit. Le dossier cible est par conséquent
+**toujours créé par Auto Backup**, segment par segment (`RemoteDestination.folder` est un chemin
+relatif POSIX qui peut en compter plusieurs), avec `appProperties.auto_backup = true`.
+
+Le chercher à chaque envoi coûterait un aller-retour par segment, et exposerait à créer un doublon
+si la recherche échouait. L'identifiant du dossier final est donc **mémorisé** dans
+`provider_data["folder_id"]`, à côté de l'adresse du compte (#13). D'où l'ajout de
+`async_persist_provider_data()` dans `destinations/config_entry.py` : elle **fusionne** la clé
+écrite avec celles déjà présentes — un fournisseur qui mémorise son dossier ne doit pas effacer le
+compte autorisé —, revalide le résultat par `donnees_de_fournisseur()` et n'écrit rien quand la
+valeur est déjà celle-là (une écriture d'options recharge toutes les destinations). Sa signature
+est celle d'`async_persist_token()` : l'entrée est retrouvée par le module, pas passée par
+l'appelant, un fournisseur n'ayant sous la main que `hass` et sa configuration.
+
+Un identifiant peut devenir invalide — dossier supprimé ou mis à la corbeille par l'utilisateur.
+L'ouverture de la session d'envoi répond alors `404` : le dossier est **recréé** et le nouvel
+identifiant remplace l'ancien, une fois, avant de retenter. La recherche filtre d'ailleurs
+`trashed = false` : déposer une sauvegarde dans un dossier à la corbeille reviendrait à la jeter.
+
+L'identifiant est persisté **dès qu'il est connu**, et non à la fin de l'envoi : un téléversement
+qui échoue après la création du dossier ne doit pas en faire créer un second au prochain essai.
+L'écriture recrée les instances de destination (cf. « Stabilité des références » ci-dessous), ce
+qui est sans effet sur l'envoi en cours : le coordinateur (#8) conserve la référence obtenue au
+début de l'opération.
+
+### Envoi « resumable », jamais plus d'un fragment en mémoire
+
+L'envoi simple (`uploadType=media` ou `multipart`) exige de connaître la taille à l'avance et de
+tenir le transfert d'un seul trait. Or l'API Supervisor n'annonce pas toujours `Content-Length`, et
+une sauvegarde de plusieurs gigaoctets sur une liaison domestique ne passe pas d'une traite. Le
+mode **resumable** répond aux deux : une session d'envoi est ouverte par un `POST`, puis le contenu
+est poussé par `PUT` successifs portant un en-tête `Content-Range`, chacun confirmé par un
+`308 Resume Incomplete` dont l'en-tête `Range` dit exactement ce que Google a reçu.
+
+| Choix | Valeur | Raison |
+| --- | --- | --- |
+| Taille d'un fragment | 8 Mio | Google impose un multiple de 256 Kio et recommande au moins 8 Mio. Plus petit, les allers-retours dominent ; plus gros, c'est autant de mémoire immobilisée et de travail perdu à chaque reprise. |
+| Taille totale inconnue | `bytes a-b/*` | Tant qu'elle n'est pas connue, l'étoile est admise ; le **dernier** fragment annonce le total réel. |
+| Taille totale annoncée | `bytes a-b/<taille>` | Reprise du `Content-Length` du Supervisor. Le dernier fragment déclare malgré tout la taille **réellement lue** : c'est elle qui fait foi, et l'écart est journalisé. |
+| Vérification finale | `size` renvoyé par Drive | Une archive tronquée ne doit pas être déclarée valide : la rétention finirait par supprimer la copie locale. |
+
+Le flux du coordinateur arrive par morceaux de 64 Kio ; ils sont accumulés jusqu'à un fragment,
+puis poussés. Un fragment est **gardé en attente** tant que le flux n'est pas épuisé : on ne sait
+qu'un fragment est le dernier qu'en ayant lu la suite, et c'est le dernier qui annonce le total.
+L'empreinte mémoire est donc bornée par la taille d'un fragment — à un facteur constant près :
+détacher un fragment du tampon d'accumulation en fait transitoirement deux à trois copies — et ne
+dépend jamais de la taille de la sauvegarde. Rien n'est non plus recopié sur le disque.
+
+### Nouvelles tentatives et reprise à l'offset annoncé
+
+| Réponse | Réaction |
+| --- | --- |
+| `403 storageQuotaExceeded` | `DestinationQuotaError`, sans reprise : réessayer ne libérera pas d'espace |
+| `401` | `DestinationAuthError` et destination signalée à ré-autoriser, sans reprise |
+| `429`, `403 rateLimitExceeded`, `403 userRateLimitExceeded`, `408`, `5xx` | reprise après un délai croissant (1 s, 2 s... plafonné à 60 s), `Retry-After` prioritaire s'il est lisible |
+| Délai dépassé, coupure réseau | même traitement : c'est le cas le plus courant sur un gros transfert |
+
+**Trois tentatives au total**, pas davantage : au-delà, l'échec est réel et le coordinateur doit
+pouvoir émettre `auto_backup.upload_failed` avec un message compréhensible plutôt que de bloquer le
+créneau de sauvegarde. Le délai n'est pas bruité (pas de « jitter ») : une instance Home Assistant
+n'envoie pas de rafales concurrentes, et un délai déterministe est vérifiable par les tests.
+
+Avant de repousser un fragment, l'état de la session est **redemandé** (`PUT` vide portant
+`Content-Range: bytes */<taille>`) : Google indique dans `Range` ce qu'il a réellement reçu, et
+l'envoi reprend à cet offset exact. L'absence de `Range` signifie « rien reçu » — c'est la
+convention de l'API, et la supposer plutôt que de faire confiance à ce qui a été envoyé évite
+d'écrire une archive trouée. Deux garde-fous complètent la boucle : un offset **inférieur** au
+début du fragment courant interrompt l'envoi (les octets concernés ont été libérés, ils ne peuvent
+plus être renvoyés), et une session qui n'avance plus échoue au bout des trois tentatives au lieu
+de boucler.
+
+### Nommage et marquage des fichiers
+
+Le fichier déposé s'appelle `<nom de la sauvegarde> [<slug>].tar`, assaini (normalisation NFKC,
+caractères de contrôle et réservés remplacés, longueur bornée). Le nom reste **lisible** — c'est
+celui que l'utilisateur voit dans son Drive — et le slug le rend unique : sur Home Assistant Core,
+toutes les sauvegardes sans nom explicite s'appellent « Core <version> », des homonymes se
+recouvriraient.
+
+Chaque fichier porte `appProperties = {auto_backup: "true", slug: <slug>, name: <nom>}`. Ces
+propriétés privées sont invisibles dans l'interface de Drive mais **requêtables** : c'est le
+marqueur que la purge distante (#9) exige avant toute suppression, de sorte qu'un document de
+l'utilisateur ne puisse jamais être touché. Le poser est tout ce que #14 peut faire : le relire
+demande de **lister**, ce que #15 apporte. Jusque-là, `async_list_backups()` et
+`async_delete_backup()` lèvent une `DestinationError` explicite — et non une
+`NotImplementedError` : la purge appelle le listage après **chaque** téléversement réussi dès
+qu'une rétention est configurée, et une erreur non typée y serait journalisée en `ERROR` avec une
+trace d'appel à chaque sauvegarde, alors qu'il s'agit d'une limite connue. Le message renvoie à
+l'issue #15 et la purge passe à la destination suivante.
+
+Leurs valeurs sont tronquées à **124 octets UTF-8 par propriété, clé comprise** : cette borne est
+celle de l'API Drive et non un choix de ce fork, et la dépasser ferait échouer tout l'appel. La
+coupe se compte donc en octets et non en caractères — un nom en accents, idéogrammes ou emoji pèse
+deux à quatre octets par caractère — et elle ne tombe jamais au milieu d'un caractère.
+
+### Journaux
+
+Ni le jeton, ni l'en-tête `Authorization`, ni l'**URL de session** n'apparaissent dans les
+journaux, y compris en `debug`. L'URL de session mérite la même protection que le jeton : elle
+porte un identifiant d'envoi qui autorise, à lui seul, à écrire dans le fichier en cours de dépôt.
+Les messages de journal et d'erreur citent donc une étiquette d'opération en français
+(« ouverture de la session d'envoi de "..." », « envoi des octets 0 à 8388607 »), jamais l'URL.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -887,7 +1004,10 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   invalide toute référence antérieure. **Traité en #8** (téléversement) : le coordinateur conserve
   la référence de destination obtenue au début d'une opération plutôt que de la demander à
   nouveau. **Et en #9** (rétention distante) : `CoordinateurPurgeDistante` résout la destination
-  une fois, puis travaille sur cette référence jusqu'à la fin de la purge.
+  une fois, puis travaille sur cette référence jusqu'à la fin de la purge. **#14 crée une seconde
+  source de réécriture** : la mémorisation de l'identifiant du dossier Google Drive
+  (`async_persist_provider_data()`). Elle est sans effet sur l'envoi en cours pour la même raison,
+  et n'écrit rien quand la valeur est déjà persistée.
 
 - **Cohérence de la ré-authentification** : un problème Home Assistant (repair issue) est créé
   pour une destination en attente de ré-autorisation, mais il n'est pas réparable automatiquement.
@@ -952,11 +1072,12 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   encore d'issue dédiée.
 
 - **Marqueur de provenance chez les fournisseurs réels (issues #12 et #15)** : `#9` reconnaît le
-  marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`, mais
-  aucun fournisseur livré ne le pose encore : ni Dropbox (#10) ni Google Drive (#13) n'écrivent
-  de métadonnées. Les issues #12 et #15 devront passer ce marqueur à `async_upload()` **et** le
-  relire dans `async_list_backups()`, sans quoi seule la voie du registre protège les sauvegardes
-  du fork.
+  marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`.
+  **Traité à moitié en #14** : Google Drive pose `appProperties.auto_backup` sur chaque fichier
+  déposé, mais aucun fournisseur ne sait encore le **relire**, faute de listage — `#15` doit le
+  faire pour Google Drive, `#12` poser *et* relire pour Dropbox. D'ici là, seule la voie du
+  registre protège les sauvegardes du fork, et une purge de destination Google Drive s'arrête au
+  listage sur une `DestinationError` explicite.
 
 ## Conséquences
 
@@ -975,7 +1096,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 - Les destinations sont exposées dans `hass.data[DATA_DESTINATIONS]` via un `DestinationManager`
   qui suit les options de l'entrée et disparaît à son déchargement.
 - Le téléversement lui-même est branché par `#8` (section « Téléversement après création »
-  ci-dessus) ; `#9` y ajoute la rétention distante (section « Rétention distante »).
+  ci-dessus) ; `#9` y ajoute la rétention distante (section « Rétention distante »), et le premier
+  fournisseur à le tenir réellement est Google Drive avec `#14` (section « Téléversement vers
+  Google Drive »).
 
 Ajouts de l'issue #7 :
 

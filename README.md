@@ -21,19 +21,20 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
 capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement et rétention
-distante.** L'option `upload_to` des services de sauvegarde envoie la sauvegarde créée vers les
-destinations configurées (voir « Téléversement des sauvegardes » ci-dessous), et chaque
-destination applique sa propre rétention aux sauvegardes qu'elle a reçues (voir « Rétention
-distante ») ; ce qui manque encore est le dialogue avec chaque fournisseur — envoyer, lister et
-supprimer un fichier chez lui.
+**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement, dépôt
+effectif sur Google Drive et rétention distante.** L'option `upload_to` des services de sauvegarde
+envoie la sauvegarde créée vers les destinations configurées (voir « Téléversement des
+sauvegardes » ci-dessous), et chaque destination applique sa propre rétention aux sauvegardes
+qu'elle a reçues (voir « Rétention distante »).
 
 - **Dropbox** : la **connexion du compte est disponible** — voir le guide
   [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; l'envoi effectif du fichier et sa
   suppression chez Dropbox arrivent avec les issues #11 et #12.
-- **Google Drive** : la **connexion du compte est disponible** — voir le guide
-  [Connecter Google Drive](docs/destinations/google-drive.md) ; l'envoi effectif du fichier et sa
-  suppression chez Google Drive arrivent avec les issues #14 et #15.
+- **Google Drive** : la **connexion du compte et le téléversement sont disponibles** — voir le
+  guide [Connecter Google Drive](docs/destinations/google-drive.md) ; le listage et la suppression
+  chez Google arrivent avec l'issue #15. Tant qu'ils manquent, la rétention distante ne peut pas
+  s'appliquer à une destination Google Drive : elle est configurable, mais aucune sauvegarde n'y
+  est encore supprimée.
 
 La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
@@ -79,6 +80,12 @@ Le **délai maximum d'un téléversement** est configurable par l'entrée « Ré
 téléversement » du menu d'options de l'intégration (délai par défaut : 1800 secondes, soit
 30 minutes). Cette valeur se relit à chaque envoi et s'applique donc sans redémarrage.
 
+**Google Drive.** Le dépôt utilise l'envoi « resumable » de l'API Drive : la sauvegarde part par
+fragments de 8 Mio, sans jamais être chargée entière en mémoire ni recopiée sur le disque, et une
+erreur passagère (limitation de débit, erreur serveur) est réessayée avec un délai croissant. Le
+dossier distant est créé par l'intégration au premier envoi, puis réutilisé ; chaque fichier est
+nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto Backup.
+
 **Événements** : trois événements sont émis pendant le téléversement :
 - `auto_backup.upload_start` : le téléversement vers une destination commence ;
 - `auto_backup.upload_successful` : le téléversement a réussi (champs : `name`, `slug`,
@@ -93,6 +100,12 @@ jours, un nombre maximum de sauvegardes, ou les deux. Les deux se combinent : le
 trop anciennes partent d'abord, puis, s'il en reste plus que le nombre autorisé, les plus
 anciennes du lot restant sont supprimées jusqu'à revenir sous la limite. Une destination sans
 aucune rétention n'est jamais purgée.
+
+> **Aucun fournisseur ne sait encore supprimer.** La mécanique décrite ci-dessous est en place,
+> mais supprimer suppose de lister d'abord, et aucun fournisseur livré ne le fait : la purge d'une
+> destination Google Drive s'arrête au listage avec un message de journal explicite (issue #15),
+> et Dropbox ne téléverse pas encore (issues #11 et #12). La rétention que vous réglez aujourd'hui
+> est enregistrée et s'appliquera sans rien reconfigurer.
 
 **Rien de ce que vous avez déposé vous-même n'est supprimé.** Auto Backup tient un registre
 persistant des sauvegardes qu'il a lui-même téléversées (dans le stockage de Home Assistant,

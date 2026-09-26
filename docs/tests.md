@@ -52,6 +52,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
+| `tests/test_provider_google_drive_upload.py` | Téléversement Google Drive : dossier cible, envoi resumable par fragments, reprises, erreurs typées, journaux et parcours complet depuis le service. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
@@ -344,6 +345,62 @@ joignable, options upstream complétées — et trois s'y ajoutent :
   parcours complet vérifie qu'un **unique** appel au point « compte » sert le nom proposé et les
   données persistées, et qu'un échec de ce crochet **interrompt** l'ajout (abandon
   `echec_fournisseur`) sans laisser de problème de ré-authentification orphelin.
+
+## Tester le téléversement vers Google Drive
+
+`tests/test_provider_google_drive_upload.py` (issue #14) va plus loin que la simulation d'un point
+d'accès : il embarque un **simulateur du protocole resumable**, `_FauxDrive`, branché sur
+`aioclient_mock`. Le simulateur tient l'état réel de la session d'envoi — il refuse un fragment qui
+ne commence pas là où le précédent s'est arrêté, répond `308` avec l'en-tête `Range` tant que
+l'envoi n'est pas terminé, et ne renvoie les métadonnées du fichier qu'une fois la taille totale
+atteinte. Un test qui découpe mal son contenu échoue donc pour la bonne raison.
+
+Trois réglages rendent ces tests rapides et lisibles :
+
+1. **`fragments_courts`** ramène `TAILLE_FRAGMENT` à 512 octets par `monkeypatch` : c'est le
+   découpage qui est éprouvé, pas la capacité de la machine à brasser 8 Mio. Un test dédié vérifie
+   à part que la valeur réelle est bien un multiple de 256 Kio, comme Google l'exige.
+2. **`delais`** remplace `async_attendre_avant_reprise()` par une fonction qui **relève** le délai
+   au lieu de l'attendre. Les reprises se testent alors en quelques millisecondes, et la liste
+   obtenue (`[1.0, 2.0]`) prouve le caractère exponentiel et borné du calcul :
+
+   ```python
+   assert delais == [1.0, 2.0]
+   ```
+
+3. **Les anomalies se déclarent à la construction du simulateur**, pas en bricolant les mocks :
+
+   ```python
+   faux = _FauxDrive(aioclient_mock, pannes=[(429, {"Retry-After": "5"}, ...)])
+   faux = _FauxDrive(aioclient_mock, pannes=[TimeoutError()])  # coupure réseau
+   faux = _FauxDrive(aioclient_mock, pertes={512})  # session amnésique
+   ```
+
+   Une panne est soit un triplet `(statut, en-têtes, corps)`, soit une exception à lever. Elle
+   n'est consommée que par un vrai fragment : une **demande d'état** de la session répond toujours
+   l'état réel, sans quoi la reprise ne pourrait pas être vérifiée.
+
+Deux points d'attention en ajoutant un test :
+
+- **l'identifiant du dossier est persisté pendant l'envoi**, ce qui réécrit les options de l'entrée
+  et **recrée les instances de destination**. Un test qui veut éprouver la mémoire d'instance garde
+  sa référence (`destination = _destination(hass)`), un test qui veut éprouver la mémoire persistée
+  redemande la destination au gestionnaire après `await hass.async_block_till_done()` ;
+- **l'URL de session est une valeur sensible** au même titre qu'un jeton : elle figure dans la
+  liste des chaînes qu'un test vérifie absentes des journaux en niveau `debug`.
+
+Le fichier se termine par deux **parcours complets**, qui suivent les règles de la section
+« Tester le téléversement d'une sauvegarde » ci-dessus — `wait_background_tasks=True` compris :
+
+- appel de `auto_backup.backup` avec `upload_to`, création de sauvegarde simulée, puis vérification
+  que l'événement `auto_backup.upload_successful` porte l'identifiant distant renvoyé par Drive ;
+- le même parcours avec une **rétention configurée** sur la destination, qui déclenche la purge
+  distante (#9) après le téléversement. Le listage Google Drive n'existant pas avant #15, cette
+  purge échoue nécessairement : le test vérifie que l'échec est journalisé **sans trace d'appel**
+  (`"Traceback" not in caplog.text`, et aucun enregistrement porteur d'`exc_info`) et que le
+  message renvoie à l'issue. C'est un test de **bruit de journal** : sans lui, remplacer la
+  `DestinationError` des deux méthodes différées par une `NotImplementedError` repasserait
+  inaperçu, alors qu'il en résulterait une trace d'appel à chaque sauvegarde.
 
 ## Compatibilité Python
 
