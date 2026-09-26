@@ -36,11 +36,23 @@ absent de l'upstream : contrat commun des destinations distantes, types de donn�
 typées, registre de fournisseurs et gestionnaire de destinations (issue #6), puis autorisation
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
 d'interface du flux d'options (`flow.py`, issue #7), l'orchestration du téléversement
-après création (`destinations/upload.py`, issue #8), enfin les entités d'état d'une
-destination (`destinations/entities.py`, issue #16). Les fournisseurs réellement livrés vivent
-dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10 — et sont
-enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé par
-`async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
+après création (`destinations/upload.py`, issue #8), la rétention et la purge distantes
+(`destinations/retention.py`, issue #9), depuis l'issue #17, les notifications persistantes
+des échecs et des accès révoqués (`destinations/notifications.py`) ainsi que le point unique de
+masquage des secrets du fork (`destinations/masquage.py`), que doit appeler tout code affichant
+un texte venu d'un fournisseur, et enfin les entités d'état d'une destination
+(`destinations/entities.py`, issue #16). Les fournisseurs réellement livrés vivent
+dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10, Google Drive depuis
+l'issue #13 — et sont enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé
+par `async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
+
+La purge distante (#9) suit la même règle : elle vit entièrement dans
+`destinations/retention.py`, s'ajoute au service `auto_backup.purge` par une ré-inscription faite
+dans `__init__.py` (voir plus bas) et ne touche pas à la rétention locale de `manager.py`. Elle
+écrit en revanche un **second fichier de stockage**, `.storage/auto_backup.remote_backups`
+(registre des sauvegardes déposées chez les fournisseurs), à côté de
+`.storage/auto_backup.snapshots_expiry` que l'upstream gère seul : les deux clés sont distinctes
+et le fork ne lit ni n'écrit celle de l'upstream.
 
 `handlers.py` et `manager.py` ne sont, eux, **pas modifiés du tout** : `destinations/upload.py`
 lit une sauvegarde en flux en s'appuyant sur `isinstance(handler, SupervisorHandler |
@@ -54,6 +66,7 @@ Ce sont les points de couplage à revérifier lors d'une resynchronisation :
 | `AutoBackup._handler` | `manager.py` | retrouver le handler choisi au démarrage, pour lire la sauvegarde |
 | `SupervisorHandler._session`, `._ip`, `._headers` | `handlers.py` | appeler `GET /backups/<slug>/download` en streaming |
 | `BackupHandler._manager` | `handlers.py` | atteindre l'agent de sauvegarde local et son fichier |
+| `async_service_handler` (fonction locale d'`async_setup_entry`) | `__init__.py` | la passer à `async_setup_remote_purge()`, qui ré-inscrit `auto_backup.purge` en l'enveloppant (#9) |
 
 `AutoBackup.generate_backup_name()` est également appelée, mais c'est une méthode **publique**.
 Si l'upstream renomme l'un de ces attributs, `tests/test_televersement.py` échoue
@@ -73,15 +86,29 @@ caractère près.
   l'option de service `ATTR_UPLOAD_TO`, les champs d'événement `ATTR_DESTINATION`,
   `ATTR_DESTINATION_NAME`, `ATTR_SIZE`, `ATTR_REMOTE_ID`, `CONF_UPLOAD_TIMEOUT` et
   `DEFAULT_UPLOAD_TIMEOUT`, enfin `CLES_DU_FORK` — la liste des options d'entrée propres au
-  fork, décrite plus bas. Viennent ensuite les constantes d'autorisation OAuth2 de l'issue #7 —
-  dont `IDENTIFIANT_PROVISOIRE`, partagé par le flux d'ajout et le signalement de
-  ré-authentification — puis `CONF_PROVIDER_DATA` (issue #10) et, à la fin du bloc, les
-  constantes des entités d'état (issue #16) : l'import de type
+  fork, décrite plus bas. Viennent ensuite les constantes d'autorisation OAuth2 de l'issue #7
+  (`OAUTH_CALLBACK_PATH`, `DATA_OAUTH_STATES`, `DATA_OAUTH_VIEW`, `OAUTH_STATE_TTL`,
+  `OAUTH_AUTHORIZE_URL_TIMEOUT`, `OAUTH_TOKEN_TIMEOUT`, `ISSUE_REAUTH_PREFIX`) — dont
+  `IDENTIFIANT_PROVISOIRE`, partagé par le flux d'ajout et le signalement de
+  ré-authentification —, puis `CONF_PROVIDER_DATA` (issues #10 et #13) et les
+  constantes de la rétention distante (issue #9) : l'import de type des deux classes de
+  `destinations/retention.py`, `STORAGE_KEY_REMOTE_BACKUPS`, `STORAGE_VERSION_REMOTE_BACKUPS`,
+  `DATA_REMOTE_BACKUPS`, `DATA_REMOTE_PURGE`, `ATTR_CREATED_AT`, `ATTR_REMOTE_IDS` et
+  `DEFAULT_PURGE_TIMEOUT` — ce dernier borne les appels réseau de la purge et n'est
+  **pas** inscrit dans `CLES_DU_FORK` : ce n'est pas une option d'entrée, rien ne le persiste.
+  L'issue #17 apporte ensuite les notifications persistantes : l'import de type
+  `GestionnaireDeNotifications`, `DATA_NOTIFICATIONS`, `NOTIFICATION_UPLOAD_PREFIX`,
+  `NOTIFICATION_REAUTH_PREFIX`, `CONF_NOTIFY_ON_FAILURE`, `DEFAULT_NOTIFY_ON_FAILURE`, et la
+  seule réécriture de `CLES_DU_FORK` du fichier — `CLES_DU_FORK = (*CLES_DU_FORK,
+  CONF_NOTIFY_ON_FAILURE)`, faite sur place plutôt qu'en remontant modifier la définition de #8.
+  L'issue #16 ferme le bloc avec les entités d'état : l'import de type
   `CoordinateurEntitesDestinations`, la clé `DATA_DESTINATION_ENTITIES`, les attributs
-  `ATTR_LAST_ERROR`, `ATTR_LAST_FAILED_SLUG` et `ATTR_LAST_FAILED_AT`, la clé
-  `DATA_REMOTE_BACKUPS` du registre des sauvegardes distantes tenu par l'issue #9, et les champs
-  `ATTR_REMOTE_IDS`, `ATTR_DELETED` et `ATTR_REMAINING` lus dans l'événement
-  `auto_backup.remote_purge`.
+  `ATTR_LAST_ERROR`, `ATTR_LAST_FAILED_SLUG` et `ATTR_LAST_FAILED_AT`, enfin `ATTR_DELETED` et
+  `ATTR_REMAINING`, lus dans l'événement `auto_backup.remote_purge` par le seul repli du capteur
+  de comptage. Elle ne redéfinit ni `DATA_REMOTE_BACKUPS` ni `ATTR_REMOTE_IDS` : ces deux
+  constantes appartiennent à #9, et le capteur lit le registre typé qu'elles désignent. Elle
+  n'ajoute rien non plus à `CLES_DU_FORK` : les entités n'ont aucune option.
+  L'ordre du fichier est donc : #6, #8, #7, #10/#13, #9, #17, puis #16.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
@@ -92,8 +119,15 @@ caractère près.
   `destinations/upload.py` ; la clé `upload_to` de `SCHEMA_BACKUP_BASE`, donc des trois
   services de sauvegarde à la fois ; l'appel `async_setup_upload(hass, entry)` ; et, dans le
   gestionnaire de service, `async_prepare_upload()` **avant** la création de la sauvegarde puis
-  `async_release_upload()` dans un `finally`. Tout cela est ajouté, à une ré-indentation près,
-  décrite juste en dessous.
+  `async_release_upload()` dans un `finally`. L'issue #9 y ajoute deux blocs, l'un et l'autre en
+  ajout pur : l'import d'`async_setup_remote_purge()` et son appel **après** la boucle
+  d'inscription des services, qui ré-inscrit `auto_backup.purge` avec un gestionnaire enveloppant
+  celui de l'upstream (purge locale d'abord, purge distante ensuite). La boucle upstream et
+  `async_unload_entry()` restent intacts : le service est retiré par son nom, comme les trois
+  autres. L'issue #17 y ajoute deux lignes de plus, sur le même modèle : l'import
+  d'`async_setup_notifications()` et son appel dans `async_setup_entry`, qui branche les
+  notifications persistantes sur les événements de téléversement. Tout cela est ajouté, à une
+  ré-indentation près, décrite juste en dessous.
 - `custom_components/auto_backup/sensor.py` et
   `custom_components/auto_backup/binary_sensor.py` : trois lignes ajoutées par l'issue #16 à
   chacun — l'import d'`async_setup_destination_sensors()` (respectivement
@@ -132,8 +166,13 @@ caractère près.
   étapes `menu`, `ajouter_destination`, `identifiants`, `autorisation`, `destination`,
   `reautoriser_destination`, `supprimer_destination`, plus un `title` pour l'étape `init`.
   L'issue #8 y ajoute l'étape `reglages_televersement`, son entrée de menu et l'erreur
-  `options.error.delai_invalide` ; l'issue #10 y ajoute `options.abort.autorisation_annulee`,
-  en **fin** du bloc du fork. L'issue #16 ajoute une section `entity` (clés
+  `options.error.delai_invalide`. Les issues #10 et #13 y ajoutent deux abandons, **à la fin du
+  bloc du fork** : `options.abort.autorisation_annulee` (l'utilisateur a refusé ou fermé l'écran
+  d'autorisation) et `options.abort.echec_fournisseur`, où le fournisseur explique en français
+  ce qui a échoué à sa première requête (API Drive non activée, par exemple).
+  L'issue #17 y ajoute l'étape `reglages_notifications` et son entrée de menu, l'étape
+  `confirmer_changement_de_compte` et l'abandon `options.abort.changement_de_compte_annule`.
+  L'issue #16 ajoute enfin une section `entity` (clés
   `entity.sensor.destination_dernier_televersement`,
   `entity.sensor.destination_sauvegardes_distantes` et
   `entity.binary_sensor.destination_probleme`), insérée elle aussi **avant** les clés
@@ -144,7 +183,9 @@ caractère près.
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
   `sk`, `ur`) ne sont pas touchées : Home Assistant retombe sur l'anglais pour les clés
-  absentes, et leur traduction relève de l'issue #17.
+  absentes. Leur traduction n'est rattachée à aucune issue à ce jour — la mention de l'issue #17
+  qui figurait ici visait les notifications, qui n'ont finalement aucune clé de traduction
+  (voir l'ADR, section « Notifications des échecs et des accès révoqués »).
 - Le fork enregistre une vue HTTP propre, `/auth/auto_backup/callback`, au moment où une
   autorisation OAuth2 démarre. Elle est nécessaire parce que la vue standard
   (`/auth/external/callback`) ne sait reprendre qu'un *config flow*, alors que les destinations
@@ -193,6 +234,30 @@ ligne upstream n'est pas reprise telle quelle, et c'est assumé :
   la main dans le `try`. Le diff reste lisible (`diff -w` l'ignore même complètement) et
   `tests/test_conformite_upstream.py` en fait un cas nommé, pas une exemption silencieuse.
 
+#### Service `auto_backup.purge` : enveloppé, jamais réécrit
+
+La purge distante (#9) devait s'exécuter à chaque appel du service upstream. Deux branchements
+ont été écartés :
+
+- **modifier `manager.py`** (`AutoBackup.purge_backups()`) : c'est du code upstream, que le fork
+  ne touche pas ;
+- **écouter `auto_backup.purged_backups`** : l'upstream n'émet cet événement que si une
+  sauvegarde locale a **réellement** été supprimée. Sur une installation qui n'utilise pas
+  `keep_days`, appeler le service n'aurait alors purgé aucune destination distante.
+
+Le fork **ré-inscrit** donc le service, après la boucle upstream, avec un gestionnaire qui
+appelle d'abord `async_service_handler` (la fonction upstream, passée en paramètre) puis la purge
+distante. Home Assistant remplace une inscription de service par la dernière reçue ; la purge
+locale garde donc exactement son comportement, ses conditions et ses journaux.
+
+Deux points de vigilance à la resynchronisation :
+
+- si l'upstream **renomme** `async_service_handler` ou change sa signature, la ligne d'appel du
+  fork ne compile plus : l'erreur est immédiate, jamais silencieuse ;
+- si l'upstream déplace l'inscription des services **après** la ligne du fork, sa version
+  reprendrait la main et la purge distante ne s'exécuterait plus. `tests/test_purge_distante.py`
+  le détecte (`test_le_service_purge_purge_le_local_et_le_distant`).
+
 #### Option `upload_timeout` : une étape du fork, pas un champ du formulaire upstream
 
 Le délai maximum d'un téléversement est lu dans `entry.options[CONF_UPLOAD_TIMEOUT]`, avec
@@ -212,6 +277,10 @@ Deux conséquences, valables pour toute option que le fork ajoutera :
 - la clé doit figurer dans `CLES_DU_FORK` (`const.py`), sans quoi le premier enregistrement du
   formulaire upstream l'effacerait en silence — c'est exactement ce qui arrivait à
   `upload_timeout` avant l'issue #8.
+
+L'option `notify_on_failure` de l'issue #17 suit exactement ce modèle : sa propre étape
+(`reglages_notifications`), son écriture par `options_avec_reglage()`, sa clé dans
+`CLES_DU_FORK`. Le formulaire upstream reste intact.
 
 ### Comment ces écarts sont contrôlés
 

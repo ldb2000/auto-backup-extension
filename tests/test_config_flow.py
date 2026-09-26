@@ -87,8 +87,9 @@ async def test_le_flux_d_options_ouvre_sur_le_menu_des_destinations(
     """Le flux d'options s'ouvre sur un menu (issue #7).
 
     Sans destination configurée, seuls l'ajout d'une destination, les réglages
-    du téléversement (issue #8) et les réglages upstream sont proposés :
-    ré-autoriser ou supprimer n'aurait aucun sens.
+    du téléversement (issue #8), ceux des notifications (issue #17) et les
+    réglages upstream sont proposés : ré-autoriser ou supprimer n'aurait aucun
+    sens.
     """
     resultat = await hass.config_entries.options.async_init(entree_auto_backup.entry_id)
 
@@ -97,6 +98,7 @@ async def test_le_flux_d_options_ouvre_sur_le_menu_des_destinations(
     assert list(resultat["menu_options"]) == [
         "ajouter_destination",
         "reglages_televersement",
+        "reglages_notifications",
         "init",
     ]
 

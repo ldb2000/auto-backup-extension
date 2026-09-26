@@ -87,14 +87,16 @@ class RemoteDestination(ABC):
         """Description du compte autorisé, telle qu'elle a été persistée."""
         return self._config.provider_data or {}
 
-    ### Crochets facultatifs du flux d'ajout (issue #10) ###
+    ### Crochets facultatifs du flux d'ajout (issues #10 et #13) ###
     #
     # Ils sont appelés une fois le jeton obtenu, avant le formulaire de nommage,
     # sur une **même** destination provisoire : un fournisseur qui mémorise la
     # réponse du service n'a donc qu'un appel réseau à faire pour les deux. Un
     # fournisseur qui ne les surcharge pas n'en fait aucun — le comportement
-    # d'avant l'issue #10 est conservé. Un échec n'interrompt pas l'ajout : le
-    # flux se contente de ne rien proposer (cf. `destinations/flow.py`).
+    # d'avant l'issue #10 est conservé. Un échec **interrompt** l'ajout (abandon
+    # `echec_fournisseur`, dont le détail cite la cause) : une destination que le
+    # fournisseur refuse déjà d'identifier ne fonctionnerait pas davantage une
+    # fois créée (cf. `destinations/flow.py`).
 
     async def async_nom_par_defaut(self) -> str | None:
         """Nom proposé par défaut pour cette destination, `None` si aucun.
@@ -107,8 +109,9 @@ class RemoteDestination(ABC):
     async def async_donnees_du_fournisseur(self) -> Mapping[str, Any] | None:
         """Données **non secrètes** du compte à persister, `None` si aucune.
 
-        Elles sont validées par `PROVIDER_DATA_SCHEMA` (scalaires JSON) puis
-        écrites dans `DestinationConfig.provider_data`.
+        Elles sont validées par `donnees_de_fournisseur()` (scalaires JSON,
+        nombre de clés et longueur bornés) puis écrites dans
+        `DestinationConfig.provider_data`.
         """
         return None
 
@@ -163,6 +166,11 @@ class RemoteDestination(ABC):
 
         Seules les sauvegardes créées par Auto Backup sont renvoyées : les
         fichiers déposés par l'utilisateur ne doivent jamais être purgés.
+
+        L'implémentation **borne elle-même ses appels réseau** (délai de la
+        requête HTTP, nombre de pages parcourues) : le coordinateur de purge
+        ne pose qu'un filet de sécurité grossier (`DEFAULT_PURGE_TIMEOUT`), qui
+        n'a à se déclencher que si le fournisseur ne l'a pas fait.
         """
 
     @abstractmethod
@@ -170,6 +178,10 @@ class RemoteDestination(ABC):
         """Supprime la sauvegarde distante `remote_id`.
 
         Lève `DestinationNotFoundError` si elle n'existe pas (ou plus).
+
+        Comme pour le listage, l'implémentation **borne elle-même ses appels
+        réseau** ; le délai du coordinateur de purge (`DEFAULT_PURGE_TIMEOUT`)
+        n'est qu'un filet de sécurité.
         """
 
     def __repr__(self) -> str:

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import patch
 
@@ -42,9 +42,11 @@ from custom_components.auto_backup.const import (
     CONF_FOLDER,
     CONF_PROVIDER,
     CONF_PROVIDER_DATA,
+    CONF_RETENTION_DAYS,
     DATA_DESTINATIONS,
     DOMAIN,
     OAUTH_CALLBACK_PATH,
+    SERVICE_PURGE,
 )
 from custom_components.auto_backup.destinations import (
     DestinationAuthError,
@@ -356,6 +358,9 @@ async def test_le_parcours_complet_connecte_un_compte_dropbox(
     # Critère : le nom du compte est proposé par défaut.
     assert resultat["step_id"] == "destination"
     assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
+    # Le placeholder `{fournisseur}` de cette étape affiche aussi le libellé
+    # lisible, comme celui de l'étape « identifiants ».
+    assert resultat["description_placeholders"]["fournisseur"] == LIBELLE_DROPBOX
 
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"],
@@ -396,40 +401,53 @@ async def test_un_compte_sans_nom_affiche_propose_le_libelle(
     assert _valeur_suggeree(resultat, CONF_NAME) == LIBELLE_DROPBOX
 
 
-async def test_un_compte_injoignable_n_empeche_pas_la_creation(
+async def test_un_compte_injoignable_interrompt_l_ajout(
     hass: HomeAssistant,
     entree: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Une autorisation accordée n'est pas perdue parce que Dropbox bafouille."""
+    """Un fournisseur qui ne répond pas interrompt l'ajout, en disant pourquoi.
+
+    La convergence des issues #10 et #13 a tranché pour l'interruption : une
+    destination que Dropbox refuse déjà d'identifier ne fonctionnerait pas
+    davantage une fois créée, et l'utilisateur relance le flux d'un clic une
+    fois le service rétabli, sans hériter d'une destination muette.
+    """
     aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
     aioclient_mock.post(URL_COMPTE, status=500, text="service indisponible")
 
     resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
     resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
 
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
+    assert "500" in resultat["description_placeholders"]["detail"]
+    assert CONF_DESTINATIONS not in entree.options
+
+    # Le service rétabli, le flux repart sans redémarrer Home Assistant.
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.post(URL_COMPTE, json=reponse_de_compte())
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
+
     assert resultat["step_id"] == "destination"
-    assert _valeur_suggeree(resultat, CONF_NAME) is None
-
-    resultat = await hass.config_entries.options.async_configure(
-        resultat["flow_id"], {CONF_NAME: "Mon Dropbox", CONF_FOLDER: "Sauvegardes"}
-    )
-    await hass.async_block_till_done()
-
-    assert resultat["type"] is FlowResultType.CREATE_ENTRY
-    (persistee,) = entree.options[CONF_DESTINATIONS]
-    assert persistee[CONF_TOKEN]["access_token"] == ACCES_INITIAL
-    assert CONF_PROVIDER_DATA not in persistee
+    assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
 
 
-async def test_un_fournisseur_devenu_inutilisable_ne_bloque_pas_le_nommage(
+async def test_un_fournisseur_devenu_inutilisable_interrompt_l_ajout(
     hass: HomeAssistant,
     entree: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Un fournisseur retiré du registre pendant le parcours n'efface rien."""
+    """Un fournisseur retiré du registre pendant le parcours arrête l'ajout.
+
+    `UnknownProviderError` est une `DestinationError` : elle emprunte le même
+    chemin que les échecs réseau, plutôt que de laisser l'utilisateur nommer une
+    destination que plus personne ne sait instancier.
+    """
     aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
 
     resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
@@ -439,8 +457,10 @@ async def test_un_fournisseur_devenu_inutilisable_ne_bloque_pas_le_nommage(
     ):
         resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
 
-    assert resultat["step_id"] == "destination"
-    assert _valeur_suggeree(resultat, CONF_NAME) is None
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
+    assert "fournisseur retiré" in resultat["description_placeholders"]["detail"]
+    assert CONF_DESTINATIONS not in entree.options
 
 
 async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orphelin(
@@ -449,7 +469,13 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Une portée oubliée ne crée pas un problème nommant une destination fictive."""
+    """Une portée oubliée ne crée pas un problème nommant une destination fictive.
+
+    L'ajout s'interrompt (`echec_fournisseur`), mais le signalement porté par la
+    destination provisoire est effacé dans tous les cas — c'est le rôle du
+    `finally` du flux : un problème survivant nommerait « Autorisation en
+    cours », que l'utilisateur ne pourrait ni ré-autoriser ni supprimer.
+    """
     aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
     aioclient_mock.post(
         URL_COMPTE, status=401, json={"error_summary": "missing_scope/..."}
@@ -459,7 +485,8 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
     resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
     await hass.async_block_till_done()
 
-    assert resultat["step_id"] == "destination"
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
     registre = ir.async_get(hass)
     assert not [
         probleme
@@ -467,7 +494,12 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
         if probleme[0] == DOMAIN and IDENTIFIANT_PROVISOIRE in probleme[1]
     ]
 
-    # Et la destination reste créable : l'autorisation accordée n'est pas perdue.
+    # La portée corrigée chez Dropbox, l'ajout aboutit sans rien nettoyer à la main.
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.post(URL_COMPTE, json=reponse_de_compte())
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
     resultat = await hass.config_entries.options.async_configure(
         resultat["flow_id"], {CONF_NAME: "Mon Dropbox", CONF_FOLDER: "Sauvegardes"}
     )
@@ -500,7 +532,8 @@ async def test_un_acces_refuse_pendant_l_ajout_n_alerte_pas_sur_la_destination_f
         resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
         await hass.async_block_till_done()
 
-    assert resultat["step_id"] == "destination"
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
 
     # Le signalement de ré-authentification a bien eu lieu, mais en `debug`.
     signalements = [
@@ -523,10 +556,10 @@ async def test_un_acces_refuse_pendant_l_ajout_n_alerte_pas_sur_la_destination_f
         if enregistrement.levelno >= logging.WARNING
     ]
     # Aucun avertissement n'invite à ré-autoriser quoi que ce soit : le seul qui
-    # subsiste dit ce qui s'est réellement passé, et nomme le fournisseur.
+    # subsiste dit ce qui s'est réellement passé, et sert le message d'abandon.
     assert not [message for message in avertissements if "ré-autorisée" in message]
     assert [
-        message for message in avertissements if "n'a pas pu être identifié" in message
+        message for message in avertissements if "refusé la première requête" in message
     ]
 
 
@@ -832,30 +865,69 @@ async def test_une_absence_de_reponse_est_signalee(
         await _destination(hass, entree_dropbox).async_check_connection()
 
 
-### Hors périmètre de l'issue #10 ###
+### Cycle de vie des sauvegardes : hors périmètre jusqu'à l'issue #12 ###
 
 
 async def test_le_cycle_de_vie_des_sauvegardes_reste_a_implementer(
     hass: HomeAssistant, entree_dropbox: MockConfigEntry
 ) -> None:
-    """Téléversement (#11), listage et suppression (#12) sont hors périmètre."""
+    """Listage et suppression (#12) restent hors périmètre.
+
+    Les deux crochets échouent par l'erreur typée du socle, et non par
+    `NotImplementedError` : la purge distante (#9) les appelle en fonctionnement,
+    et elle ne sait journaliser proprement qu'une `DestinationError`.
+
+    Le dépôt d'une sauvegarde, lui, est implémenté depuis l'issue #11 :
+    `tests/test_provider_dropbox_upload.py` le couvre de bout en bout.
+    """
     destination = _destination(hass, entree_dropbox)
 
-    with pytest.raises(NotImplementedError, match="#11"):
-        await destination.async_upload("/backup/ha.tar", name="ha")
-
-    async def flux() -> AsyncIterator[bytes]:
-        yield b""
-
-    # Forme d'appel du coordinateur de téléversement (issue #8).
-    with pytest.raises(NotImplementedError, match="#11"):
-        await destination.async_upload(
-            None, name="ha", slug="abc", stream=flux(), size=0, filename="ha.tar"
-        )
-    with pytest.raises(NotImplementedError, match="#12"):
+    with pytest.raises(DestinationError, match=r"listage.*#12"):
         await destination.async_list_backups()
-    with pytest.raises(NotImplementedError, match="#12"):
+    with pytest.raises(DestinationError, match=r"suppression.*#12"):
         await destination.async_delete_backup("id:factice")
+
+
+async def test_une_purge_avec_retention_ne_journalise_aucune_trace(
+    hass: HomeAssistant,
+    integration_backup: None,
+    instance_joignable: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Une rétention sur une destination Dropbox n'empile plus de trace d'appel.
+
+    Depuis #9, la purge distante liste la destination dès qu'une rétention y est
+    configurée — donc après chaque sauvegarde. Le crochet levait
+    `NotImplementedError`, que le coordinateur ne rattrapait que par sa clause de
+    dernier recours : une trace d'appel complète était journalisée à chaque fois,
+    pour une situation parfaitement attendue. L'utilisateur lit désormais une
+    ligne qui nomme la destination et renvoie à l'issue.
+    """
+    entree = MockConfigEntry(
+        domain=DOMAIN,
+        title="Auto Backup",
+        data={},
+        options={CONF_DESTINATIONS: [config_dropbox(**{CONF_RETENTION_DAYS: 1})]},
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG):
+        await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+        await hass.async_block_till_done()
+
+    assert [enr.message for enr in caplog.records if enr.exc_info] == []
+    assert "Traceback" not in caplog.text
+    assert "NotImplementedError" not in caplog.text
+    journal = [
+        enr.getMessage() for enr in caplog.records if enr.levelno >= logging.ERROR
+    ]
+    assert len(journal) == 1
+    assert "Dropbox de Jeanne" in journal[0]
+    assert "listage" in journal[0]
+    assert "#12" in journal[0]
 
 
 ### Secrets ###

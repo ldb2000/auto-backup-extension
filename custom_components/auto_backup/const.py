@@ -7,9 +7,14 @@ from homeassistant.util.hass_dict import HassKey
 if TYPE_CHECKING:
     from .manager import AutoBackup
     from .destinations import DestinationManager
+    from .destinations.notifications import GestionnaireDeNotifications
     from .destinations.oauth import EtatOAuth
     from .destinations.upload import CoordinateurTeleversement
     from .destinations.entities import CoordinateurEntitesDestinations
+    from .destinations.retention import (
+        CoordinateurPurgeDistante,
+        RegistreSauvegardesDistantes,
+    )
 
 DOMAIN = "auto_backup"
 DATA_AUTO_BACKUP: HassKey[AutoBackup] = HassKey(DOMAIN)
@@ -154,10 +159,84 @@ IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
 # `destinations/providers/` et s'enregistrent par `enregistrer_les_fournisseurs()`.
 
 # Données **non secrètes** renvoyées par le fournisseur au moment de l'autorisation et
-# conservées avec la destination : identifiant du compte Dropbox (`account_id`), par
-# exemple. Elles évitent de rappeler l'API pour savoir à quel compte une destination
-# est rattachée, et servent à détecter qu'une ré-autorisation a changé de compte.
+# conservées avec la destination : identifiant du compte Dropbox (`account_id`) ou
+# adresse du compte Google Drive (`account_email`), par exemple. Elles évitent de
+# rappeler l'API pour savoir à quel compte une destination est rattachée, et servent à
+# détecter qu'une ré-autorisation a changé de compte. Facultatif : une destination qui
+# n'en a pas est persistée exactement comme avant.
 CONF_PROVIDER_DATA = "provider_data"
+
+### RÉTENTION ET PURGE DISTANTES (issue #9) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Toute la logique vit dans
+# `destinations/retention.py` ; `manager.py` n'est pas touché.
+
+# Registre persistant des sauvegardes déposées par le fork chez un fournisseur :
+# destination -> liste d'entrées {remote_id, slug, name, created_at, size}. C'est
+# lui qui rend une sauvegarde distante purgeable : un fichier que l'utilisateur a
+# déposé lui-même n'y figure pas, donc n'est jamais supprimé (cf. l'ADR).
+STORAGE_KEY_REMOTE_BACKUPS = "remote_backups"
+STORAGE_VERSION_REMOTE_BACKUPS = 1
+
+DATA_REMOTE_BACKUPS: HassKey[RegistreSauvegardesDistantes] = HassKey(
+    f"{DOMAIN}_remote_backups"
+)
+DATA_REMOTE_PURGE: HassKey[CoordinateurPurgeDistante] = HassKey(
+    f"{DOMAIN}_remote_purge"
+)
+
+# Champs propres au registre et à l'événement `auto_backup.remote_purge`, en
+# complément d'ATTR_DESTINATION, ATTR_DESTINATION_NAME, ATTR_REMOTE_ID,
+# ATTR_SIZE, ATTR_SLUG et ATTR_NAME ci-dessus.
+ATTR_CREATED_AT = "created_at"
+ATTR_REMOTE_IDS = "remote_ids"
+
+# Délai maximum, en secondes, d'un appel réseau du coordinateur de purge : un
+# listage de destination, une suppression de sauvegarde. C'est un **filet de
+# sécurité**, pas un réglage : un fournisseur dont l'appel pend bloquerait sinon
+# la purge de sa destination — et le verrou qui la sérialise — indéfiniment,
+# sans erreur ni fin. Le contrat de `RemoteDestination` demande à chaque
+# fournisseur de borner lui-même ses appels, bien plus finement ; cette valeur
+# n'a donc à se déclencher que si aucun ne l'a fait.
+#
+# Volontairement **pas** une option de l'interface : la purge n'a aucune étape
+# de réglages. Les deux que le fork ajoute au menu d'options portent sur autre
+# chose — le téléversement (#8, CONF_UPLOAD_TIMEOUT) et les notifications (#17,
+# CONF_NOTIFY_ON_FAILURE) —, et en ouvrir une pour la purge demanderait une
+# issue à elle. La constante n'est donc pas inscrite dans CLES_DU_FORK : rien ne
+# la persiste dans les options.
+DEFAULT_PURGE_TIMEOUT = 300
+
+### NOTIFICATIONS PERSISTANTES (issue #17) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Une sauvegarde cloud silencieusement cassée
+# donne une fausse impression de sécurité : `destinations/notifications.py` transforme
+# les événements `auto_backup.upload_*` et le signalement de ré-authentification
+# (`destinations/reauth.py`) en notifications persistantes lisibles.
+
+# Gestionnaire de notifications de l'entrée, exposé dans `hass.data`.
+DATA_NOTIFICATIONS: HassKey[GestionnaireDeNotifications] = HassKey(
+    f"{DOMAIN}_notifications"
+)
+
+# Préfixes des identifiants de notification. Ils sont **stables par destination** :
+# des échecs successifs mettent la même notification à jour au lieu d'en empiler une
+# par sauvegarde, et un succès (ou une ré-autorisation) sait laquelle retirer.
+NOTIFICATION_UPLOAD_PREFIX = f"{DOMAIN}_upload_"
+NOTIFICATION_REAUTH_PREFIX = f"{DOMAIN}_reauth_"
+
+# Option de l'entrée : les notifications persistantes du fork sont-elles créées ?
+# Désactivée, l'intégration continue d'émettre ses événements et ses journaux
+# d'erreur, et le problème Home Assistant de ré-authentification reste créé : seule
+# la notification disparaît. Elle se règle par l'étape « Réglages des notifications »
+# du flux d'options (cf. `destinations/flow.py`).
+CONF_NOTIFY_ON_FAILURE = "notify_on_failure"
+DEFAULT_NOTIFY_ON_FAILURE = True
+
+# `notify_on_failure` est une option portée par le fork : elle doit être reportée par
+# `preserve_fork_options()` comme les autres, sans quoi le premier enregistrement du
+# formulaire upstream l'effacerait en silence. La constante étant définie ici, à la
+# fin du bloc du fork, la liste des clés du fork est complétée ici aussi plutôt que
+# récrite plus haut.
+CLES_DU_FORK = (*CLES_DU_FORK, CONF_NOTIFY_ON_FAILURE)
 
 ### ENTITÉS D'ÉTAT DES DESTINATIONS (issue #16) ###
 # Ajouts du fork (cf. docs/UPSTREAM.md). Chaque destination configurée expose
@@ -177,21 +256,15 @@ ATTR_LAST_ERROR = "last_error"
 ATTR_LAST_FAILED_SLUG = "last_failed_slug"
 ATTR_LAST_FAILED_AT = "last_failed_at"
 
-# Registre persistant des sauvegardes distantes, tenu par la rétention distante
-# (issue #9) : il liste, destination par destination, les sauvegardes réellement
-# présentes chez le fournisseur, et il survit au redémarrage. C'est lui qui fait
-# autorité sur le capteur de comptage, par `entrees(destination_id)`. La clé
-# n'est pas typée ici : la classe du registre appartient à l'issue #9, non encore
-# fusionnée. Tant qu'elle est absente de `hass.data`, le capteur retombe sur son
-# compteur interne.
-DATA_REMOTE_BACKUPS = f"{DOMAIN}_remote_backups"
-
-# Champs lus dans l'événement `auto_backup.remote_purge`, émis par la rétention
-# distante (issue #9) lorsqu'elle a réellement supprimé des sauvegardes :
-# `remote_ids` porte les identifiants distants supprimés. L'issue #9 n'émet ni
-# `deleted` ni `remaining` — un nombre restant serait structurellement faux,
-# l'événement n'étant pas émis quand rien n'a été supprimé — mais les deux
-# restent lus par le repli sans registre.
-ATTR_REMOTE_IDS = "remote_ids"
+# Champs du repli du capteur de comptage. Le registre DATA_REMOTE_BACKUPS de la
+# rétention distante (#9, ci-dessus) fait autorité : il liste les sauvegardes
+# déposées par Auto Backup et encore présentes chez le fournisseur, et il survit
+# au redémarrage. Le repli ne sert donc qu'aux deux cas où ce registre ne répond
+# pas — clé absente de `hass.data`, ou lecture en échec —, et corrige alors son
+# compteur interne à partir de ce qu'annonce `auto_backup.remote_purge`. La
+# rétention distante n'émet ni `deleted` ni `remaining` : `remaining` serait
+# structurellement faux, l'événement n'étant pas émis quand rien n'a été
+# supprimé. Les deux restent lus, un émetteur futur pouvant les fournir ;
+# `remote_ids`, le champ réellement émis, est défini avec le bloc de #9.
 ATTR_DELETED = "deleted"
 ATTR_REMAINING = "remaining"

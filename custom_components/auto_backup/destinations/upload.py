@@ -83,11 +83,9 @@ from ..const import (
     ATTR_SIZE,
     ATTR_SLUG,
     ATTR_UPLOAD_TO,
-    CONF_UPLOAD_TIMEOUT,
     DATA_AUTO_BACKUP,
     DATA_DESTINATIONS,
     DATA_UPLOADS,
-    DEFAULT_UPLOAD_TIMEOUT,
     EVENT_BACKUP_FAILED,
     EVENT_BACKUP_START,
     EVENT_BACKUP_SUCCESSFUL,
@@ -96,6 +94,7 @@ from ..const import (
     EVENT_UPLOAD_SUCCESSFUL,
 )
 from ..handlers import BackupHandler, HandlerBase, SupervisorHandler
+from .config_entry import delai_de_televersement
 from .destination import RemoteDestination
 from .errors import DestinationError
 
@@ -501,19 +500,13 @@ class CoordinateurTeleversement:
 
     @property
     def _delai(self) -> float:
-        """Délai maximum d'un téléversement, en secondes (option de l'entrée)."""
-        valeur = self._entry.options.get(CONF_UPLOAD_TIMEOUT, DEFAULT_UPLOAD_TIMEOUT)
-        try:
-            delai = float(valeur)
-        except (TypeError, ValueError) as err:
-            _LOGGER.warning(
-                "Option « %s » inexploitable (%s) : délai par défaut de %s s retenu",
-                CONF_UPLOAD_TIMEOUT,
-                err,
-                DEFAULT_UPLOAD_TIMEOUT,
-            )
-            return float(DEFAULT_UPLOAD_TIMEOUT)
-        return delai if delai > 0 else float(DEFAULT_UPLOAD_TIMEOUT)
+        """Délai maximum d'un téléversement, en secondes (option de l'entrée).
+
+        La lecture de l'option est déléguée au socle des destinations : les
+        fournisseurs en dérivent le garde-fou de leurs propres requêtes, et un
+        seul point de lecture garantit qu'ils parlent bien du même réglage.
+        """
+        return delai_de_televersement(self._entry)
 
     async def _async_televerser(
         self, demande: DemandeTeleversement, nom: str, slug: str

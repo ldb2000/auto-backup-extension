@@ -2,7 +2,8 @@
 
 Ce module apporte au flux d'options upstream un menu et les étapes d'ajout, de
 ré-autorisation et de suppression d'une destination, ainsi que — depuis
-l'issue #8 — les réglages du téléversement (délai maximum). Il n'existe pas dans
+l'issue #8 — les réglages du téléversement (délai maximum) et — depuis l'issue
+#17 — ceux des notifications d'échec. Il n'existe pas dans
 l'upstream et ne modifie aucune de ses lignes : `config_flow.py` se contente
 d'envelopper sa classe `OptionsFlowHandler` par `etendre_le_flux_d_options()`,
 qui construit une sous-classe portant les étapes ci-dessous
@@ -16,10 +17,22 @@ menu -> ajouter_destination -> identifiants -> autorisation (étape externe)
      -> jeton -> [description du compte] -> destination -> options enregistrées
 ```
 
-La description du compte (issue #10) est facultative : le fournisseur peut
-proposer un nom par défaut (« Dropbox - Jean Dupont ») et des données à
-persister (identifiant de compte). Un fournisseur qui ne le fait pas, ou dont
-l'appel échoue, laisse simplement le formulaire de nommage vide.
+La description du compte (issues #10 et #13) est facultative : le fournisseur
+peut proposer un nom par défaut (« Dropbox - Jean Dupont ») et des données à
+persister (identifiant ou adresse du compte). Un fournisseur qui ne surcharge
+aucun des deux crochets de `RemoteDestination` suit exactement le parcours
+d'origine, sans le moindre appel réseau supplémentaire.
+
+Les deux crochets — `async_nom_par_defaut()` et `async_donnees_du_fournisseur()`
+— sont des **méthodes d'instance** appelées sur une seule destination
+provisoire, construite par `create_destination()` : un fournisseur qui mémorise
+la réponse du service n'a donc qu'un aller-retour réseau à faire pour les deux.
+
+Leur échec **interrompt** l'ajout (abandon `echec_fournisseur`, le détail
+citant la cause : API non activée, portée manquante, compte injoignable). Une
+destination que le fournisseur refuse déjà d'identifier ne fonctionnerait pas
+davantage une fois créée : mieux vaut le dire tout de suite que laisser
+l'utilisateur découvrir la panne à la première sauvegarde.
 
 L'étape externe est celle de Home Assistant (`async_external_step`) ; c'est la
 vue du fork (`destinations/oauth.py`) qui reprend le flux, la vue standard ne
@@ -45,6 +58,7 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -62,11 +76,13 @@ from ..const import (
     CONF_DESTINATION_ID,
     CONF_DESTINATIONS,
     CONF_FOLDER,
+    CONF_NOTIFY_ON_FAILURE,
     CONF_PROVIDER,
     CONF_RETENTION_COUNT,
     CONF_RETENTION_DAYS,
     CONF_UPLOAD_TIMEOUT,
     DEFAULT_DESTINATION_FOLDER,
+    DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_UPLOAD_TIMEOUT,
     IDENTIFIANT_PROVISOIRE,
     OAUTH_AUTHORIZE_URL_TIMEOUT,
@@ -103,6 +119,21 @@ RETENTION_NOMBRE_MAX = 1000
 # Longueur du suffixe aléatoire ajouté à un identifiant de destination déjà pris.
 LONGUEUR_SUFFIXE_IDENTIFIANT = 4
 
+# Clés de `provider_data` qui **identifient un compte** chez un fournisseur :
+# `account_id` (Dropbox, #10), `account_email` (Google Drive, #13), `email` pour
+# un fournisseur qui n'en renverrait que l'adresse. Elles servent à reconnaître
+# qu'une ré-autorisation a changé de compte ; les autres données du fournisseur
+# (quota, nom d'affichage) changent sans que le compte change.
+CLES_IDENTIFIANTES_DU_COMPTE = ("account_id", "account_email", "email")
+
+# Case à cocher de l'étape de confirmation d'un changement de compte. Ce n'est
+# pas une option de l'entrée : elle ne vit que le temps du formulaire.
+CONF_CONFIRMER = "confirmer"
+
+# Comptes qu'aucune donnée de fournisseur ne décrit : affiché tel quel dans
+# l'étape de confirmation, qui doit bien nommer les deux côtés.
+COMPTE_INCONNU = "compte non identifié"
+
 # Codes d'erreur OAuth2 (RFC 6749 §4.1.2.1) auxquels le fork sait répondre par un
 # message compréhensible plutôt que par le code brut. `access_denied` est celui
 # que renvoient Dropbox (#10) comme Google Drive (#13) quand l'utilisateur ferme
@@ -126,6 +157,20 @@ def _retention(user_input: Mapping[str, Any], cle: str) -> int | None:
         raise DestinationConfigError(f"{cle} doit être un nombre entier") from err
 
 
+def _libelle_du_fournisseur(provider_id: str) -> str:
+    """Libellé lisible d'un fournisseur, ou son identifiant technique à défaut.
+
+    Le libellé est déclaré par le fournisseur lui-même (`RemoteDestination.LABEL`,
+    issue #10) et lu par le registre. Un fournisseur qui n'en déclare pas — ou qui
+    a disparu du registre pendant que le formulaire était ouvert — reste affiché
+    sous son identifiant, faute de mieux.
+    """
+    try:
+        return provider_label(provider_id)
+    except UnknownProviderError:
+        return provider_id
+
+
 def _delai_de_televersement(valeur: Any) -> int:
     """Convertit le délai saisi en secondes entières, ou lève.
 
@@ -147,6 +192,42 @@ def _delai_de_televersement(valeur: Any) -> int:
             f"{CONF_UPLOAD_TIMEOUT} doit être strictement positif"
         )
     return secondes
+
+
+def _identite_du_compte(donnees: Mapping[str, Any] | None) -> dict[str, str]:
+    """Réduit des données de fournisseur aux clés qui identifient le compte.
+
+    Les valeurs vides et les clés non identifiantes sont écartées : deux
+    autorisations du même compte doivent donner exactement le même résultat,
+    même si le fournisseur enrichit sa réponse entre-temps.
+    """
+    if not donnees:
+        return {}
+    identite: dict[str, str] = {}
+    for cle in CLES_IDENTIFIANTES_DU_COMPTE:
+        valeur = donnees.get(cle)
+        if isinstance(valeur, str) and valeur.strip():
+            identite[cle] = valeur.strip()
+    return identite
+
+
+def _description_du_compte(identite: Mapping[str, str]) -> str:
+    """Décrit un compte pour l'utilisateur, ou le dit non identifié."""
+    return " / ".join(identite.values()) or COMPTE_INCONNU
+
+
+def _memes_comptes(ancienne: Mapping[str, str], nouvelle: Mapping[str, str]) -> bool:
+    """Indique si deux identités décrivent le même compte.
+
+    La comparaison porte sur les clés **communes** : un fournisseur qui se met
+    à renvoyer une donnée de plus ne doit pas faire croire à un changement de
+    compte. Sans aucune clé commune, rien ne permet d'affirmer que c'est le même
+    compte : la question est posée à l'utilisateur plutôt que tranchée ici.
+    """
+    communes = ancienne.keys() & nouvelle.keys()
+    if not communes:
+        return False
+    return all(ancienne[cle] == nouvelle[cle] for cle in communes)
 
 
 def _identifiant_disponible(nom: str, pris: Iterable[str]) -> str:
@@ -247,7 +328,7 @@ class GestionDesDestinationsMixin:
         options = ["ajouter_destination"]
         if self._configurations():
             options += ["reautoriser_destination", "supprimer_destination"]
-        options += ["reglages_televersement", "init"]
+        options += ["reglages_televersement", "reglages_notifications", "init"]
         return self.async_show_menu(step_id="menu", menu_options=options)
 
     ### Réglages du téléversement ###
@@ -301,6 +382,46 @@ class GestionDesDestinationsMixin:
             errors=erreurs,
         )
 
+    ### Réglages des notifications (issue #17) ###
+
+    async def async_step_reglages_notifications(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Notifications persistantes des échecs de destination, ou silence.
+
+        Le réglage ne porte que sur les **notifications** : désactivé, un échec
+        de téléversement reste journalisé et signalé par l'événement
+        `auto_backup.upload_failed`, et une destination dont l'accès est révoqué
+        reste signalée par un problème Home Assistant. Les automatisations
+        existantes ne changent donc pas de comportement.
+        """
+        if user_input is not None:
+            actives = bool(
+                user_input.get(CONF_NOTIFY_ON_FAILURE, DEFAULT_NOTIFY_ON_FAILURE)
+            )
+            _LOGGER.info(
+                "Notifications persistantes des échecs de destination : %s",
+                "activées" if actives else "désactivées",
+            )
+            return self.async_create_entry(
+                data=options_avec_reglage(
+                    self.config_entry, CONF_NOTIFY_ON_FAILURE, actives
+                )
+            )
+
+        schema = vol.Schema({vol.Required(CONF_NOTIFY_ON_FAILURE): BooleanSelector()})
+        return self.async_show_form(
+            step_id="reglages_notifications",
+            data_schema=self.add_suggested_values_to_schema(
+                schema,
+                {
+                    CONF_NOTIFY_ON_FAILURE: self.config_entry.options.get(
+                        CONF_NOTIFY_ON_FAILURE, DEFAULT_NOTIFY_ON_FAILURE
+                    )
+                },
+            ),
+        )
+
     ### Ajout d'une destination ###
 
     async def async_step_ajouter_destination(
@@ -333,7 +454,7 @@ class GestionDesDestinationsMixin:
                         options=[
                             SelectOptionDict(
                                 value=identifiant,
-                                label=provider_label(identifiant),
+                                label=_libelle_du_fournisseur(identifiant),
                             )
                             for identifiant in fournisseurs
                         ],
@@ -470,10 +591,20 @@ class GestionDesDestinationsMixin:
             _LOGGER.error("Jeton inexploitable : %s", err)
             return self.async_abort(reason="jeton_invalide")
 
-        if self._destination_id is not None:
-            return self._terminer_la_reautorisation()
+        try:
+            await self._async_decrire_le_compte()
+        except DestinationError as err:
+            _LOGGER.error("Le fournisseur a refusé la première requête : %s", err)
+            return self.async_abort(
+                reason="echec_fournisseur",
+                description_placeholders={"detail": str(err)},
+            )
 
-        await self._async_decrire_le_compte()
+        if self._destination_id is not None:
+            # La ré-autorisation peut avoir porté sur un autre compte : l'étape
+            # de confirmation le vérifie et ne s'affiche que dans ce cas (#17).
+            return await self.async_step_confirmer_changement_de_compte()
+
         return await self.async_step_destination()
 
     async def async_step_destination(
@@ -537,6 +668,8 @@ class GestionDesDestinationsMixin:
         if user_input is not None:
             schema = self.add_suggested_values_to_schema(schema, user_input)
         elif self._nom_propose:
+            # Nom proposé par le fournisseur d'après le compte autorisé : il
+            # reste modifiable, et l'unicité est vérifiée à la validation.
             schema = self.add_suggested_values_to_schema(
                 schema, {CONF_NAME: self._nom_propose}
             )
@@ -569,41 +702,46 @@ class GestionDesDestinationsMixin:
             provider_data=self._provider_data,
         )
 
-    ### Description du compte autorisé (issue #10) ###
+    ### Description du compte autorisé (issues #10 et #13) ###
 
     async def _async_decrire_le_compte(self) -> None:
         """Demande au fournisseur un nom par défaut et les données du compte.
 
-        Les deux crochets sont facultatifs (`RemoteDestination`) : un fournisseur
-        qui ne les surcharge pas ne provoque aucun appel réseau. Un échec — compte
-        injoignable, réponse inattendue, accès déjà refusé — n'interrompt pas
-        l'ajout : l'utilisateur nomme alors sa destination lui-même, plutôt que de
-        perdre une autorisation qu'il vient d'accorder.
+        Les deux crochets sont déclarés par `RemoteDestination` et facultatifs :
+        un fournisseur qui ne les surcharge pas renvoie `None` des deux côtés et
+        ne provoque aucun appel réseau. Ils sont appelés sur **une seule**
+        destination provisoire : un fournisseur qui mémorise la réponse du
+        service n'a qu'un aller-retour à faire pour les deux.
+
+        Un échec — compte injoignable, API non activée, portée manquante, accès
+        déjà refusé — est **propagé** : l'appelant interrompt l'ajout en citant
+        la cause. Une destination que le fournisseur refuse déjà d'identifier ne
+        fonctionnerait pas davantage une fois créée, et l'utilisateur corrige
+        immédiatement ce qu'un message d'abandon lui désigne. `UnknownProviderError`
+        (fournisseur disparu du registre entre-temps) est une `DestinationError` :
+        elle suit le même chemin.
+
+        La méthode est aussi jouée lors d'une ré-autorisation, pour rafraîchir
+        les données du compte : elles peuvent désigner un autre compte qu'à
+        l'autorisation initiale.
         """
         self._nom_propose = None
         self._provider_data = None
-
-        try:
-            destination = create_destination(self.hass, self._config_provisoire())
-        except DestinationConfigError as err:
-            _LOGGER.debug("Compte du fournisseur non décrit : %s", err)
-            return
+        destination = create_destination(self.hass, self._config_provisoire())
 
         try:
             nom = await destination.async_nom_par_defaut()
             donnees = await destination.async_donnees_du_fournisseur()
-        except (DestinationError, ClientError, TimeoutError) as err:
-            _LOGGER.warning(
-                "Le compte du fournisseur « %s » n'a pas pu être identifié : %s",
-                self._provider,
-                err,
-            )
-            return
+        except (ClientError, TimeoutError) as err:
+            raise DestinationError(
+                f"le fournisseur « {self._provider} » n'a pas répondu : {err}"
+            ) from err
         finally:
             # Un accès refusé ici (portée oubliée, jeton déjà révoqué) signalerait
             # la destination **provisoire** à ré-autoriser : le problème créé
             # nommerait une destination qui n'existe pas, que l'utilisateur ne
-            # pourrait donc ni ré-autoriser ni supprimer. Il est effacé aussitôt.
+            # pourrait donc ni ré-autoriser ni supprimer. Il est effacé aussitôt,
+            # que les crochets aient abouti ou non.
             async_effacer_la_reauthentification(self.hass, IDENTIFIANT_PROVISOIRE)
 
         propose = nom.strip() if isinstance(nom, str) else ""
@@ -631,6 +769,8 @@ class GestionDesDestinationsMixin:
             self._client_id = config.client_id
             self._client_secret = config.client_secret
             self._token = None
+            self._provider_data = None
+            self._nom_propose = None
             if not config.utilise_oauth:
                 # Identifiants d'application perdus (options éditées à la main) :
                 # ils sont redemandés avant de repartir chez le fournisseur.
@@ -651,6 +791,82 @@ class GestionDesDestinationsMixin:
             ),
         )
 
+    async def async_step_confirmer_changement_de_compte(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Fait valider un changement de compte avant de l'enregistrer (#17).
+
+        Ré-autoriser sur un autre compte n'est pas une panne : c'est un choix
+        légitime (compte professionnel devenu personnel, organisation migrée).
+        Mais la destination continuerait de porter le même nom, tandis que les
+        sauvegardes déposées sur l'ancien compte deviendraient invisibles pour
+        Auto Backup : ni listées, ni purgées par la rétention distante. L'étape
+        nomme donc les deux comptes et demande une confirmation explicite.
+
+        Elle ne s'affiche que s'il y a vraiment changement : dans tous les
+        autres cas — même compte, fournisseur muet, première donnée de compte —
+        la ré-autorisation se termine sans rien demander.
+        """
+        config = self._configuration(str(self._destination_id))
+        if config is None:
+            # La destination a disparu pendant le flux : c'est
+            # `_terminer_la_reautorisation()` qui porte ce refus, et lui seul,
+            # pour que les deux chemins d'arrivée l'énoncent de la même façon.
+            return self._terminer_la_reautorisation()
+
+        changement = self._changement_de_compte(config)
+        if changement is None:
+            return self._terminer_la_reautorisation()
+
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRMER):
+                _LOGGER.info(
+                    "Ré-autorisation de « %s » abandonnée : le changement de "
+                    "compte n'a pas été confirmé, rien n'a été enregistré",
+                    config.name,
+                )
+                return self.async_abort(reason="changement_de_compte_annule")
+            _LOGGER.warning(
+                "La destination « %s » est désormais rattachée à un autre "
+                "compte du fournisseur %s",
+                config.name,
+                config.provider,
+            )
+            return self._terminer_la_reautorisation()
+
+        ancien, nouveau = changement
+        return self.async_show_form(
+            step_id="confirmer_changement_de_compte",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_CONFIRMER, default=False): BooleanSelector()}
+            ),
+            description_placeholders={
+                "destination": config.name,
+                "ancien_compte": ancien,
+                "nouveau_compte": nouveau,
+            },
+        )
+
+    def _changement_de_compte(
+        self, config: DestinationConfig
+    ) -> tuple[str, str] | None:
+        """Comptes (ancien, nouveau) si la ré-autorisation en a changé, sinon `None`.
+
+        Trois situations ne sont **pas** un changement de compte :
+
+        - le fournisseur n'a rien renvoyé (`self._provider_data` vide) : les
+          données d'origine sont conservées, il n'y a rien à comparer ;
+        - la destination n'avait encore aucune donnée de compte : le
+          fournisseur vient de la renseigner, sans qu'on puisse dire qu'elle a
+          changé de compte ;
+        - les clés identifiantes communes portent les mêmes valeurs.
+        """
+        ancienne = _identite_du_compte(config.provider_data)
+        nouvelle = _identite_du_compte(self._provider_data)
+        if not ancienne or not nouvelle or _memes_comptes(ancienne, nouvelle):
+            return None
+        return (_description_du_compte(ancienne), _description_du_compte(nouvelle))
+
     def _terminer_la_reautorisation(self) -> ConfigFlowResult:
         """Remplace le jeton de la destination ré-autorisée et clôt le flux.
 
@@ -660,6 +876,10 @@ class GestionDesDestinationsMixin:
         reconstruction manuelle avait déjà effacé `provider_data` (le compte
         rattaché à la destination), et aurait effacé de la même façon tout champ
         ajouté plus tard à `DestinationConfig`.
+
+        Un changement de compte a, lui, déjà été confirmé par
+        `async_step_confirmer_changement_de_compte()` (#17) : arrivé ici, le
+        nouveau compte s'enregistre sans autre question.
         """
         configurations = self._configurations()
         identifiant = str(self._destination_id)
@@ -672,6 +892,17 @@ class GestionDesDestinationsMixin:
                 client_id=self._client_id or config.client_id,
                 client_secret=self._client_secret or config.client_secret,
                 token=self._token,
+                # Le compte peut avoir changé : les données fraîchement lues
+                # priment. Un fournisseur qui n'en renvoie aucune laisse celles
+                # d'origine en place — c'est un fournisseur muet, pas un compte
+                # effacé. Le test est explicite (`is not None`) et non une
+                # vérité booléenne : il ne dépend pas du fait qu'un dictionnaire
+                # vide soit déjà ramené à `None` par `_async_decrire_le_compte()`.
+                provider_data=(
+                    self._provider_data
+                    if self._provider_data is not None
+                    else config.provider_data
+                ),
             )
             if config.destination_id == identifiant
             else config
@@ -735,7 +966,7 @@ class GestionDesDestinationsMixin:
         return [
             SelectOptionDict(
                 value=config.destination_id,
-                label=f"{config.name} ({config.provider})",
+                label=f"{config.name} ({_libelle_du_fournisseur(config.provider)})",
             )
             for config in configurations
         ]
@@ -749,13 +980,14 @@ class GestionDesDestinationsMixin:
             return False
 
     def _libelle_du_fournisseur(self) -> str:
-        """Nom lisible du fournisseur en cours (« Dropbox »), pour l'affichage."""
+        """Nom lisible du fournisseur en cours (« Dropbox »), pour l'affichage.
+
+        Il alimente les placeholders `{fournisseur}` des étapes `identifiants` et
+        `destination` : l'utilisateur n'y lit jamais `google_drive`.
+        """
         if not self._provider:
             return ""
-        try:
-            return provider_label(self._provider)
-        except UnknownProviderError:
-            return self._provider
+        return _libelle_du_fournisseur(self._provider)
 
     def _config_provisoire(self) -> DestinationConfig:
         """Configuration de travail de la destination en cours d'ajout.

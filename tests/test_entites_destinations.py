@@ -69,6 +69,10 @@ from custom_components.auto_backup.destinations.entities import (
     assainir_le_message,
     identifiant_unique,
 )
+from custom_components.auto_backup.destinations.retention import (
+    EntreeRegistre,
+    RegistreSauvegardesDistantes,
+)
 from destinations_factices import config_factice
 
 # Deuxième destination, pour éprouver l'indépendance des entités.
@@ -85,11 +89,13 @@ FAUX_JETON_BASE64 = "ZXlKaGJHY2lPaUpJVXpJMU5pSjk"
 
 
 class RegistreFactice:
-    """Registre des sauvegardes distantes tel que l'issue #9 l'exposera.
+    """Doublure du registre des sauvegardes distantes de l'issue #9.
 
     Seule `entrees(destination_id)` est utilisée par les entités : le capteur
     compte ce qu'elle renvoie. Le mode `defaillant` éprouve le repli quand le
-    registre lève au lieu de répondre.
+    registre lève au lieu de répondre — un cas que le registre réel ne sait pas
+    produire, d'où la doublure. Le contrat avec le vrai registre est éprouvé,
+    lui, par `test_le_registre_reel_de_la_retention_alimente_le_compteur`.
     """
 
     def __init__(self, comptes: dict[str, int], *, defaillant: bool = False) -> None:
@@ -149,6 +155,22 @@ async def entree_avec_deux_destinations(
     yield entree
 
 
+@pytest.fixture
+def entree_sans_registre_distant(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+) -> MockConfigEntry:
+    """Entrée dont le registre de la rétention distante a été retiré.
+
+    Depuis la fusion de l'issue #9, l'entrée monte **toujours** son registre
+    persistant, qui fait alors autorité sur le capteur de comptage : le compteur
+    de repli tenu par les événements ne sert plus qu'aux deux cas où ce registre
+    ne répond pas — clé absente de `hass.data`, ou lecture en échec. Le retirer
+    est donc le seul moyen d'éprouver ce chemin de bout en bout.
+    """
+    hass.data.pop(DATA_REMOTE_BACKUPS, None)
+    return entree_avec_destination
+
+
 def _entity_id(
     hass: HomeAssistant,
     entree: MockConfigEntry,
@@ -183,8 +205,15 @@ def _emettre_succes(
     *,
     slug: str = "abc12345",
     nom: str = "Sauvegarde du soir",
+    remote_id: str = "distant-1",
 ) -> None:
-    """Émet `auto_backup.upload_successful` comme le fait le coordinateur #8."""
+    """Émet `auto_backup.upload_successful` comme le fait le coordinateur #8.
+
+    `remote_id` identifie le fichier chez le fournisseur : deux succès qui le
+    partagent désignent la **même** sauvegarde, et le registre de la rétention
+    distante (#9) n'en retient alors qu'une entrée. Les tests qui veulent voir
+    le compteur monter donnent donc des identifiants distincts.
+    """
     hass.bus.async_fire(
         EVENT_UPLOAD_SUCCESSFUL,
         {
@@ -193,7 +222,7 @@ def _emettre_succes(
             ATTR_DESTINATION: destination_id,
             ATTR_DESTINATION_NAME: "Destination de test",
             ATTR_SIZE: 1234,
-            ATTR_REMOTE_ID: "distant-1",
+            ATTR_REMOTE_ID: remote_id,
         },
     )
 
@@ -565,17 +594,45 @@ def test_assainir_le_message_conserve_un_message_ordinaire() -> None:
 ### NOMBRE DE SAUVEGARDES DISTANTES ###
 
 
-async def test_le_compteur_suit_les_succes_et_les_purges(
+async def test_le_capteur_compte_ce_qui_reste_et_non_les_envois(
     hass: HomeAssistant, entree_avec_destination: MockConfigEntry
 ) -> None:
-    """Le compteur monte sur `upload_successful`, descend sur `remote_purge`."""
+    """Le capteur compte les sauvegardes présentes, pas les téléversements.
+
+    Le registre de la rétention distante (#9) est monté par l'entrée elle-même :
+    il fait autorité dès le premier succès, sans que le test ait rien à
+    installer. Réécrire la même sauvegarde ne crée pas un second fichier chez le
+    fournisseur, et le capteur n'en compte donc qu'une.
+    """
+    assert isinstance(hass.data[DATA_REMOTE_BACKUPS], RegistreSauvegardesDistantes)
+
+    for _ in range(3):
+        _emettre_succes(hass, remote_id="distant-1")
+    _emettre_succes(hass, remote_id="distant-2")
+    await hass.async_block_till_done()
+
+    assert (
+        _etat(
+            hass,
+            entree_avec_destination,
+            Platform.SENSOR,
+            SUFFIXE_SAUVEGARDES_DISTANTES,
+        ).state
+        == "2"
+    )
+
+
+async def test_le_compteur_de_repli_suit_les_succes_et_les_purges(
+    hass: HomeAssistant, entree_sans_registre_distant: MockConfigEntry
+) -> None:
+    """Sans registre, le compteur monte sur un succès et descend sur une purge."""
     for _ in range(3):
         _emettre_succes(hass)
     await hass.async_block_till_done()
     assert (
         _etat(
             hass,
-            entree_avec_destination,
+            entree_sans_registre_distant,
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
@@ -590,7 +647,7 @@ async def test_le_compteur_suit_les_succes_et_les_purges(
     assert (
         _etat(
             hass,
-            entree_avec_destination,
+            entree_sans_registre_distant,
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
@@ -606,7 +663,7 @@ async def test_le_compteur_suit_les_succes_et_les_purges(
     assert (
         _etat(
             hass,
-            entree_avec_destination,
+            entree_sans_registre_distant,
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
@@ -614,8 +671,8 @@ async def test_le_compteur_suit_les_succes_et_les_purges(
     )
 
 
-async def test_le_compteur_ne_descend_jamais_sous_zero(
-    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+async def test_le_compteur_de_repli_ne_descend_jamais_sous_zero(
+    hass: HomeAssistant, entree_sans_registre_distant: MockConfigEntry
 ) -> None:
     """Une purge plus grande que le compteur le ramène à zéro, pas en négatif."""
     _emettre_succes(hass)
@@ -628,7 +685,7 @@ async def test_le_compteur_ne_descend_jamais_sous_zero(
     assert (
         _etat(
             hass,
-            entree_avec_destination,
+            entree_sans_registre_distant,
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
@@ -637,7 +694,7 @@ async def test_le_compteur_ne_descend_jamais_sous_zero(
 
 
 async def test_une_purge_sans_decompte_laisse_le_compteur_intact(
-    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+    hass: HomeAssistant, entree_sans_registre_distant: MockConfigEntry
 ) -> None:
     """Une purge qui n'annonce rien d'exploitable ne change pas le compteur."""
     _emettre_succes(hass)
@@ -659,7 +716,7 @@ async def test_une_purge_sans_decompte_laisse_le_compteur_intact(
     assert (
         _etat(
             hass,
-            entree_avec_destination,
+            entree_sans_registre_distant,
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
@@ -673,7 +730,7 @@ async def test_une_purge_sans_decompte_laisse_le_compteur_intact(
 )
 async def test_une_purge_accepte_plusieurs_formes_de_decompte(
     hass: HomeAssistant,
-    entree_avec_destination: MockConfigEntry,
+    entree_sans_registre_distant: MockConfigEntry,
     supprimees: Any,
     attendu: str,
 ) -> None:
@@ -691,7 +748,7 @@ async def test_une_purge_accepte_plusieurs_formes_de_decompte(
     assert (
         _etat(
             hass,
-            entree_avec_destination,
+            entree_sans_registre_distant,
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
@@ -743,10 +800,67 @@ async def test_le_registre_de_la_retention_fait_autorite(
     )
 
 
-async def test_sans_registre_le_compteur_de_repli_prend_le_relais(
+async def test_le_registre_reel_de_la_retention_alimente_le_compteur(
     hass: HomeAssistant, entree_avec_destination: MockConfigEntry
 ) -> None:
-    """Tant que l'issue #9 n'est pas là, `remote_ids` alimente le repli."""
+    """Le capteur compte les entrées du `RegistreSauvegardesDistantes` de #9.
+
+    Les autres tests de cette section passent par une doublure ; celui-ci monte
+    le registre réel de la rétention distante pour vérifier qu'il n'y a pas que
+    les chaînes qui correspondent, mais bien le contrat : le capteur appelle
+    `entrees(destination_id)` et en compte les `EntreeRegistre`.
+
+    Il montre aussi ce que le capteur **ne** compte pas : une sauvegarde
+    enregistrée pour une autre destination, et un fichier que l'utilisateur
+    aurait déposé lui-même dans le dossier, absent du registre par construction.
+    """
+    registre = RegistreSauvegardesDistantes(hass)
+    hass.data[DATA_REMOTE_BACKUPS] = registre
+
+    for index in range(2):
+        await registre.async_enregistrer(
+            "destination_test",
+            EntreeRegistre(remote_id=f"distant-{index}", name=f"nuit-{index}.tar"),
+        )
+    # Bruit : cette entrée appartient à une autre destination.
+    await registre.async_enregistrer(
+        DESTINATION_DEUX, EntreeRegistre(remote_id="ailleurs", name="ailleurs.tar")
+    )
+
+    _emettre_succes(hass)
+    await hass.async_block_till_done()
+    assert (
+        _etat(
+            hass,
+            entree_avec_destination,
+            Platform.SENSOR,
+            SUFFIXE_SAUVEGARDES_DISTANTES,
+        ).state
+        == "2"
+    )
+
+    # Une purge réelle retire l'entrée : le capteur relit et redescend.
+    assert await registre.async_retirer("destination_test", ["distant-0"])
+    hass.bus.async_fire(
+        EVENT_REMOTE_PURGE,
+        {ATTR_DESTINATION: "destination_test", ATTR_REMOTE_IDS: ["distant-0"]},
+    )
+    await hass.async_block_till_done()
+    assert (
+        _etat(
+            hass,
+            entree_avec_destination,
+            Platform.SENSOR,
+            SUFFIXE_SAUVEGARDES_DISTANTES,
+        ).state
+        == "1"
+    )
+
+
+async def test_sans_registre_le_compteur_de_repli_prend_le_relais(
+    hass: HomeAssistant, entree_sans_registre_distant: MockConfigEntry
+) -> None:
+    """Registre absent de `hass.data` : `remote_ids` alimente le repli."""
     assert DATA_REMOTE_BACKUPS not in hass.data
 
     for _ in range(3):
@@ -760,7 +874,7 @@ async def test_sans_registre_le_compteur_de_repli_prend_le_relais(
     assert (
         _etat(
             hass,
-            entree_avec_destination,
+            entree_sans_registre_distant,
             Platform.SENSOR,
             SUFFIXE_SAUVEGARDES_DISTANTES,
         ).state
@@ -866,9 +980,17 @@ async def test_les_identifiants_uniques_portent_l_entree_et_la_destination(
 async def test_le_dernier_succes_et_l_erreur_survivent_au_redemarrage(
     hass: HomeAssistant, entree_avec_destination: MockConfigEntry
 ) -> None:
-    """Après rechargement, horodatage, compteur et erreur sont restaurés."""
-    _emettre_succes(hass)
-    _emettre_succes(hass)
+    """Après rechargement, horodatage, compteur et erreur sont restaurés.
+
+    Le compteur ne se restaure pas de la même façon que les deux autres états :
+    l'horodatage et l'erreur reviennent du cache de `RestoreEntity`, tandis que
+    les deux sauvegardes viennent du registre persistant de la rétention
+    distante (#9), qui a survécu au rechargement par lui-même. D'où les deux
+    identifiants distants **distincts** : c'est le registre qui est interrogé,
+    et il ne compte pas deux fois le même fichier.
+    """
+    _emettre_succes(hass, remote_id="distant-1")
+    _emettre_succes(hass, remote_id="distant-2")
     _emettre_echec(hass, slug="slug-echoue", erreur="quota dépassé")
     await hass.async_block_till_done()
 
@@ -978,7 +1100,7 @@ async def test_une_erreur_resolue_n_est_pas_reintroduite_par_la_restauration(
 
 
 async def test_un_compteur_purge_n_est_pas_ecrase_par_la_restauration(
-    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+    hass: HomeAssistant, entree_sans_registre_distant: MockConfigEntry
 ) -> None:
     """Une purge ramenant le compteur à zéro résiste à la valeur restaurée.
 
@@ -988,7 +1110,7 @@ async def test_un_compteur_purge_n_est_pas_ecrase_par_la_restauration(
     capteur = _preparer_une_entite_montee_apres_coup(
         hass,
         CapteurSauvegardesDistantes(
-            entree_avec_destination,
+            entree_sans_registre_distant,
             hass.data[DATA_DESTINATION_ENTITIES],
             DestinationConfig.from_dict(config_factice()),
         ),
@@ -1010,13 +1132,13 @@ async def test_un_compteur_purge_n_est_pas_ecrase_par_la_restauration(
 
 
 async def test_un_compteur_vierge_accepte_la_valeur_restauree(
-    hass: HomeAssistant, entree_avec_destination: MockConfigEntry
+    hass: HomeAssistant, entree_sans_registre_distant: MockConfigEntry
 ) -> None:
     """Sans événement reçu, la valeur restaurée réarme bien le compteur."""
     capteur = _preparer_une_entite_montee_apres_coup(
         hass,
         CapteurSauvegardesDistantes(
-            entree_avec_destination,
+            entree_sans_registre_distant,
             hass.data[DATA_DESTINATION_ENTITIES],
             DestinationConfig.from_dict(config_factice()),
         ),

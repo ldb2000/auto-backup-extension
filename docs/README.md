@@ -7,13 +7,20 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
 - **[ADR 0001 — Socle des destinations distantes](adr/0001-destinations-distantes.md)** :
   Architecture décisionnelle du support des destinations cloud (Dropbox, Google Drive).
   Couvre la persistance (entry.options), le registre de fournisseurs, la hiérarchie d'erreurs,
-  et la validation sécurisée des chemins distants en POSIX normalisé.
+  la validation sécurisée des chemins distants en POSIX normalisé, le téléversement après
+  création, la rétention distante (registre de provenance, branchement du service `purge`),
+  les notifications des échecs et des accès révoqués, et la confirmation d'un changement de
+  compte à la ré-autorisation.
 
 ## Destinations distantes
 
 - **[Connecter un compte Dropbox](destinations/dropbox.md)** : création de l'application
   Dropbox (type d'accès, portées à cocher), URI de redirection à déclarer, récupération de
   la clé et du secret, connexion depuis les options, limites connues.
+- **[Connecter Google Drive](destinations/google-drive.md)** : création du projet Google Cloud,
+  activation de l'API Drive, écran de consentement, identifiants OAuth « Application Web »,
+  URI de redirection et prérequis d'URL externe publique, portée `drive.file` et ses
+  conséquences.
 
 ## Maintenance
 
@@ -25,7 +32,8 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
 ## Tests
 
 - **[Tests](tests.md)** : Lancement, structure des tests, fixtures disponibles, validation
-  stricte des entités, tester une destination distante, modification du code upstream.
+  stricte des entités, tester une destination distante, les notifications d'échec, un
+  changement de compte et les entités d'état d'une destination, modification du code upstream.
 
 ## Équipe d'agents
 

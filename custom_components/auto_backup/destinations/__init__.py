@@ -7,10 +7,16 @@ Ce sous-paquet est propre à ce fork : il n'existe pas dans l'upstream
 gestionnaire qui charge les destinations d'une entrée de configuration, et —
 depuis l'issue #7 — l'autorisation OAuth2 (`oauth`), le signalement des
 destinations à ré-autoriser (`reauth`) et les étapes d'interface qui étendent
-le flux d'options upstream (`flow`).
+le flux d'options upstream (`flow`). L'issue #17 y ajoute les notifications
+persistantes d'échec et de ré-authentification (`notifications`) et le point
+unique de masquage des secrets du fork (`masquage`), que doit appeler tout code
+affichant un texte venu d'un fournisseur. L'issue #16 y ajoute enfin les entités
+d'état de chaque destination (`entities`), qui délèguent leur masquage à ce
+module commun.
 
-Les fournisseurs concrets sont ajoutés par les issues suivantes ; aucun accès
-réseau n'est réalisé ici.
+Les fournisseurs concrets vivent dans le sous-paquet `providers` — Google Drive
+depuis l'issue #13 — et sont chargés par `enregistrer_les_fournisseurs()` au
+démarrage de l'entrée. Aucun accès réseau n'est réalisé par ce module.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from .config_entry import (
     async_destination_configs,
     async_entree_auto_backup,
     async_persist_destinations,
+    async_persist_provider_data,
     async_persist_token,
     async_setup_destinations,
     jeton_persiste,
@@ -45,7 +52,16 @@ from .errors import (
     UnknownProviderError,
 )
 from .manager import DestinationManager
+from .masquage import masquer, masquer_un_nom
 from .models import VALEUR_MASQUEE, DestinationConfig, RemoteBackup
+from .notifications import (
+    GestionnaireDeNotifications,
+    async_effacer_les_notifications,
+    async_notifier_la_reauthentification,
+    async_setup_notifications,
+    identifiant_de_notification_d_echec,
+    identifiant_de_notification_de_reauthentification,
+)
 from .oauth import (
     DestinationOAuth2Implementation,
     DestinationOAuth2Session,
@@ -94,6 +110,7 @@ __all__ = [
     "DestinationQuotaError",
     "DuplicateProviderError",
     "EtatDestination",
+    "GestionnaireDeNotifications",
     "OAuth2ProviderSpec",
     "RemoteBackup",
     "RemoteDestination",
@@ -102,22 +119,30 @@ __all__ = [
     "async_coordinateur_des_destinations",
     "async_destination_configs",
     "async_effacer_la_reauthentification",
+    "async_effacer_les_notifications",
     "async_enregistrer_la_vue_de_retour",
     "async_entree_auto_backup",
+    "async_notifier_la_reauthentification",
     "async_persist_destinations",
+    "async_persist_provider_data",
     "async_persist_token",
     "async_session_de_la_destination",
     "async_setup_destination_binary_sensors",
     "async_setup_destination_sensors",
     "async_setup_destinations",
+    "async_setup_notifications",
     "async_signaler_la_reauthentification",
     "create_destination",
     "enregistrer_les_fournisseurs",
     "get_provider",
+    "identifiant_de_notification_d_echec",
+    "identifiant_de_notification_de_reauthentification",
     "identifiant_du_probleme",
     "jeton_persiste",
     "jeton_valide",
     "list_providers",
+    "masquer",
+    "masquer_un_nom",
     "normaliser_le_jeton",
     "options_avec_destinations",
     "options_avec_reglage",

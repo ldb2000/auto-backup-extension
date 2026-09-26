@@ -8,9 +8,9 @@ appelé par `async_setup_destinations()` au chargement de l'entrée.
 Aucun module concret n'est importé ici au niveau du fichier, et ce pour deux
 raisons :
 
-- l'import est **différé** dans `enregistrer_les_fournisseurs()` parce qu'un
-  fournisseur importe `destinations.oauth`, qui importe `destinations.config_entry`,
-  d'où l'appel vient : un import au niveau du module fermerait le cycle ;
+- l'import est **différé** dans `fournisseurs_livres()` parce qu'un fournisseur
+  importe `destinations.oauth`, qui importe `destinations.config_entry`, d'où
+  l'appel vient : un import au niveau du module fermerait le cycle ;
 - une issue qui ajoute un fournisseur n'a qu'une ligne à ajouter dans la table
   ci-dessous, ce qui limite les conflits entre les issues développées en
   parallèle.
@@ -33,8 +33,12 @@ def fournisseurs_livres() -> tuple[tuple[str, DestinationFactory], ...]:
     L'import est fait ici, à l'appel, et non au chargement du module.
     """
     from .dropbox import PROVIDER_DROPBOX, DropboxDestination
+    from .google_drive import PROVIDER_GOOGLE_DRIVE, GoogleDriveDestination
 
-    return ((PROVIDER_DROPBOX, DropboxDestination),)
+    return (
+        (PROVIDER_DROPBOX, DropboxDestination),
+        (PROVIDER_GOOGLE_DRIVE, GoogleDriveDestination),
+    )
 
 
 @callback

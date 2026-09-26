@@ -7,9 +7,11 @@ Ce module concentre toutes les lectures et écritures de cette liste.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_TOKEN
 from homeassistant.core import HomeAssistant, callback
@@ -20,15 +22,20 @@ from ..const import (
     CONF_BACKUP_TIMEOUT,
     CONF_DESTINATION_ID,
     CONF_DESTINATIONS,
+    CONF_PROVIDER_DATA,
+    CONF_UPLOAD_TIMEOUT,
     DATA_DESTINATIONS,
     DEFAULT_BACKUP_TIMEOUT,
+    DEFAULT_UPLOAD_TIMEOUT,
     DOMAIN,
 )
 from .errors import DestinationConfigError, DestinationNotFoundError
 from .manager import DestinationManager
 from .models import DestinationConfig
 from .providers import enregistrer_les_fournisseurs
-from .schema import DESTINATIONS_SCHEMA
+from .schema import DESTINATIONS_SCHEMA, donnees_de_fournisseur
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @callback
@@ -50,18 +57,48 @@ def async_entree_auto_backup(hass: HomeAssistant) -> ConfigEntry | None:
 
 
 @callback
+def delai_de_televersement(entry: ConfigEntry) -> float:
+    """Délai maximum d'un téléversement, en secondes, tel que l'entrée le règle.
+
+    Point de lecture **unique** de l'option `upload_timeout`, partagé par le
+    coordinateur — qui en fait le budget global d'un téléversement — et par les
+    fournisseurs, qui en dérivent le garde-fou d'une requête isolée. Sans ce
+    partage, un utilisateur relevant le réglage pour une connexion lente verrait
+    une requête unique expirer avant que son budget global ne soit épuisé.
+
+    L'option est relue à chaque appel : le réglage s'applique donc sans
+    redémarrage. Une valeur inexploitable ou nulle retombe sur la valeur par
+    défaut plutôt que de priver le téléversement de toute borne.
+    """
+    valeur = entry.options.get(CONF_UPLOAD_TIMEOUT, DEFAULT_UPLOAD_TIMEOUT)
+    try:
+        delai = float(valeur)
+    except (TypeError, ValueError) as err:
+        _LOGGER.warning(
+            "Option « %s » inexploitable (%s) : délai par défaut de %s s retenu",
+            CONF_UPLOAD_TIMEOUT,
+            err,
+            DEFAULT_UPLOAD_TIMEOUT,
+        )
+        return float(DEFAULT_UPLOAD_TIMEOUT)
+    return delai if delai > 0 else float(DEFAULT_UPLOAD_TIMEOUT)
+
+
+@callback
 def async_setup_destinations(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> DestinationManager:
     """Charge les destinations de l'entrée et les expose dans `hass.data`.
 
+    C'est **le point unique d'enregistrement des fournisseurs livrés** (Dropbox
+    et Google Drive, issues #10 et #13) : le registre est peuplé avant toute
+    lecture des destinations persistées, avant que la moindre destination ne
+    soit instanciée et avant que le flux d'options ne propose un choix. L'appel
+    est idempotent, l'entrée pouvant être rechargée autant de fois que
+    nécessaire.
+
     Le gestionnaire obtenu suit les options de l'entrée : il se recharge quand
     elles changent et disparaît de `hass.data` au déchargement de l'entrée.
-
-    C'est aussi **le point unique d'enregistrement des fournisseurs livrés**
-    (issue #10) : le registre est peuplé avant que la moindre destination ne soit
-    instanciée ou que le flux d'options ne propose un choix. L'appel est
-    idempotent, l'entrée pouvant être rechargée autant de fois que nécessaire.
     """
     enregistrer_les_fournisseurs()
 
@@ -186,6 +223,75 @@ def async_persist_token(
         raise DestinationNotFoundError(
             f"destination inconnue : « {destination_id} », jeton non persisté"
         )
+
+    hass.config_entries.async_update_entry(
+        entry,
+        options={**_options_completees(entry), CONF_DESTINATIONS: mises_a_jour},
+    )
+
+
+@callback
+def async_persist_provider_data(
+    hass: HomeAssistant, destination_id: str, donnees: Mapping[str, Any]
+) -> None:
+    """Fusionne des données de fournisseur dans celles d'une destination.
+
+    **Fusion et non remplacement** : un fournisseur qui mémorise l'identifiant de
+    son dossier cible (issue #14) ne doit pas effacer l'adresse du compte
+    autorisé écrite par le flux d'ajout (issues #10 et #13), et réciproquement.
+    Les autres destinations ne sont pas touchées, exactement comme pour le jeton.
+
+    La signature est celle d'`async_persist_token()` — l'entrée est retrouvée
+    ici, et non passée par l'appelant : un fournisseur n'a que `hass` et sa
+    configuration sous la main au moment où il écrit.
+
+    Le résultat est validé par `donnees_de_fournisseur()` avant d'être écrit :
+    les bornes du champ (nombre de clés, longueur et type des valeurs) valent
+    aussi pour une écriture venue d'un fournisseur.
+
+    Rien n'est écrit si les données sont vides ou déjà présentes à l'identique :
+    une écriture d'options recharge les destinations, il n'y a pas lieu de le
+    faire à chaque téléversement. Lève `DestinationNotFoundError` si la
+    destination n'existe plus — elle a pu être supprimée pendant l'envoi.
+    """
+    if not donnees:
+        return
+
+    entry = async_entree_auto_backup(hass)
+    if entry is None:
+        raise DestinationNotFoundError(
+            "aucune entrée de configuration Auto Backup : données de fournisseur "
+            "non persistées"
+        )
+
+    destinations = async_destination_configs(entry)
+    trouvee = False
+    inchangee = False
+    mises_a_jour: list[dict[str, Any]] = []
+    for brute in destinations:
+        copie = dict(brute)
+        if copie.get(CONF_DESTINATION_ID) == destination_id:
+            trouvee = True
+            actuelles = copie.get(CONF_PROVIDER_DATA)
+            actuelles = dict(actuelles) if isinstance(actuelles, Mapping) else {}
+            fusionnees = {**actuelles, **donnees}
+            inchangee = fusionnees == actuelles
+            try:
+                copie[CONF_PROVIDER_DATA] = donnees_de_fournisseur(fusionnees)
+            except (vol.Invalid, TypeError, ValueError) as err:
+                raise DestinationConfigError(
+                    f"données de fournisseur invalides pour « {destination_id} » : "
+                    f"{err}"
+                ) from err
+        mises_a_jour.append(copie)
+
+    if not trouvee:
+        raise DestinationNotFoundError(
+            f"destination inconnue : « {destination_id} », données de fournisseur "
+            "non persistées"
+        )
+    if inchangee:
+        return
 
     hass.config_entries.async_update_entry(
         entry,

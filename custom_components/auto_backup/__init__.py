@@ -52,10 +52,14 @@ from .handlers import SupervisorHandler, BackupHandler
 from .helpers import is_backup
 from .manager import AutoBackup
 from .destinations import async_setup_destinations
+from .destinations.notifications import async_setup_notifications  # fork (#17)
 from .destinations.upload import (  # téléversement distant (fork)
     async_prepare_upload,
     async_release_upload,
     async_setup_upload,
+)
+from .destinations.retention import (  # purge distante (fork)
+    async_setup_remote_purge,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -145,6 +149,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DATA_AUTO_BACKUP] = auto_backup
     async_setup_destinations(hass, entry)  # destinations distantes (fork)
     async_setup_upload(hass, entry)  # téléversement après création (fork)
+    async_setup_notifications(hass, entry)  # notifications d'échec (fork)
     entry.async_on_unload(entry.add_update_listener(auto_backup.update_listener))
 
     await auto_backup.load_snapshots_expiry()
@@ -188,6 +193,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     for service, schema in MAP_SERVICES.items():
         hass.services.async_register(DOMAIN, service, async_service_handler, schema)
+
+    # Fork (#9) : la purge distante s'ajoute au service `purge` sans toucher au
+    # gestionnaire upstream ci-dessus. La ré-inscription, faite ici après la
+    # boucle, enveloppe celui-ci : la purge locale s'exécute d'abord, à
+    # l'identique, puis chaque destination distante est purgée. Le service est
+    # retiré par `async_unload_entry`, upstream et inchangé.
+    await async_setup_remote_purge(hass, entry, async_service_handler)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
