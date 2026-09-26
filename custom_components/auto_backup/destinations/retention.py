@@ -12,12 +12,19 @@ Deux garanties structurent tout le module :
    n'est candidate à la purge que si elle est inscrite au registre persistant du
    fork (`auto_backup.remote_backups`, alimenté à chaque
    `auto_backup.upload_successful`) **ou** si elle porte le marqueur
-   `auto_backup` dans ses métadonnées — marqueur que les fournisseurs réels
-   posent au téléversement (issues #12 et #15). Tout le reste du dossier distant
-   — un fichier que l'utilisateur y a déposé lui-même, une sauvegarde d'un autre
+   `auto_backup` dans ses métadonnées. Tout le reste du dossier distant — un
+   fichier que l'utilisateur y a déposé lui-même, une sauvegarde d'un autre
    outil — est invisible pour la purge, quelles que soient sa date et sa taille.
+
    Les deux voies se complètent : le registre survit à un dossier partagé par
-   plusieurs instances Home Assistant, le marqueur survit à la perte du registre.
+   plusieurs instances Home Assistant, le marqueur survit à la perte du
+   registre. Le marqueur n'est cependant une preuve **portée par le fichier**
+   que chez un fournisseur capable de la stocker : Google Drive l'attache en
+   `appProperties` (#14), alors que l'API Dropbox v2 n'offre aucune métadonnée
+   libre sur un fichier. Le fournisseur Dropbox reconstitue donc la provenance
+   au listage (#12), depuis ce registre puis depuis sa convention de nommage, et
+   ne pose le marqueur que sur ce qu'il a ainsi reconnu : `entrees_du_registre()`
+   est le point d'entrée prévu pour cela.
 
 2. **Un échec ne fait jamais dérailler le cycle.** Une destination en attente de
    ré-autorisation est sautée sans appel réseau (cf. `docs/adr/0001`), un listage
@@ -102,11 +109,18 @@ DATE_INCONNUE = datetime.min.replace(tzinfo=UTC)
 
 
 def marqueur_auto_backup() -> dict[str, Any]:
-    """Métadonnées à joindre à un téléversement pour marquer sa provenance.
+    """Métadonnées qui marquent la provenance d'une sauvegarde distante.
 
-    Les fournisseurs réels (#12, #15) la passent à `async_upload()` : une
-    sauvegarde ainsi marquée reste purgeable même si le registre du fork a été
-    perdu (réinstallation, `.storage` effacé).
+    Deux usages, selon ce que le fournisseur sait faire :
+
+    - **au dépôt**, chez un fournisseur qui persiste des métadonnées libres —
+      Google Drive et ses `appProperties` (#14) : la sauvegarde reste alors
+      purgeable même si le registre du fork a été perdu (réinstallation,
+      `.storage` effacé), la preuve voyageant avec le fichier ;
+    - **au listage**, chez un fournisseur qui n'en persiste aucune — Dropbox,
+      dont l'API v2 n'a pas de champ libre (#12) : le marqueur y atteste la
+      provenance que le fournisseur vient d'établir autrement (registre, puis
+      convention de nommage), et ne survit pas au-delà du cycle de purge.
     """
     return {CLE_MARQUEUR: True}
 
@@ -280,6 +294,29 @@ class RegistreSauvegardesDistantes:
             del self._entrees[destination_id]
         await self._async_save()
         return True
+
+
+@callback
+def entrees_du_registre(
+    hass: HomeAssistant, destination_id: str
+) -> list[EntreeRegistre]:
+    """Entrées du registre persistant pour cette destination, vide si absent.
+
+    C'est la porte d'entrée des **fournisseurs** dans le registre : celui qui ne
+    peut pas attacher le marqueur `auto_backup` au fichier distant — Dropbox, à
+    défaut de métadonnée libre — s'en sert pour reconstituer la provenance au
+    listage (#12), là où le coordinateur de purge, lui, interroge directement le
+    registre qu'il détient.
+
+    Le registre n'existe que le temps d'une entrée de configuration chargée
+    (`async_setup_remote_purge()` l'y range, le déchargement l'en retire) : la
+    liste est vide s'il n'est pas là, et le fournisseur retombe alors sur ses
+    autres indices de provenance plutôt que d'échouer.
+    """
+    registre = hass.data.get(DATA_REMOTE_BACKUPS)
+    if not isinstance(registre, RegistreSauvegardesDistantes):
+        return []
+    return registre.entrees(destination_id)
 
 
 @dataclass(frozen=True, slots=True)
