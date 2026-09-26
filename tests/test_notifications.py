@@ -33,6 +33,7 @@ from custom_components.auto_backup.const import (
     ATTR_DESTINATION,
     ATTR_DESTINATION_NAME,
     ATTR_ERROR,
+    ATTR_REMOTE_ID,
     ATTR_SLUG,
     CONF_AUTO_PURGE,
     CONF_BACKUP_TIMEOUT,
@@ -48,6 +49,7 @@ from custom_components.auto_backup.const import (
 )
 from custom_components.auto_backup.destinations import (
     DestinationConfig,
+    DestinationError,
     async_effacer_la_reauthentification,
     async_signaler_la_reauthentification,
     identifiant_du_probleme,
@@ -851,6 +853,56 @@ async def test_un_nom_sans_espace_reste_en_clair_dans_la_notification_de_reauth(
     assert DESTINATION_SANS_ESPACE in notification["title"]
     assert DESTINATION_SANS_ESPACE in notification["message"]
     assert VALEUR_MASQUEE not in f"{notification['title']}\n{notification['message']}"
+
+
+### Frontière avec la purge distante (issue #9) ###
+
+
+async def test_un_listage_de_purge_en_echec_ne_notifie_aucun_echec_d_envoi(
+    hass: HomeAssistant,
+    entree_notifiante: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Un échec de purge n'est pas un échec de téléversement.
+
+    Les deux fournisseurs livrés lèvent une `DestinationError` explicite au
+    listage, encore différé (#12 pour Dropbox, #15 pour Google Drive). La purge
+    distante (#9), déclenchée ici par le succès du téléversement, la journalise
+    et passe à la destination suivante : elle n'émet jamais
+    `auto_backup.upload_failed`, et ce module n'écoute que cet événement. Une
+    sauvegarde **réussie** ne doit donc rien afficher, et surtout pas faire
+    grimper un compteur d'échecs consécutifs qu'aucun succès ne remettrait à
+    zéro.
+    """
+    destination = hass.data[DATA_DESTINATIONS].async_get(DESTINATION)
+    destination.erreur_a_lever = DestinationError(
+        "le listage des sauvegardes de cette destination n'est pas encore écrit"
+    )
+
+    with caplog.at_level(logging.ERROR):
+        hass.bus.async_fire(
+            EVENT_UPLOAD_SUCCESSFUL,
+            {
+                ATTR_NAME: NOM_DE_LA_SAUVEGARDE,
+                ATTR_SLUG: SLUG,
+                ATTR_DESTINATION: DESTINATION,
+                ATTR_DESTINATION_NAME: NOM_DE_LA_DESTINATION,
+                ATTR_REMOTE_ID: "identifiant-distant-factice",
+            },
+        )
+        await hass.async_block_till_done()
+
+    # La purge a bien été tentée : le test éprouve le vrai chemin d'échec.
+    assert destination.listages == 1
+    assert "listage impossible" in caplog.text
+
+    assert _notification_d_echec(hass) is None
+    assert hass.data[DATA_NOTIFICATIONS].echecs_consecutifs(DESTINATION) == 0
+    assert not [
+        identifiant
+        for identifiant in _notifications(hass)
+        if identifiant.startswith("auto_backup_")
+    ]
 
 
 ### Cycle de vie ###

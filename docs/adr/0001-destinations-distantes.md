@@ -1216,12 +1216,26 @@ de l'entrée (`async_setup_notifications()`, appelé comme `async_setup_upload()
 coordinateur de téléversement n'appelle rien : il émet, comme avant. Trois conséquences :
 
 - l'affichage se branche et se débranche avec l'entrée, sans que la mécanique d'envoi en sache
-  quoi que ce soit — la rétention distante (#9) ou un futur émetteur seront notifiés du seul
-  fait d'émettre les mêmes événements ;
+  quoi que ce soit — un futur émetteur de `auto_backup.upload_failed` serait affiché du seul fait
+  de l'émettre ;
 - les événements restent le contrat public : une automatisation de l'utilisateur les écoute
   exactement comme le fork le fait ;
 - l'événement `upload_failed` n'étant émis qu'une fois les tentatives épuisées, une notification
   décrit toujours un échec **définitif**, jamais une tentative.
+
+**La purge distante n'est pas un émetteur, et ne doit pas l'être.** `destinations/retention.py`
+(#9) *consomme* `auto_backup.upload_successful` pour alimenter son registre et *émet*
+`auto_backup.remote_purge` ; elle n'émet jamais `auto_backup.upload_failed`. Un échec de purge
+n'atteint donc pas ce module, et c'est voulu : les deux `DestinationError` du listage encore
+différé — Dropbox (#12) et Google Drive (#15) — sont journalisées en une ligne par le
+coordinateur de purge, qui passe à la destination suivante. Les confondre avec un échec d'envoi
+afficherait une notification « échec d'envoi » à chaque sauvegarde **réussie** d'une destination
+porteuse d'une rétention, et ferait grimper un compteur d'échecs consécutifs qu'aucun succès ne
+remettrait à zéro. Le cas est d'ailleurs distinct de celui d'une destination en attente de
+ré-authentification, que la purge saute **avant** tout appel réseau, sur un avertissement : là,
+c'est la notification de ré-authentification qui parle, et elle seule. Quand #12 et #15 auront
+écrit le listage, un échec de purge qui mérite d'être affiché demandera son propre signalement —
+un événement à lui, pas un détournement de `upload_failed`.
 
 ### Un identifiant de notification par destination, pas par sauvegarde
 
@@ -1333,8 +1347,9 @@ subsistent, chacun avec son test :
   et c'est la portée réelle de la réserve — les **codes d'erreur techniques des fournisseurs**,
   qui atteignent couramment cette longueur : `storageQuotaExceeded`, `userRateLimitExceeded`,
   `expired_access_token`, `too_many_write_operations`. C'est assumé : les fournisseurs du fork
-  traduisent la cause principale en français et n'ajoutent le code brut qu'en appendice
-  (« (motif : …) »), si bien que la cause reste diagnosticable une fois le code masqué. La réserve
+  traduisent la cause principale en français et ne rejettent le code brut qu'en fin de message —
+  « (motif : …) » chez Google Drive, l'`error_summary` entre parenthèses ou après un deux-points
+  chez Dropbox —, si bien que la cause reste diagnosticable une fois le code masqué. La réserve
   ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
 
 **Ce que l'issue #16 doit faire à sa fusion.** La branche `issue-16-entites-destinations` n'est

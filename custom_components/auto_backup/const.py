@@ -198,9 +198,11 @@ ATTR_REMOTE_IDS = "remote_ids"
 # n'a donc à se déclencher que si aucun ne l'a fait.
 #
 # Volontairement **pas** une option de l'interface : la purge n'a aucune étape
-# de réglages (celle du fork ne règle que le téléversement, cf.
-# CONF_UPLOAD_TIMEOUT), et en ajouter une relève de #8/#17. La constante n'est
-# donc pas inscrite dans CLES_DU_FORK : rien ne la persiste dans les options.
+# de réglages. Les deux que le fork ajoute au menu d'options portent sur autre
+# chose — le téléversement (#8, CONF_UPLOAD_TIMEOUT) et les notifications (#17,
+# CONF_NOTIFY_ON_FAILURE) —, et en ouvrir une pour la purge demanderait une
+# issue à elle. La constante n'est donc pas inscrite dans CLES_DU_FORK : rien ne
+# la persiste dans les options.
 DEFAULT_PURGE_TIMEOUT = 300
 
 ### NOTIFICATIONS PERSISTANTES (issue #17) ###

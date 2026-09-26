@@ -97,6 +97,7 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Traductions françaises et anglaises de l'étape « Réglages des notifications », de l'étape de confirmation de changement de compte et de l'abandon `changement_de_compte_annule`. Refs #17
 - Tests des notifications (`tests/test_notifications.py`) : création, mise à jour avec compteur, retrait automatique, notification par destination, cas de ré-authentification (problème et notification, disparition conjointe à la ré-autorisation et à la suppression), absence de doublon pour une erreur d'authentification, option désactivée, réglage depuis l'interface, masquage des secrets et cycle de vie de l'entrée. Refs #17
 - Tests du changement de compte dans `tests/test_destinations_flux_options.py` et `tests/test_provider_google_drive.py` : confirmation, refus sans écriture, compte identique, donnée enrichie, fournisseur muet, première donnée de compte et destination disparue pendant la confirmation. Refs #17
+- Test de frontière avec la purge distante : un listage de purge en échec — ce que lèvent les deux fournisseurs livrés tant que #12 et #15 n'ont pas écrit le listage — n'affiche aucune notification d'échec d'envoi et ne fait grimper aucun compteur, le module n'écoutant que `auto_backup.upload_failed`, que la purge n'émet jamais. Refs #17
 
 ### Modifié
 

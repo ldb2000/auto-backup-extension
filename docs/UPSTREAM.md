@@ -95,7 +95,12 @@ caractère près.
   `DATA_REMOTE_BACKUPS`, `DATA_REMOTE_PURGE`, `ATTR_CREATED_AT`, `ATTR_REMOTE_IDS` et
   `DEFAULT_PURGE_TIMEOUT` — ce dernier borne les appels réseau de la purge et n'est
   **pas** inscrit dans `CLES_DU_FORK` : ce n'est pas une option d'entrée, rien ne le persiste.
-  L'ordre du fichier est donc : #6, #8, #7, #10/#13, puis #9.
+  L'issue #17 ferme le bloc avec les notifications persistantes : l'import de type
+  `GestionnaireDeNotifications`, `DATA_NOTIFICATIONS`, `NOTIFICATION_UPLOAD_PREFIX`,
+  `NOTIFICATION_REAUTH_PREFIX`, `CONF_NOTIFY_ON_FAILURE`, `DEFAULT_NOTIFY_ON_FAILURE`, et la
+  seule réécriture de `CLES_DU_FORK` du fichier — `CLES_DU_FORK = (*CLES_DU_FORK,
+  CONF_NOTIFY_ON_FAILURE)`, faite sur place plutôt qu'en remontant modifier la définition de #8.
+  L'ordre du fichier est donc : #6, #8, #7, #10/#13, #9, puis #17.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de

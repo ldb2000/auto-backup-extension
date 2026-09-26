@@ -50,7 +50,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
-| `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés. |
+| `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés, frontière avec la purge distante. |
 | `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, noms du fork exemptés du dernier filet (`masquer_un_nom()`), réserves assumées, troncature. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès, et refus typé des crochets encore à écrire (#12). |
 | `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
@@ -317,7 +317,7 @@ hass.bus.async_fire(
 await hass.async_block_till_done()
 ```
 
-Quatre points à connaître :
+Cinq points à connaître :
 
 1. **Lire les notifications affichées.** Home Assistant ne les expose qu'au travers de son API
    WebSocket ; le stock lui-même est un dictionnaire de `hass.data`, que les tests lisent par
@@ -344,6 +344,17 @@ Quatre points à connaître :
    avec deux tests de non-régression sur des noms sans espace
    (« Dropbox-Compte-Familial », « sauvegarde-complete-2026-09-26 »), que le dernier filet
    réduisait à `***`.
+
+5. **Un échec de purge n'est pas un échec d'envoi.** Le fichier de tests contient un test de
+   **frontière** avec la rétention distante (#9) : le listage de la destination factice est mis
+   en échec par une `DestinationError` — exactement ce que lèvent les deux fournisseurs livrés
+   tant que #12 et #15 n'ont pas écrit le listage — puis un `auto_backup.upload_successful`
+   porteur d'un `remote_id` déclenche la purge automatique. Le test vérifie que le listage a bien
+   été tenté, que l'erreur est journalisée, et qu'**aucune** notification n'apparaît : ce module
+   n'écoute que `auto_backup.upload_failed`, que la purge n'émet jamais. Le `remote_id` est
+   nécessaire — sans lui, la rétention ignore l'événement et la purge ne partirait pas ; c'est
+   pourquoi l'aide `_succes()`, qui n'en porte pas, ne déclenche aucune purge dans les autres
+   tests.
 
 ## Tester un changement de compte à la ré-autorisation
 
