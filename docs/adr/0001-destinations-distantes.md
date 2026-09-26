@@ -1688,7 +1688,7 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   délègue à `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` de `destinations/masquage.py` ;
   aucun motif ne reste dans `entities.py`.
 
-## Conséquences## Conséquences
+## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
   l'intégralité des règles de lint et au formatage automatique, contrairement au code upstream
