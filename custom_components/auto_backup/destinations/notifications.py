@@ -19,9 +19,9 @@ Trois règles gouvernent l'ensemble :
    seconde notification. Les deux disparaissent ensemble, à la ré-autorisation
    comme à la suppression de la destination.
 3. **Aucun secret dans une notification.** Tout ce qui vient d'un fournisseur —
-   la cause d'un échec, au premier chef — traverse `masquer_les_secrets()` avant
-   d'être affiché : jeton porteur, valeur de `access_token` / `refresh_token` et
-   chemins de fichiers absolus sont remplacés par `***`.
+   la cause d'un échec, au premier chef — traverse `masquer()` avant d'être
+   affiché. Le masquage ne vit pas ici : `destinations/masquage.py` est le point
+   unique du fork, et son en-tête décrit les passes comme les réserves assumées.
 
 L'option `notify_on_failure` (vraie par défaut, réglable dans les options de
 l'intégration) coupe les notifications persistantes, et elles seules : les
@@ -35,7 +35,6 @@ problèmes et aux étapes du flux d'options.
 from __future__ import annotations
 
 import logging
-import re
 
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
@@ -58,48 +57,11 @@ from ..const import (
     NOTIFICATION_UPLOAD_PREFIX,
 )
 from .errors import UnknownProviderError
-from .models import VALEUR_MASQUEE, DestinationConfig
+from .masquage import masquer
+from .models import DestinationConfig
 from .registry import provider_label
 
 _LOGGER = logging.getLogger(__name__)
-
-### Masquage défensif ###
-
-# Jeton porteur d'un en-tête `Authorization`, tel qu'un fournisseur peut le
-# recopier dans son message d'erreur.
-_MOTIF_PORTEUR = re.compile(r"\bBearer\s+\S+", re.IGNORECASE)
-
-# `access_token=...`, `"refresh_token": "..."`, `client_secret=...`, `api_key=...` :
-# la clé est conservée (elle aide à comprendre ce qui a échoué), la valeur non.
-_MOTIF_SECRET = re.compile(
-    r"\b([\w.-]*(?:token|secret|password|api[_-]?key)[\w.-]*)[\"']?\s*[:=]\s*"
-    r"[\"']?[^\s,;\"'}\])]+",
-    re.IGNORECASE,
-)
-
-# Chemins de fichiers absolus : `/config/...` d'une instance Home Assistant, mais
-# aussi les autres racines usuelles d'un conteneur ou d'un Supervisor. Le
-# préfixe négatif évite de mutiler le chemin d'une URL (`https://hôte/config`),
-# qui n'est pas un chemin local.
-_MOTIF_CHEMIN = re.compile(
-    r"(?<![\w.~/-])/(?:config|backup|backups|share|media|ssl|addons|addon_configs"
-    r"|data|root|home|tmp|var|usr|etc|opt|srv|mnt|Users)(?:/[^\s,;\"'()<>»]*)*"
-)
-
-
-def masquer_les_secrets(texte: str) -> str:
-    """Remplace par `***` ce qu'une notification ne doit jamais montrer.
-
-    Le masquage est **défensif** : il porte sur le message d'un fournisseur, que
-    le fork ne contrôle pas. Les messages du fork, eux, ne citent déjà aucun
-    secret (cf. `docs/adr/0001-destinations-distantes.md`). Mieux vaut masquer
-    un mot de trop qu'afficher un jeton dans une notification que l'utilisateur
-    recopiera dans un ticket d'assistance.
-    """
-    masque = _MOTIF_PORTEUR.sub(f"Bearer {VALEUR_MASQUEE}", texte)
-    masque = _MOTIF_SECRET.sub(rf"\1={VALEUR_MASQUEE}", masque)
-    return _MOTIF_CHEMIN.sub(VALEUR_MASQUEE, masque)
-
 
 ### Identifiants de notification ###
 
@@ -225,13 +187,13 @@ class GestionnaireDeNotifications:
             )
             return
 
-        destination = masquer_les_secrets(
+        destination = masquer(
             str(event.data.get(ATTR_DESTINATION_NAME) or destination_id)
         )
-        sauvegarde = masquer_les_secrets(
+        sauvegarde = masquer(
             str(event.data.get(ATTR_NAME) or event.data.get(ATTR_SLUG) or "sans nom")
         )
-        cause = masquer_les_secrets(str(event.data.get(ATTR_ERROR) or "cause inconnue"))
+        cause = masquer(str(event.data.get(ATTR_ERROR) or "cause inconnue"))
 
         persistent_notification.async_create(
             self._hass,
@@ -345,7 +307,7 @@ def async_notifier_la_reauthentification(
     if not gestionnaire.notifications_actives:
         return
 
-    destination = masquer_les_secrets(config.name)
+    destination = masquer(config.name)
     persistent_notification.async_create(
         hass,
         MESSAGE_REAUTH.format(

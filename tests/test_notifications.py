@@ -52,10 +52,10 @@ from custom_components.auto_backup.destinations import (
     async_signaler_la_reauthentification,
     identifiant_du_probleme,
 )
+from custom_components.auto_backup.destinations.models import VALEUR_MASQUEE
 from custom_components.auto_backup.destinations.notifications import (
     identifiant_de_notification_d_echec,
     identifiant_de_notification_de_reauthentification,
-    masquer_les_secrets,
 )
 from destinations_factices import PROVIDER_FACTICE, config_factice, config_oauth_factice
 
@@ -705,14 +705,20 @@ async def test_l_option_desactivee_laisse_le_probleme_home_assistant(
 
 ### Masquage des secrets ###
 
-JETON_FACTICE = "acces-factice-1"
-RAFRAICHISSEMENT_FACTICE = "rafraichissement-factice-1"
+# Le masquage lui-même est éprouvé vecteur par vecteur dans
+# `tests/test_masquage.py` : il est partagé par tout le fork. Ne reste ici que
+# ce qui est propre aux notifications — la traversée effective du masquage par
+# chacun des trois champs affichés.
+
+JETON_FACTICE = "sl.Bu1FaCtIcE-jamais-emis-0123456789"
+RAFRAICHISSEMENT_FACTICE = "1//0gFaCtIcE-jamais-emis-0123456789"
 CHEMIN_FACTICE = "/config/backups/abcd1234.tar"
+COURRIEL_FACTICE = "compte.factice@example.invalid"
 
 CAUSE_BAVARDE = (
-    f"le fournisseur a refusé l'en-tête « Bearer {JETON_FACTICE} » "
-    f'(refresh_token={RAFRAICHISSEMENT_FACTICE}, "access_token": "{JETON_FACTICE}") '
-    f"en lisant {CHEMIN_FACTICE}"
+    f"le fournisseur a refusé l'en-tête « Bearer {JETON_FACTICE} » pour "
+    f"{COURRIEL_FACTICE} (refresh_token={RAFRAICHISSEMENT_FACTICE}, "
+    f'"access_token": "{JETON_FACTICE}") en lisant {CHEMIN_FACTICE}'
 )
 
 
@@ -728,45 +734,59 @@ async def test_aucun_jeton_ni_chemin_dans_une_notification(
     assert JETON_FACTICE not in affiche
     assert RAFRAICHISSEMENT_FACTICE not in affiche
     assert CHEMIN_FACTICE not in affiche
-    assert "***" in affiche
+    assert COURRIEL_FACTICE not in affiche
+    assert VALEUR_MASQUEE in affiche
     # La cause reste compréhensible : seules les valeurs sont masquées.
     assert "le fournisseur a refusé l'en-tête" in affiche
 
 
-@pytest.mark.parametrize(
-    ("brut", "attendu"),
-    [
-        ("Bearer acces-factice-1", "Bearer ***"),
-        ("bearer acces-factice-1", "Bearer ***"),
-        ("access_token=acces-factice-1", "access_token=***"),
-        ('"refresh_token": "rafraichissement-factice-1"', "refresh_token=***"),
-        ("client_secret = secret-application-factice", "client_secret=***"),
-        ("api_key: cle-factice", "api_key=***"),
-        ("fichier /config/backups/ha.tar illisible", "fichier *** illisible"),
-        ("fichier /backup/abcd1234.tar absent", "fichier *** absent"),
-        ("quota dépassé", "quota dépassé"),
-        ("délai de téléversement dépassé (1800 s)", "délai de téléversement dépassé"),
-    ],
-)
-def test_le_masquage_couvre_les_formes_usuelles(brut: str, attendu: str) -> None:
-    """Le masquage garde la clé, jamais la valeur, et laisse le reste lisible."""
-    assert attendu in masquer_les_secrets(brut)
+async def test_les_trois_champs_affiches_traversent_le_masquage(
+    hass: HomeAssistant, entree_notifiante: MockConfigEntry
+) -> None:
+    """Le nom de la destination et celui de la sauvegarde sont masqués aussi.
 
-
-def test_le_masquage_epargne_les_url_des_fournisseurs() -> None:
-    """Une URL n'est pas un chemin local : elle reste lisible dans la cause."""
-    masque = masquer_les_secrets(
-        "appel refusé par https://fournisseur.test/config/v3/about"
+    La cause n'est pas le seul texte non maîtrisé : le nom d'une destination est
+    saisi par l'utilisateur, et celui d'une sauvegarde peut venir d'une
+    automatisation. Un test par champ, pour qu'aucun n'échappe au masquage lors
+    d'un remaniement.
+    """
+    await _echec(
+        hass,
+        nom=f"nuit {JETON_FACTICE}",
+        destination_nom=f"Dropbox {CHEMIN_FACTICE}",
+        cause=f"jeton {RAFRAICHISSEMENT_FACTICE} révoqué",
     )
 
-    assert masque == "appel refusé par https://fournisseur.test/config/v3/about"
+    notification = _notification_d_echec(hass)
+    assert notification is not None
+    affiche = f"{notification['title']}\n{notification['message']}"
+    assert CHEMIN_FACTICE not in affiche
+    assert JETON_FACTICE not in affiche
+    assert RAFRAICHISSEMENT_FACTICE not in affiche
+    assert "Dropbox ***" in affiche
+    assert "nuit ***" in affiche
+    assert "jeton ***" in affiche
 
 
-def test_le_masquage_protege_aussi_le_nom_d_une_destination(
-    hass: HomeAssistant,
+async def test_le_nom_d_une_destination_a_reautoriser_est_masque(
+    hass: HomeAssistant, entree_oauth: MockConfigEntry
 ) -> None:
-    """Le masquage est défensif : il porte sur tout ce qui est affiché."""
-    assert masquer_les_secrets("Dropbox /config/secret") == "Dropbox ***"
+    """La notification de ré-authentification masque elle aussi ce qu'elle nomme."""
+    config = DestinationConfig.from_dict(
+        config_oauth_factice(
+            destination_id="destination_bavarde",
+            name=f"Compte {COURRIEL_FACTICE}",
+        )
+    )
+
+    async_signaler_la_reauthentification(hass, config)
+    await hass.async_block_till_done()
+
+    notification = _notification_de_reauth(hass, "destination_bavarde")
+    assert notification is not None
+    affiche = f"{notification['title']}\n{notification['message']}"
+    assert COURRIEL_FACTICE not in affiche
+    assert f"Compte {VALEUR_MASQUEE}" in affiche
 
 
 ### Cycle de vie ###

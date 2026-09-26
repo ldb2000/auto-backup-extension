@@ -8,7 +8,9 @@ gestionnaire qui charge les destinations d'une entrée de configuration, et —
 depuis l'issue #7 — l'autorisation OAuth2 (`oauth`), le signalement des
 destinations à ré-autoriser (`reauth`) et les étapes d'interface qui étendent
 le flux d'options upstream (`flow`). L'issue #17 y ajoute les notifications
-persistantes d'échec et de ré-authentification (`notifications`).
+persistantes d'échec et de ré-authentification (`notifications`) et le point
+unique de masquage des secrets du fork (`masquage`), que doit appeler tout code
+affichant un texte venu d'un fournisseur.
 
 Les fournisseurs concrets vivent dans le sous-paquet `providers` — Google Drive
 depuis l'issue #13 — et sont chargés par `enregistrer_les_fournisseurs()` au
@@ -39,6 +41,7 @@ from .errors import (
     UnknownProviderError,
 )
 from .manager import DestinationManager
+from .masquage import masquer
 from .models import VALEUR_MASQUEE, DestinationConfig, RemoteBackup
 from .notifications import (
     GestionnaireDeNotifications,
@@ -47,7 +50,6 @@ from .notifications import (
     async_setup_notifications,
     identifiant_de_notification_d_echec,
     identifiant_de_notification_de_reauthentification,
-    masquer_les_secrets,
 )
 from .oauth import (
     DestinationOAuth2Implementation,
@@ -121,7 +123,7 @@ __all__ = [
     "jeton_persiste",
     "jeton_valide",
     "list_providers",
-    "masquer_les_secrets",
+    "masquer",
     "normaliser_le_jeton",
     "options_avec_destinations",
     "options_avec_reglage",
