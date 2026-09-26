@@ -32,11 +32,11 @@ sa propre rétention aux sauvegardes qu'elle a reçues (voir « Rétention dista
   distante arrivent avec l'issue #12. Tant qu'ils manquent, la rétention distante ne peut pas
   s'appliquer à une destination Dropbox : elle est configurable, mais aucune sauvegarde n'y est
   encore supprimée.
-- **Google Drive** : la **connexion du compte et le téléversement sont disponibles** — voir le
-  guide [Connecter Google Drive](docs/destinations/google-drive.md) ; le listage et la suppression
-  chez Google arrivent avec l'issue #15. Tant qu'ils manquent, la rétention distante ne peut pas
-  s'appliquer à une destination Google Drive : elle est configurable, mais aucune sauvegarde n'y
-  est encore supprimée.
+- **Google Drive** : **tout est disponible** — connexion du compte, téléversement, et
+  **rétention distante appliquée pour de bon** : les sauvegardes expirées sont supprimées du Drive.
+  Voir le guide [Connecter Google Drive](docs/destinations/google-drive.md), et en particulier
+  « Rétention : ce qui est supprimé, et comment » — **la suppression est définitive, elle ne passe
+  pas par la corbeille de Drive**.
 
 La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
@@ -108,11 +108,12 @@ trop anciennes partent d'abord, puis, s'il en reste plus que le nombre autorisé
 anciennes du lot restant sont supprimées jusqu'à revenir sous la limite. Une destination sans
 aucune rétention n'est jamais purgée.
 
-> **Aucun fournisseur ne sait encore supprimer.** La mécanique décrite ci-dessous est en place,
-> mais supprimer suppose de lister d'abord, et aucun fournisseur livré ne le fait : la purge
-> d'une destination Dropbox (issue #12) comme d'une destination Google Drive (issue #15) s'arrête
-> au listage, avec un message de journal explicite qui nomme la destination. La rétention que
-> vous réglez aujourd'hui est enregistrée et s'appliquera sans rien reconfigurer.
+> **Google Drive supprime réellement ; Dropbox pas encore.** La purge d'une destination Google
+> Drive liste le dossier distant et supprime les sauvegardes expirées — **définitivement, sans
+> passer par la corbeille de Drive** (voir [le guide](docs/destinations/google-drive.md)). La purge
+> d'une destination Dropbox s'arrête encore au listage (issue #12), avec un message de journal
+> explicite qui nomme la destination ; la rétention que vous y réglez aujourd'hui est enregistrée
+> et s'appliquera sans rien reconfigurer.
 
 **Rien de ce que vous avez déposé vous-même n'est supprimé.** Auto Backup tient un registre
 persistant des sauvegardes qu'il a lui-même téléversées (dans le stockage de Home Assistant,
