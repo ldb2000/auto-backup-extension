@@ -212,7 +212,7 @@ LONGUEUR_MAX_SLUG = 60
 # provenance, lui, n'est pas défini ici : il vient de `marqueur_auto_backup()`
 # (`destinations/retention.py`), seul endroit où sa clé est écrite. Le dupliquer
 # ici marchait tant que les deux valeurs coïncidaient, et aurait silencieusement
-# orphelinné tous les dépôts Dropbox le jour où la rétention renommerait la
+# orpheliné tous les dépôts Dropbox le jour où la rétention renommerait la
 # sienne.
 CLE_SLUG = "slug"
 CLE_EMPREINTE = "content_hash"
