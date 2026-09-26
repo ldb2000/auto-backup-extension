@@ -31,6 +31,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import persistent_notification
 from homeassistant.const import (
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
@@ -74,6 +75,9 @@ from custom_components.auto_backup.destinations import (
     DestinationManager,
     DestinationNotFoundError,
     identifiant_du_probleme,
+)
+from custom_components.auto_backup.destinations.notifications import (
+    identifiant_de_notification_de_reauthentification,
 )
 from custom_components.auto_backup.destinations.providers.dropbox import (
     CLE_ACCOUNT_ID,
@@ -268,6 +272,18 @@ def _registre(hass: HomeAssistant) -> RegistreSauvegardesDistantes:
     registre = hass.data[DATA_REMOTE_BACKUPS]
     assert isinstance(registre, RegistreSauvegardesDistantes)
     return registre
+
+
+def _notification_de_reauth(hass: HomeAssistant, destination_id: str = DESTINATION_ID):
+    """Notification persistante de ré-authentification (issue #17), si affichée.
+
+    Home Assistant n'expose les notifications persistantes que par son API
+    WebSocket ; le stock lui-même est un simple dictionnaire de `hass.data`,
+    comme le lit `tests/test_notifications.py`.
+    """
+    notifications = persistent_notification._async_get_or_create_notifications(hass)
+    identifiant = identifiant_de_notification_de_reauthentification(destination_id)
+    return notifications.get(identifiant)
 
 
 async def _inscrire(
@@ -1037,6 +1053,69 @@ async def test_un_acces_refuse_pendant_la_suppression_demande_une_reautorisation
 
     registre = ir.async_get(hass)
     assert registre.async_get_issue(DOMAIN, identifiant_du_probleme(DESTINATION_ID))
+
+
+async def test_un_acces_refuse_pendant_le_listage_d_une_purge_notifie_la_reautorisation(
+    hass: HomeAssistant,
+    demarrer: Callable[..., Awaitable[MockConfigEntry]],
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Cas signalé : un échec d'authentification pendant une purge notifie (#17).
+
+    La purge distante (#9) attrape `DestinationAuthError` comme n'importe
+    quelle `DestinationError` au listage : elle la journalise et passe à la
+    destination suivante, sans jamais la laisser remonter. C'est donc bien
+    `_erreur_d_acces()` qui doit avoir déjà signalé la ré-authentification —
+    problème Home Assistant **et** notification persistante (#17) — avant de
+    lever, sans quoi un échec survenu en pleine purge automatique ne serait
+    jamais porté à l'écran d'accueil de l'utilisateur.
+    """
+    await demarrer(**{CONF_RETENTION_DAYS: 1})
+    aioclient_mock.post(
+        URL_LISTAGE, status=401, json=erreur_dropbox("expired_access_token/...")
+    )
+
+    await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+    await hass.async_block_till_done()
+
+    registre = ir.async_get(hass)
+    assert registre.async_get_issue(DOMAIN, identifiant_du_probleme(DESTINATION_ID))
+    notification = _notification_de_reauth(hass)
+    assert notification is not None
+    assert NOM_DESTINATION in notification["title"]
+
+
+async def test_un_acces_refuse_a_la_suppression_d_une_purge_notifie_la_reautorisation(
+    hass: HomeAssistant,
+    demarrer: Callable[..., Awaitable[MockConfigEntry]],
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Même garantie côté suppression, cas signalé lui aussi.
+
+    Le listage aboutit et désigne une sauvegarde expirée ; c'est la
+    suppression qui refuse l'accès. La purge la traite comme n'importe quel
+    autre refus (elle journalise et continue), mais la ré-authentification
+    doit déjà avoir été signalée — problème et notification — avant que
+    l'exception ne remonte jusqu'à `_async_supprimer()`.
+    """
+    await demarrer(**{CONF_RETENTION_DAYS: 1})
+    ancienne = dt_util.utcnow() - timedelta(days=30)
+    simuler_le_listage(
+        aioclient_mock,
+        page(entree_de_fichier(IDS[0], NOMS[0], date=ancienne.isoformat())),
+    )
+    aioclient_mock.post(
+        URL_SUPPRESSION, status=403, json=erreur_dropbox("missing_scope/...")
+    )
+
+    await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+    await hass.async_block_till_done()
+
+    registre = ir.async_get(hass)
+    assert registre.async_get_issue(DOMAIN, identifiant_du_probleme(DESTINATION_ID))
+    notification = _notification_de_reauth(hass)
+    assert notification is not None
+    assert NOM_DESTINATION in notification["title"]
 
 
 async def test_une_destination_a_reautoriser_n_est_plus_jointe_par_la_purge(
