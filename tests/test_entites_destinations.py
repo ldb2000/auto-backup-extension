@@ -69,6 +69,7 @@ from custom_components.auto_backup.destinations.entities import (
     assainir_le_message,
     identifiant_unique,
 )
+from custom_components.auto_backup.destinations.masquage import masquer
 from custom_components.auto_backup.destinations.retention import (
     EntreeRegistre,
     RegistreSauvegardesDistantes,
@@ -483,6 +484,50 @@ async def test_le_message_d_erreur_ne_laisse_pas_fuir_de_jeton(
     # Le message reste diagnosticable : le code HTTP et l'hôte sont conservés.
     assert "HTTP 401" in message
     assert "api.fournisseur.test" in message
+
+
+@pytest.mark.parametrize(
+    ("erreur", "fuite", "attendu"),
+    [
+        # Clé sensible en camelCase, séparateur deux-points.
+        ("accessToken: abcDEF123456", "abcDEF123456", "accessToken: ***"),
+        # Chemin absolu d'une sauvegarde : il révèle l'arborescence de l'hôte.
+        (
+            "échec lecture /backup/sauvegarde_maison.tar",
+            "/backup/sauvegarde_maison.tar",
+            "échec lecture ***",
+        ),
+        (
+            "fichier introuvable : /config/secrets.yaml",
+            "/config/secrets.yaml",
+            "fichier introuvable : ***",
+        ),
+        # Liste de jetons entre crochets.
+        ("tokens=[abc123XYZ, def]", "abc123XYZ", "tokens=***"),
+    ],
+)
+async def test_last_error_suit_le_masquage_commun(
+    hass: HomeAssistant,
+    entree_avec_destination: MockConfigEntry,
+    erreur: str,
+    fuite: str,
+    attendu: str,
+) -> None:
+    """`last_error` applique le module commun `masquage.py`, pas une copie.
+
+    Non-régression de la validation métier de l'issue #16 : ces trois formes
+    passaient en clair par l'ancienne copie locale du masquage.
+    """
+    _emettre_echec(hass, erreur=erreur)
+    await hass.async_block_till_done()
+
+    message = _etat(
+        hass, entree_avec_destination, Platform.BINARY_SENSOR, SUFFIXE_PROBLEME
+    ).attributes[ATTR_LAST_ERROR]
+
+    assert fuite not in message
+    assert message == attendu
+    assert message == masquer(erreur, longueur_max=LONGUEUR_MAX_ERREUR)
 
 
 @pytest.mark.parametrize(
