@@ -606,7 +606,12 @@ async def test_la_reautorisation_met_a_jour_le_jeton_et_le_compte(
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Ré-autoriser rafraîchit aussi l'adresse du compte, sans toucher au reste."""
+    """Ré-autoriser rafraîchit aussi l'adresse du compte, sans toucher au reste.
+
+    Google renvoie ici une **autre** adresse que celle enregistrée : depuis
+    l'issue #17, le flux s'arrête sur l'étape de confirmation avant d'écrire
+    quoi que ce soit, puis enregistre le nouveau compte une fois confirmé.
+    """
     _mock_google(
         aioclient_mock,
         about={
@@ -623,12 +628,46 @@ async def test_la_reautorisation_met_a_jour_le_jeton_et_le_compte(
     resultat = await _retour_de_google(hass, resultat, code=CODE_AUTORISATION_FACTICE)
     await hass.async_block_till_done()
 
+    assert resultat["type"] is FlowResultType.FORM
+    assert resultat["step_id"] == "confirmer_changement_de_compte"
+    assert resultat["description_placeholders"]["ancien_compte"] == EMAIL_DU_COMPTE
+    assert resultat["description_placeholders"]["nouveau_compte"] == "d@exemple.test"
+
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {"confirmer": True}
+    )
+    await hass.async_block_till_done()
+
     assert resultat["type"] is FlowResultType.CREATE_ENTRY
     persistee = _destination_persistee(entree_google)
     assert persistee[CONF_TOKEN]["access_token"] == "acces-google-factice-2"
     assert persistee[CONF_PROVIDER_DATA] == {CLE_EMAIL_DU_COMPTE: "d@exemple.test"}
     assert persistee[CONF_NAME] == "Mon Drive"
     assert persistee[CONF_FOLDER] == "Sauvegardes/HA"
+
+
+async def test_la_reautorisation_du_meme_compte_google_ne_questionne_pas(
+    hass: HomeAssistant,
+    entree_google: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Le cas courant — renouveler l'accès du même compte — reste direct."""
+    _mock_google(aioclient_mock)
+
+    resultat = await ouvrir_les_options(
+        entree_google.entry_id, "reautoriser_destination"
+    )
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_DESTINATION_ID: IDENTIFIANT_DESTINATION}
+    )
+    resultat = await _retour_de_google(hass, resultat, code=CODE_AUTORISATION_FACTICE)
+    await hass.async_block_till_done()
+
+    assert resultat["type"] is FlowResultType.CREATE_ENTRY
+    persistee = _destination_persistee(entree_google)
+    assert persistee[CONF_PROVIDER_DATA] == {CLE_EMAIL_DU_COMPTE: EMAIL_DU_COMPTE}
+    assert persistee[CONF_TOKEN]["access_token"] == "acces-google-factice-2"
 
 
 ### Vérification de l'accès et qualification des erreurs ###

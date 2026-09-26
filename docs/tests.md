@@ -50,6 +50,8 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
+| `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés, frontière avec la purge distante. |
+| `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, noms du fork exemptés du dernier filet (`masquer_un_nom()`), réserves assumées, troncature. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès, et refus typé des crochets encore à écrire (#12). |
 | `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
 | `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
@@ -293,6 +295,87 @@ Cinq points à connaître :
    L'attente réelle est donc de quelques millisecondes, pas de 300 secondes. Le même principe
    vaut pour le téléversement, où c'est l'option `upload_timeout` qui est réglée à `0.01` et
    `attente_secondes` qui fait patienter.
+
+## Tester les notifications d'échec
+
+`tests/test_notifications.py` couvre l'issue #17. Les tests partent des **événements publics**
+du fork plutôt que du coordinateur de téléversement : c'est le contrat qu'écoute
+`destinations/notifications.py`, et cela garde ces tests indépendants de la mécanique d'envoi,
+déjà couverte par `tests/test_televersement.py`.
+
+```python
+hass.bus.async_fire(
+    EVENT_UPLOAD_FAILED,
+    {
+        "name": ...,
+        "slug": ...,
+        "destination": ...,
+        "destination_name": ...,
+        "error": ...,
+    },
+)
+await hass.async_block_till_done()
+```
+
+Cinq points à connaître :
+
+1. **Lire les notifications affichées.** Home Assistant ne les expose qu'au travers de son API
+   WebSocket ; le stock lui-même est un dictionnaire de `hass.data`, que les tests lisent par
+   `persistent_notification._async_get_or_create_notifications(hass)`. Les identifiants sont
+   ceux du fork : `auto_backup_upload_<destination_id>` et `auto_backup_reauth_<id>`.
+2. **Prouver que l'option ne coupe que l'affichage.** Le test de `notify_on_failure` désactivée
+   passe, lui, par le coordinateur (`hass.data[DATA_UPLOADS]._async_signaler_echec(...)`) :
+   c'est la seule façon de vérifier d'un même geste qu'aucune notification n'est créée, que
+   l'événement est bien émis et que la ligne d'erreur est bien journalisée.
+3. **Les écritures directes dans `entry.options` portent les options upstream.** La règle
+   générale des tests de destinations s'applique ici aussi : un test qui bascule
+   `notify_on_failure` par `async_update_entry()` doit conserver `auto_purge` et
+   `backup_timeout`, que l'écouteur upstream lit sans valeur de repli.
+4. **Le masquage se teste ailleurs, vecteur par vecteur.** `destinations/masquage.py` est le
+   point unique du fork : ses motifs sont éprouvés dans `tests/test_masquage.py`, qui rejoue les
+   valeurs hostiles relevées par l'audit de sécurité (jeton Dropbox nu, jetons Google, URL de
+   session reprenable, adresse électronique, suite base64 sans mot-clé), les formes déjà
+   couvertes, et les réserves assumées — chacune avec son test, pour qu'un changement de
+   comportement soit visible plutôt que silencieux. Ne restent dans
+   `tests/test_notifications.py` que les tests de **traversée** : chacun des trois champs
+   affichés (nom de la destination, nom de la sauvegarde, cause) passe bien par le masquage,
+   dans la notification d'échec comme dans celle de ré-authentification, et à la **profondeur**
+   retenue pour chacun — le masquage entier pour la cause, ses passes 1 à 5 pour les deux noms,
+   avec deux tests de non-régression sur des noms sans espace
+   (« Dropbox-Compte-Familial », « sauvegarde-complete-2026-09-26 »), que le dernier filet
+   réduisait à `***`.
+
+5. **Un échec de purge n'est pas un échec d'envoi.** Le fichier de tests contient un test de
+   **frontière** avec la rétention distante (#9) : le listage de la destination factice est mis
+   en échec par une `DestinationError` — exactement ce que lèvent les deux fournisseurs livrés
+   tant que #12 et #15 n'ont pas écrit le listage — puis un `auto_backup.upload_successful`
+   porteur d'un `remote_id` déclenche la purge automatique. Le test vérifie que le listage a bien
+   été tenté, que l'erreur est journalisée, et qu'**aucune** notification n'apparaît : ce module
+   n'écoute que `auto_backup.upload_failed`, que la purge n'émet jamais. Le `remote_id` est
+   nécessaire — sans lui, la rétention ignore l'événement et la purge ne partirait pas ; c'est
+   pourquoi l'aide `_succes()`, qui n'en porte pas, ne déclenche aucune purge dans les autres
+   tests.
+
+## Tester un changement de compte à la ré-autorisation
+
+Le changement de compte (issue #17) se teste dans `tests/test_destinations_flux_options.py`
+pour le fournisseur factice et dans `tests/test_provider_google_drive.py` pour un fournisseur
+réel. Le compte renvoyé par le fournisseur se pilote en remplaçant le crochet :
+
+```python
+with patch.object(
+    DestinationOAuthEnMemoire,
+    "async_donnees_du_fournisseur",
+    AsyncMock(return_value={"account_id": "compte-factice-9999"}),
+):
+    ...
+```
+
+Le flux s'arrête alors sur l'étape `confirmer_changement_de_compte`, dont les placeholders
+nomment les deux comptes. **Avant de répondre, rien ne doit être écrit** : un test le vérifie en
+relisant `entry.options` à ce moment précis. La réponse se donne par `{"confirmer": True}` ou
+`{"confirmer": False}` — le refus doit produire l'abandon `changement_de_compte_annule` et
+laisser les options à l'identique.
 
 ## Tester un fournisseur réel
 
@@ -563,9 +646,10 @@ entités), le socle des destinations distantes (contrat, registre, persistance),
 autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression), le
 téléversement après création (lecture en flux, événements, échecs, délai maximum), la connexion
 d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
-la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant) et le
-dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14). Le
-listage et la suppression chez chaque fournisseur (#12 et #15) sont testés par leurs issues
-respectives.
+la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant), le
+dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14),
+enfin les notifications d'échec et de ré-authentification, le masquage des secrets et la
+confirmation d'un changement de compte (issue #17). Le listage et la suppression chez chaque
+fournisseur (#12 et #15) sont testés par leurs issues respectives.
 
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

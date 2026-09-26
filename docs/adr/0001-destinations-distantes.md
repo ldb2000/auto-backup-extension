@@ -10,9 +10,10 @@
   (fournisseur Google Drive), [#9](https://github.com/ldb2000/auto-backup-extension/issues/9)
   (rétention et purge distantes),
   [#14](https://github.com/ldb2000/auto-backup-extension/issues/14) (téléversement vers Google
-  Drive) et [#11](https://github.com/ldb2000/auto-backup-extension/issues/11) (dépôt d'une
-  sauvegarde chez Dropbox) — epic
-  [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+  Drive), [#11](https://github.com/ldb2000/auto-backup-extension/issues/11) (dépôt d'une
+  sauvegarde chez Dropbox) et
+  [#17](https://github.com/ldb2000/auto-backup-extension/issues/17) (notifications et changement
+  de compte) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -1199,6 +1200,197 @@ porte un identifiant d'envoi qui autorise, à lui seul, à écrire dans le fichi
 Les messages de journal et d'erreur citent donc une étiquette d'opération en français
 (« ouverture de la session d'envoi de "..." », « envoi des octets 0 à 8388607 »), jamais l'URL.
 
+## Notifications des échecs et des accès révoqués (issue #17)
+
+Un téléversement qui échoue émettait déjà `auto_backup.upload_failed` et une ligne d'erreur dans
+le journal, et un accès révoqué créait déjà un problème Home Assistant (décision 4). Ni l'un ni
+l'autre ne se voient sans les chercher : une sauvegarde cloud silencieusement cassée donne une
+fausse impression de sécurité. L'issue #17 ajoute une couche **d'affichage**, dans
+`destinations/notifications.py`, et ne touche ni à l'orchestration (`upload.py`) ni aux
+fournisseurs.
+
+### Écouter les événements plutôt qu'appeler depuis le téléversement
+
+Le module s'abonne à `auto_backup.upload_failed` et `auto_backup.upload_successful` au démarrage
+de l'entrée (`async_setup_notifications()`, appelé comme `async_setup_upload()`). Le
+coordinateur de téléversement n'appelle rien : il émet, comme avant. Trois conséquences :
+
+- l'affichage se branche et se débranche avec l'entrée, sans que la mécanique d'envoi en sache
+  quoi que ce soit — un futur émetteur de `auto_backup.upload_failed` serait affiché du seul fait
+  de l'émettre ;
+- les événements restent le contrat public : une automatisation de l'utilisateur les écoute
+  exactement comme le fork le fait ;
+- l'événement `upload_failed` n'étant émis qu'une fois les tentatives épuisées, une notification
+  décrit toujours un échec **définitif**, jamais une tentative.
+
+**La purge distante n'est pas un émetteur, et ne doit pas l'être.** `destinations/retention.py`
+(#9) *consomme* `auto_backup.upload_successful` pour alimenter son registre et *émet*
+`auto_backup.remote_purge` ; elle n'émet jamais `auto_backup.upload_failed`. Un échec de purge
+n'atteint donc pas ce module, et c'est voulu : les deux `DestinationError` du listage encore
+différé — Dropbox (#12) et Google Drive (#15) — sont journalisées en une ligne par le
+coordinateur de purge, qui passe à la destination suivante. Les confondre avec un échec d'envoi
+afficherait une notification « échec d'envoi » à chaque sauvegarde **réussie** d'une destination
+porteuse d'une rétention, et ferait grimper un compteur d'échecs consécutifs qu'aucun succès ne
+remettrait à zéro. Le cas est d'ailleurs distinct de celui d'une destination en attente de
+ré-authentification, que la purge saute **avant** tout appel réseau, sur un avertissement : là,
+c'est la notification de ré-authentification qui parle, et elle seule. Quand #12 et #15 auront
+écrit le listage, un échec de purge qui mérite d'être affiché demandera son propre signalement —
+un événement à lui, pas un détournement de `upload_failed`.
+
+### Un identifiant de notification par destination, pas par sauvegarde
+
+`auto_backup_upload_<destination_id>` et `auto_backup_reauth_<destination_id>` : l'identifiant
+est stable, donc Home Assistant **met à jour** la notification existante au lieu d'en empiler
+une par sauvegarde ratée. Le nombre d'échecs consécutifs y est affiché — c'est lui qui distingue
+un incident passager d'une destination durablement cassée — et le premier succès vers cette
+destination retire la notification et remet le compteur à zéro. Le compteur vit dans le
+gestionnaire, en mémoire : il n'a pas à survivre à un redémarrage, où un cycle de sauvegarde
+suivant le reconstruira.
+
+### Jamais deux signalements pour la même cause
+
+Un accès révoqué produit déjà un problème Home Assistant. La notification qui l'accompagne le
+**complète** (le problème vit dans l'interface des intégrations, la notification à l'écran
+d'accueil) et disparaît avec lui : `async_effacer_la_reauthentification()` efface les deux, à la
+ré-autorisation comme à la suppression de la destination — une notification qui survivrait à la
+destination qu'elle nomme serait impossible à faire disparaître.
+
+L'échec de téléversement qui **découle** d'un accès révoqué ne crée pas de seconde
+notification : le gestionnaire interroge `DestinationManager.reauthentification_requise()` avant
+d'afficher quoi que ce soit. Dans l'ordre inverse — un échec générique, puis la révocation — la
+notification d'échec est retirée au profit de celle qui dit quoi faire. C'est le point ouvert
+laissé par #7, désormais clos.
+
+### L'option `notify_on_failure` ne coupe que l'affichage
+
+Vraie par défaut, réglable par l'étape « Réglages des notifications » du flux d'options et
+inscrite dans `CLES_DU_FORK`. Désactivée, plus aucune notification persistante n'est créée —
+échec comme ré-authentification — mais **l'événement, le journal d'erreur et le problème Home
+Assistant restent émis** : l'utilisateur qui coupe les notifications pilote ses alertes
+autrement, il ne renonce pas au signalement. Le choix est relu dans l'entrée à chaque échec : il
+s'applique sans redémarrage, comme `upload_timeout`.
+
+### `destinations/masquage.py` : un seul masquage pour tout le fork
+
+Le fork ne met aucun secret dans ses propres messages (décision 4), mais la cause d'un échec est
+souvent une phrase renvoyée par une API, que le fork ne contrôle pas et affiche pourtant à des
+endroits durables et lisibles par tous. Tout texte de cette sorte traverse `masquer()`.
+
+**Pourquoi un module partagé plutôt qu'une fonction par module.** Le masquage a d'abord été écrit
+deux fois : `masquer_les_secrets()` pour les notifications (#17) et `assainir_le_message()` pour
+les attributs d'entité (#16). Les deux couvertures divergeaient **dans les deux sens** — #16
+masquait les adresses électroniques, les jetons nus (`sl.`, `ya29.`, `1//`), `upload_id` et les
+suites opaques que #17 laissait passer ; #17 masquait les chemins locaux absolus que #16 laissait
+passer. Le même message d'un fournisseur aurait donc été masqué différemment selon qu'il
+atterrissait dans une notification persistante ou dans l'attribut `last_error` d'une entité :
+deux niveaux de protection pour une seule donnée, et une faille dans chacun. Un duplicata de code
+de sécurité est une faille en soi. `destinations/masquage.py` est donc le **point unique** du
+fork, et porte l'**union stricte** des deux implémentations :
+
+| Passe | Ce qu'elle masque | Venait de |
+| --- | --- | --- |
+| 1 | adresses électroniques (donnée personnelle) | #16 |
+| 2 | en-têtes `Bearer` et `Basic` | #16 et #17 |
+| 3 | affectation d'une clé sensible, `upload_id` compris, séparateur `=`, `:` ou espace | #16 et #17 |
+| 4 | formes connues de jetons, même nus : `sl.`, `ya29.`, `1//` | #16 |
+| 5 | chemins de fichiers absolus des racines usuelles (`/config/...`, `/backups/...`) | #17 |
+| 6 | suites opaques de vingt caractères et plus (seule passe écartable) | #16 |
+| — | troncature facultative (`longueur_max`) | #16 |
+
+Le nom de la clé est conservé : il aide à comprendre l'échec sans rien divulguer. Les URL sont
+épargnées, n'étant pas des chemins locaux, et le masquage porte sur **tout** ce qui est affiché —
+la cause, mais aussi le nom de la destination et celui de la sauvegarde, à des profondeurs
+distinctes détaillées ci-dessous.
+
+**Un nom du fork n'est pas un texte de fournisseur : `masquer_un_nom()`.** Les deux noms affichés
+ne traversent que les passes 1 à 5 ; la passe 6 est réservée à la cause. La raison de la
+distinction est que la passe 6 ne reconnaît pas un secret, seulement une suite longue sans
+espace : elle réduisait à `***` des noms parfaitement ordinaires
+(« Dropbox-Compte-Familial », « sauvegarde-complete-2026-09-26 »,
+« auto_backup_2026_09_26_03_00 »), et l'utilisateur qui a deux destinations lisait « échec d'envoi
+vers « *** » » sans pouvoir dire laquelle avait lâché. Or **un nom de destination est de la
+configuration du fork** : le problème Home Assistant d'une destination à ré-autoriser l'affiche en
+clair dans ses `translation_placeholders`, comme le journal et comme les listes du menu d'options
+— le masquer ne protège donc rien et perd de l'information ; **la cause, elle, est du texte de
+fournisseur**, que le fork ne maîtrise pas, et garde le dernier filet. Les passes 1 à 5 suffisent
+pour un secret qu'un utilisateur aurait collé dans un nom : adresse électronique, chemin absolu ou
+jeton reconnaissable à sa forme. Le point de masquage reste unique — `masquer_un_nom()` n'est
+qu'un appel à `masquer(texte, dernier_filet=False)`.
+
+Trois formes ont été ajoutées au passage, qu'aucune des deux implémentations ne couvrait : les
+clés en `camelCase` ou à tiret (`accessToken`, `access-token`) et leurs pluriels (`tokens=[...]`),
+qui sont la norme des API JSON ; la valeur d'une collection entière, sans quoi seul son premier
+élément était masqué et le reste de la liste fuyait ; et une racine de chemin au pluriel
+(`/backups/nuit.tar`), que l'ordre de l'alternative réduisait à un masquage partiel laissant sortir
+le nom de la sauvegarde.
+
+**Réserves assumées, reprises de #16 et documentées en tête de module.** Le masquage est
+volontairement large — « code=500 » devient « code=*** » — mais épargne le mot ordinaire qui suit
+un mot-clé séparé par une simple espace (« token expiré », « code de la sauvegarde ») : le masquer
+n'aurait rien protégé et aurait rendu les notifications françaises illisibles. Trois angles morts
+subsistent, chacun avec son test :
+
+- un secret en base64 **standard** est découpé par `/`, `=` et `.`, exclus du jeu de la dernière
+  passe pour ne pas masquer les URL : il peut n'être masqué que partiellement, **voire pas du
+  tout** si ses tronçons font chacun moins de vingt caractères. Non exploitable aujourd'hui,
+  Dropbox et Google émettant du base64url (`-` et `_`, jamais `/`), leurs formes étant de surcroît
+  reconnues par la passe 4 ;
+- une valeur de moins de vingt caractères voisine d'un mot-clé **non listé** (« session id
+  sess_AbCdEf12 expired ») ou séparée d'un mot-clé listé par un mot intercalé (« secret is
+  <valeur> ») ne déclenche aucune passe. Les motifs ne sont **pas** étendus pour tolérer des mots
+  intercalés : le gain est nul sur les deux fournisseurs intégrés, dont les jetons sont longs et
+  reconnus par leur forme, et le coût serait une salve de faux positifs sur les phrases
+  françaises que la réserve ci-dessus protège justement. À revoir avec l'arrivée d'un fournisseur
+  aux jetons courts ;
+- la passe 6 masque toute suite de vingt caractères ou plus qui mêle casses, chiffres ou `_+` :
+  un mot français à capitale initiale (« Anticonstitutionnellement »), cas théorique, mais aussi —
+  et c'est la portée réelle de la réserve — les **codes d'erreur techniques des fournisseurs**,
+  qui atteignent couramment cette longueur : `storageQuotaExceeded`, `userRateLimitExceeded`,
+  `expired_access_token`, `too_many_write_operations`. C'est assumé : les fournisseurs du fork
+  traduisent la cause principale en français et ne rejettent le code brut qu'en fin de message —
+  « (motif : …) » chez Google Drive, l'`error_summary` entre parenthèses ou après un deux-points
+  chez Dropbox —, si bien que la cause reste diagnosticable une fois le code masqué. La réserve
+  ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
+
+**Ce que l'issue #16 doit faire à sa fusion.** La branche `issue-16-entites-destinations` n'est
+pas fusionnée au moment où ce module est créé, et y garde son propre `assainir_le_message()`. Elle
+doit y **déléguer** : `assainir_le_message(message)` devient l'enveloppe qui ramène `None` et une
+chaîne vide à `cause inconnue`, puis appelle `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`.
+Aucun motif ne doit rester dans `entities.py` — c'est précisément la divergence que ce module
+supprime. L'ordre de fusion retenu est #17 puis #16, pour que #16 adopte ce module au moment de sa
+propre fusion.
+
+**Textes en français dans le code.** Une notification persistante n'a pas de clé de traduction
+côté Home Assistant, contrairement aux problèmes et aux étapes du flux d'options : ses libellés
+sont écrits dans `notifications.py`. C'est une limite de la plateforme, pas un choix ; si Home
+Assistant ouvre la traduction des notifications, elles rejoindront `translations/`.
+
+## Changement de compte à la ré-autorisation (issue #17)
+
+Ré-autoriser une destination sur un **autre** compte est légitime (compte professionnel devenu
+personnel, organisation migrée), mais ce n'est pas anodin : la destination garde son nom et son
+dossier, tandis que les sauvegardes déposées sur l'ancien compte cessent d'exister pour Auto
+Backup — ni listées, ni purgées par la rétention distante (#9). Jusqu'ici, `provider_data` était
+remplacé sans un mot.
+
+L'étape `confirmer_changement_de_compte` s'intercale donc entre l'échange du jeton et l'écriture
+des options. Elle nomme l'ancien et le nouveau compte, dit ce que le changement entraîne, et
+n'écrit **rien** tant qu'elle n'est pas confirmée ; refusée, la ré-autorisation est abandonnée
+(`options.abort.changement_de_compte_annule`), jeton et compte d'origine intacts.
+
+La détection ne porte que sur les clés **identifiantes** de `provider_data` — `account_id`
+(Dropbox), `account_email` (Google Drive), `email` — et sur leurs clés **communes** aux deux
+relevés. Trois situations ne sont donc pas des changements de compte : un fournisseur qui ne
+renvoie aucune donnée, une destination qui n'en avait pas encore, et une réponse enrichie d'une
+clé de plus sur le même compte. Sans aucune clé comparable, la question est posée plutôt que
+tranchée : mieux vaut une confirmation de trop qu'un compte remplacé en silence.
+
+Le résidu laissé par #10 est levé au passage : `_terminer_la_reautorisation()` teste
+explicitement `self._provider_data is not None` au lieu de s'en remettre à une vérité booléenne.
+Le comportement voulu est écrit tel quel — fournisseur muet, on conserve ; fournisseur qui
+répond, on remplace — sans dépendre du fait qu'un dictionnaire vide soit déjà ramené à `None` en
+amont.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -1258,14 +1450,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 
 - **Cohérence de la ré-authentification** : un problème Home Assistant (repair issue) est créé
   pour une destination en attente de ré-autorisation, mais il n'est pas réparable automatiquement.
-  **À traiter en #17** (notifications et ré-authentification) : si une notification persistante
-  est ajoutée pour les destinations en défaut d'accès, elle ne doit pas doubler le problème
-  Home Assistant — la faire disparaître en même temps que le problème, une fois la destination
-  ré-autorisée ou supprimée.
-  Résidu à traiter : la ré-autorisation d'une destination doit détecter un changement de compte
-  (dans `provider_data`) sans réécrire le reste de la configuration ; le code porte
-  `provider_data=self._provider_data or config.provider_data` qu'il faudra évaluer pour s'assurer
-  que les données du fournisseur sont bien rafraîchies lors de la ré-autorisation sur un autre compte.
+  **Traité en #17** (voir « Notifications des échecs et des accès révoqués » ci-dessus) : la
+  notification persistante ajoutée pour ces destinations ne double pas le problème — elle le
+  complète, l'échec de téléversement qui en découle n'en crée pas une troisième, et les deux
+  signalements disparaissent ensemble, à la ré-autorisation comme à la suppression.
+  Le résidu est levé lui aussi : la ré-autorisation détecte désormais un changement de compte
+  (clés identifiantes de `provider_data`), le fait confirmer avant d'écrire, et
+  `_terminer_la_reautorisation()` remplace explicitement les données du compte quand le
+  fournisseur en renvoie — voir « Changement de compte à la ré-autorisation » ci-dessus.
 
 - **Convergence des API entre fournisseurs** : **traitée en #13** lors de la fusion avec #10.
   Convention retenue : crochets déclarés comme méthodes d'instance sur `RemoteDestination`
@@ -1345,6 +1537,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   que le registre garde ce que `RemoteBackup` sait déjà relèverait de #12, qui a besoin de ces
   champs pour le listage.
 
+- **Délégation du masquage par les entités d'état (issue #16)** : `destinations/masquage.py` est le
+  point unique de masquage du fork depuis #17 (voir la section « Un seul masquage pour tout le
+  fork » ci-dessus), mais la branche `issue-16-entites-destinations` n'est pas fusionnée et garde
+  son propre `assainir_le_message()`. **À faire à la fusion de #16** : en faire une enveloppe qui
+  ramène `None` et la chaîne vide à `cause inconnue`, puis appelle
+  `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` ; aucun motif ne doit rester dans
+  `entities.py`. L'ordre de fusion retenu est #17 puis #16.
+
 ## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
@@ -1365,6 +1565,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   ci-dessus) ; `#9` y ajoute la rétention distante (section « Rétention distante »), et le premier
   fournisseur à le tenir réellement est Google Drive avec `#14` (section « Téléversement vers
   Google Drive »).
+- L'affichage des échecs est isolé dans `destinations/notifications.py` (#17), branché sur les
+  seuls événements publics : ni `upload.py` ni les fournisseurs n'en savent rien, et une option
+  du fork de plus (`notify_on_failure`) est protégée par `CLES_DU_FORK`.
 
 Ajouts de l'issue #7 :
 

@@ -7,6 +7,7 @@ from homeassistant.util.hass_dict import HassKey
 if TYPE_CHECKING:
     from .manager import AutoBackup
     from .destinations import DestinationManager
+    from .destinations.notifications import GestionnaireDeNotifications
     from .destinations.oauth import EtatOAuth
     from .destinations.upload import CoordinateurTeleversement
     from .destinations.retention import (
@@ -197,7 +198,41 @@ ATTR_REMOTE_IDS = "remote_ids"
 # n'a donc à se déclencher que si aucun ne l'a fait.
 #
 # Volontairement **pas** une option de l'interface : la purge n'a aucune étape
-# de réglages (celle du fork ne règle que le téléversement, cf.
-# CONF_UPLOAD_TIMEOUT), et en ajouter une relève de #8/#17. La constante n'est
-# donc pas inscrite dans CLES_DU_FORK : rien ne la persiste dans les options.
+# de réglages. Les deux que le fork ajoute au menu d'options portent sur autre
+# chose — le téléversement (#8, CONF_UPLOAD_TIMEOUT) et les notifications (#17,
+# CONF_NOTIFY_ON_FAILURE) —, et en ouvrir une pour la purge demanderait une
+# issue à elle. La constante n'est donc pas inscrite dans CLES_DU_FORK : rien ne
+# la persiste dans les options.
 DEFAULT_PURGE_TIMEOUT = 300
+
+### NOTIFICATIONS PERSISTANTES (issue #17) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Une sauvegarde cloud silencieusement cassée
+# donne une fausse impression de sécurité : `destinations/notifications.py` transforme
+# les événements `auto_backup.upload_*` et le signalement de ré-authentification
+# (`destinations/reauth.py`) en notifications persistantes lisibles.
+
+# Gestionnaire de notifications de l'entrée, exposé dans `hass.data`.
+DATA_NOTIFICATIONS: HassKey[GestionnaireDeNotifications] = HassKey(
+    f"{DOMAIN}_notifications"
+)
+
+# Préfixes des identifiants de notification. Ils sont **stables par destination** :
+# des échecs successifs mettent la même notification à jour au lieu d'en empiler une
+# par sauvegarde, et un succès (ou une ré-autorisation) sait laquelle retirer.
+NOTIFICATION_UPLOAD_PREFIX = f"{DOMAIN}_upload_"
+NOTIFICATION_REAUTH_PREFIX = f"{DOMAIN}_reauth_"
+
+# Option de l'entrée : les notifications persistantes du fork sont-elles créées ?
+# Désactivée, l'intégration continue d'émettre ses événements et ses journaux
+# d'erreur, et le problème Home Assistant de ré-authentification reste créé : seule
+# la notification disparaît. Elle se règle par l'étape « Réglages des notifications »
+# du flux d'options (cf. `destinations/flow.py`).
+CONF_NOTIFY_ON_FAILURE = "notify_on_failure"
+DEFAULT_NOTIFY_ON_FAILURE = True
+
+# `notify_on_failure` est une option portée par le fork : elle doit être reportée par
+# `preserve_fork_options()` comme les autres, sans quoi le premier enregistrement du
+# formulaire upstream l'effacerait en silence. La constante étant définie ici, à la
+# fin du bloc du fork, la liste des clés du fork est complétée ici aussi plutôt que
+# récrite plus haut.
+CLES_DU_FORK = (*CLES_DU_FORK, CONF_NOTIFY_ON_FAILURE)

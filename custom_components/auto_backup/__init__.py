@@ -52,6 +52,7 @@ from .handlers import SupervisorHandler, BackupHandler
 from .helpers import is_backup
 from .manager import AutoBackup
 from .destinations import async_setup_destinations
+from .destinations.notifications import async_setup_notifications  # fork (#17)
 from .destinations.upload import (  # téléversement distant (fork)
     async_prepare_upload,
     async_release_upload,
@@ -148,6 +149,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DATA_AUTO_BACKUP] = auto_backup
     async_setup_destinations(hass, entry)  # destinations distantes (fork)
     async_setup_upload(hass, entry)  # téléversement après création (fork)
+    async_setup_notifications(hass, entry)  # notifications d'échec (fork)
     entry.async_on_unload(entry.add_update_listener(auto_backup.update_listener))
 
     await auto_backup.load_snapshots_expiry()

@@ -35,7 +35,8 @@
             "fournisseur_invalide": "Le fournisseur choisi n'est plus disponible ou ne gère pas l'autorisation demandée.",
             "configuration_invalide": "La configuration des destinations n'a pas pu être enregistrée.",
             "autorisation_annulee": "L'autorisation a été refusée ou annulée chez le fournisseur : aucune destination n'a été créée, et rien n'a été modifié. Vous pouvez relancer « Ajouter une destination » quand vous le souhaitez.",
-            "echec_fournisseur": "Le fournisseur a refusé la première requête : {detail}."
+            "echec_fournisseur": "Le fournisseur a refusé la première requête : {detail}.",
+            "changement_de_compte_annule": "Changement de compte non confirmé : rien n'a été enregistré. La destination reste rattachée à son compte d'origine, avec son autorisation précédente."
         },
         "error": {
             "identifiants_invalides": "Renseignez l'identifiant et le secret de votre application.",
@@ -55,6 +56,7 @@
                     "reautoriser_destination": "Ré-autoriser une destination",
                     "supprimer_destination": "Supprimer une destination",
                     "reglages_televersement": "Réglages du téléversement",
+                    "reglages_notifications": "Réglages des notifications",
                     "init": "Réglages des sauvegardes"
                 }
             },
@@ -94,11 +96,25 @@
                     "destination_id": "Destination"
                 }
             },
+            "confirmer_changement_de_compte": {
+                "title": "Changement de compte",
+                "description": "L'autorisation que vous venez d'accorder porte sur un autre compte que celui de la destination « {destination} ».\n\nCompte précédent : {ancien_compte}\nNouveau compte : {nouveau_compte}\n\nSi vous confirmez, la destination enverra désormais les sauvegardes vers le nouveau compte. Les sauvegardes déjà déposées sur l'ancien compte ne seront plus ni listées, ni purgées par Auto Backup : elles resteront chez le fournisseur, à vous de les gérer.\n\nSans confirmation, rien n'est enregistré : la destination garde son compte et son autorisation précédente.",
+                "data": {
+                    "confirmer": "Je confirme le changement de compte"
+                }
+            },
             "supprimer_destination": {
                 "title": "Supprimer une destination",
                 "description": "La configuration et l'autorisation des destinations choisies seront effacées. Les sauvegardes déjà déposées chez le fournisseur ne sont pas supprimées.",
                 "data": {
                     "destinations": "Destinations à supprimer"
+                }
+            },
+            "reglages_notifications": {
+                "title": "Réglages des notifications",
+                "description": "Quand l'envoi d'une sauvegarde vers une destination distante échoue définitivement, Auto Backup peut afficher une notification persistante nommant la destination, la sauvegarde et la cause. Une même destination n'a jamais qu'une seule notification, mise à jour à chaque nouvel échec, et elle disparaît dès qu'un envoi aboutit.\n\nDésactivées, les notifications ne sont plus créées : l'événement « auto_backup.upload_failed », le journal d'erreur et le problème signalant une destination à ré-autoriser, eux, sont maintenus.",
+                "data": {
+                    "notify_on_failure": "Notifier les échecs d'envoi et les accès à renouveler"
                 }
             },
             "reglages_televersement": {
