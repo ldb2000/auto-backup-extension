@@ -749,12 +749,27 @@ fork, et porte l'**union stricte** des deux implémentations :
 | 3 | affectation d'une clé sensible, `upload_id` compris, séparateur `=`, `:` ou espace | #16 et #17 |
 | 4 | formes connues de jetons, même nus : `sl.`, `ya29.`, `1//` | #16 |
 | 5 | chemins de fichiers absolus des racines usuelles (`/config/...`, `/backups/...`) | #17 |
-| 6 | suites opaques de vingt caractères et plus | #16 |
+| 6 | suites opaques de vingt caractères et plus (seule passe écartable) | #16 |
 | — | troncature facultative (`longueur_max`) | #16 |
 
 Le nom de la clé est conservé : il aide à comprendre l'échec sans rien divulguer. Les URL sont
 épargnées, n'étant pas des chemins locaux, et le masquage porte sur **tout** ce qui est affiché —
 la cause, mais aussi le nom de la destination et celui de la sauvegarde.
+
+**Un nom du fork n'est pas un texte de fournisseur : `masquer_un_nom()`.** Les deux noms affichés
+ne traversent que les passes 1 à 5 ; la passe 6 est réservée à la cause. La raison de la
+distinction est que la passe 6 ne reconnaît pas un secret, seulement une suite longue sans
+espace : elle réduisait à `***` des noms parfaitement ordinaires
+(« Dropbox-Compte-Familial », « sauvegarde-complete-2026-09-26 »,
+« auto_backup_2026_09_26_03_00 »), et l'utilisateur qui a deux destinations lisait « échec d'envoi
+vers « *** » » sans pouvoir dire laquelle avait lâché. Or **un nom de destination est de la
+configuration du fork** : le problème Home Assistant d'une destination à ré-autoriser l'affiche en
+clair dans ses `translation_placeholders`, comme le journal et comme les listes du menu d'options
+— le masquer ne protège donc rien et perd de l'information ; **la cause, elle, est du texte de
+fournisseur**, que le fork ne maîtrise pas, et garde le dernier filet. Les passes 1 à 5 suffisent
+pour un secret qu'un utilisateur aurait collé dans un nom : adresse électronique, chemin absolu ou
+jeton reconnaissable à sa forme. Le point de masquage reste unique — `masquer_un_nom()` n'est
+qu'un appel à `masquer(texte, dernier_filet=False)`.
 
 Trois formes ont été ajoutées au passage, qu'aucune des deux implémentations ne couvrait : les
 clés en `camelCase` ou à tiret (`accessToken`, `access-token`) et leurs pluriels (`tokens=[...]`),
@@ -781,7 +796,14 @@ subsistent, chacun avec son test :
   reconnus par leur forme, et le coût serait une salve de faux positifs sur les phrases
   françaises que la réserve ci-dessus protège justement. À revoir avec l'arrivée d'un fournisseur
   aux jetons courts ;
-- un mot français de vingt caractères ou plus à capitale initiale passe pour une suite opaque.
+- la passe 6 masque toute suite de vingt caractères ou plus qui mêle casses, chiffres ou `_+` :
+  un mot français à capitale initiale (« Anticonstitutionnellement »), cas théorique, mais aussi —
+  et c'est la portée réelle de la réserve — les **codes d'erreur techniques des fournisseurs**,
+  qui atteignent couramment cette longueur : `storageQuotaExceeded`, `userRateLimitExceeded`,
+  `expired_access_token`, `too_many_write_operations`. C'est assumé : les fournisseurs du fork
+  traduisent la cause principale en français et n'ajoutent le code brut qu'en appendice
+  (« (motif : …) »), si bien que la cause reste diagnosticable une fois le code masqué. La réserve
+  ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
 
 **Ce que l'issue #16 doit faire à sa fusion.** La branche `issue-16-entites-destinations` n'est
 pas fusionnée au moment où ce module est créé, et y garde son propre `assainir_le_message()`. Elle

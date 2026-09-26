@@ -50,7 +50,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés. |
-| `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, réserves assumées, troncature. |
+| `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, noms du fork exemptés du dernier filet (`masquer_un_nom()`), réserves assumées, troncature. |
 | `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
@@ -282,7 +282,11 @@ Quatre points à connaître :
    comportement soit visible plutôt que silencieux. Ne restent dans
    `tests/test_notifications.py` que les tests de **traversée** : chacun des trois champs
    affichés (nom de la destination, nom de la sauvegarde, cause) passe bien par le masquage,
-   dans la notification d'échec comme dans celle de ré-authentification.
+   dans la notification d'échec comme dans celle de ré-authentification, et à la **profondeur**
+   retenue pour chacun — le masquage entier pour la cause, ses passes 1 à 5 pour les deux noms,
+   avec deux tests de non-régression sur des noms sans espace
+   (« Dropbox-Compte-Familial », « sauvegarde-complete-2026-09-26 »), que le dernier filet
+   réduisait à `***`.
 
 ## Tester un changement de compte à la ré-autorisation
 
