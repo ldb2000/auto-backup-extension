@@ -21,15 +21,17 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
 capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement, dépôt
-effectif sur Google Drive et rétention distante.** L'option `upload_to` des services de sauvegarde
-envoie la sauvegarde créée vers les destinations configurées (voir « Téléversement des
-sauvegardes » ci-dessous), et chaque destination applique sa propre rétention aux sauvegardes
-qu'elle a reçues (voir « Rétention distante »).
+**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement, rétention
+distante et dépôt effectif des sauvegardes chez Dropbox comme sur Google Drive.** L'option
+`upload_to` des services de sauvegarde envoie la sauvegarde créée vers les destinations
+configurées (voir « Téléversement des sauvegardes » ci-dessous), et chaque destination applique
+sa propre rétention aux sauvegardes qu'elle a reçues (voir « Rétention distante »).
 
-- **Dropbox** : la **connexion du compte est disponible** — voir le guide
-  [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; l'envoi effectif du fichier et sa
-  suppression chez Dropbox arrivent avec les issues #11 et #12.
+- **Dropbox** : la **connexion du compte et le dépôt des sauvegardes sont disponibles** — voir le
+  guide [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; le listage et la purge
+  distante arrivent avec l'issue #12. Tant qu'ils manquent, la rétention distante ne peut pas
+  s'appliquer à une destination Dropbox : elle est configurable, mais aucune sauvegarde n'y est
+  encore supprimée.
 - **Google Drive** : la **connexion du compte et le téléversement sont disponibles** — voir le
   guide [Connecter Google Drive](docs/destinations/google-drive.md) ; le listage et la suppression
   chez Google arrivent avec l'issue #15. Tant qu'ils manquent, la rétention distante ne peut pas
@@ -93,6 +95,11 @@ nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`).
 
+Chez **Dropbox**, la sauvegarde est déposée dans le dossier de la destination sous le nom
+`<nom de la sauvegarde> [<slug>].tar`. Un fichier de même nom n'est **jamais** remplacé : le
+téléversement échoue en le disant. Le détail (dossier, fragmentation des grosses sauvegardes,
+limites) est dans [le guide Dropbox](docs/destinations/dropbox.md).
+
 ### Rétention distante
 
 Chaque destination a **sa propre rétention**, réglée à son ajout : une durée de conservation en
@@ -102,10 +109,10 @@ anciennes du lot restant sont supprimées jusqu'à revenir sous la limite. Une d
 aucune rétention n'est jamais purgée.
 
 > **Aucun fournisseur ne sait encore supprimer.** La mécanique décrite ci-dessous est en place,
-> mais supprimer suppose de lister d'abord, et aucun fournisseur livré ne le fait : la purge d'une
-> destination Google Drive s'arrête au listage avec un message de journal explicite (issue #15),
-> et Dropbox ne téléverse pas encore (issues #11 et #12). La rétention que vous réglez aujourd'hui
-> est enregistrée et s'appliquera sans rien reconfigurer.
+> mais supprimer suppose de lister d'abord, et aucun fournisseur livré ne le fait : la purge
+> d'une destination Dropbox (issue #12) comme d'une destination Google Drive (issue #15) s'arrête
+> au listage, avec un message de journal explicite qui nomme la destination. La rétention que
+> vous réglez aujourd'hui est enregistrée et s'appliquera sans rien reconfigurer.
 
 **Rien de ce que vous avez déposé vous-même n'est supprimé.** Auto Backup tient un registre
 persistant des sauvegardes qu'il a lui-même téléversées (dans le stockage de Home Assistant,

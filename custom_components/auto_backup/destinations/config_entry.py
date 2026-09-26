@@ -7,6 +7,7 @@ Ce module concentre toutes les lectures et écritures de cette liste.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -22,8 +23,10 @@ from ..const import (
     CONF_DESTINATION_ID,
     CONF_DESTINATIONS,
     CONF_PROVIDER_DATA,
+    CONF_UPLOAD_TIMEOUT,
     DATA_DESTINATIONS,
     DEFAULT_BACKUP_TIMEOUT,
+    DEFAULT_UPLOAD_TIMEOUT,
     DOMAIN,
 )
 from .errors import DestinationConfigError, DestinationNotFoundError
@@ -31,6 +34,8 @@ from .manager import DestinationManager
 from .models import DestinationConfig
 from .providers import enregistrer_les_fournisseurs
 from .schema import DESTINATIONS_SCHEMA, donnees_de_fournisseur
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @callback
@@ -49,6 +54,34 @@ def async_entree_auto_backup(hass: HomeAssistant) -> ConfigEntry | None:
     """
     entrees = hass.config_entries.async_entries(DOMAIN)
     return entrees[0] if entrees else None
+
+
+@callback
+def delai_de_televersement(entry: ConfigEntry) -> float:
+    """Délai maximum d'un téléversement, en secondes, tel que l'entrée le règle.
+
+    Point de lecture **unique** de l'option `upload_timeout`, partagé par le
+    coordinateur — qui en fait le budget global d'un téléversement — et par les
+    fournisseurs, qui en dérivent le garde-fou d'une requête isolée. Sans ce
+    partage, un utilisateur relevant le réglage pour une connexion lente verrait
+    une requête unique expirer avant que son budget global ne soit épuisé.
+
+    L'option est relue à chaque appel : le réglage s'applique donc sans
+    redémarrage. Une valeur inexploitable ou nulle retombe sur la valeur par
+    défaut plutôt que de priver le téléversement de toute borne.
+    """
+    valeur = entry.options.get(CONF_UPLOAD_TIMEOUT, DEFAULT_UPLOAD_TIMEOUT)
+    try:
+        delai = float(valeur)
+    except (TypeError, ValueError) as err:
+        _LOGGER.warning(
+            "Option « %s » inexploitable (%s) : délai par défaut de %s s retenu",
+            CONF_UPLOAD_TIMEOUT,
+            err,
+            DEFAULT_UPLOAD_TIMEOUT,
+        )
+        return float(DEFAULT_UPLOAD_TIMEOUT)
+    return delai if delai > 0 else float(DEFAULT_UPLOAD_TIMEOUT)
 
 
 @callback

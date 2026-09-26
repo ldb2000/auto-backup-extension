@@ -7,8 +7,11 @@
   interface), [#10](https://github.com/ldb2000/auto-backup-extension/issues/10) (fournisseur
   Dropbox), [#8](https://github.com/ldb2000/auto-backup-extension/issues/8) (téléversement
   après création), [#13](https://github.com/ldb2000/auto-backup-extension/issues/13)
-  (fournisseur Google Drive) et [#9](https://github.com/ldb2000/auto-backup-extension/issues/9)
-  (rétention et purge distantes) — epic
+  (fournisseur Google Drive), [#9](https://github.com/ldb2000/auto-backup-extension/issues/9)
+  (rétention et purge distantes),
+  [#14](https://github.com/ldb2000/auto-backup-extension/issues/14) (téléversement vers Google
+  Drive) et [#11](https://github.com/ldb2000/auto-backup-extension/issues/11) (dépôt d'une
+  sauvegarde chez Dropbox) — epic
   [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
@@ -326,12 +329,13 @@ de la protection sans avoir à y penser, et ne reçoit jamais qu'un chemin relat
 
 Premier fournisseur réel. Il ne change rien au socle : il se range dans
 `destinations/providers/dropbox.py`, déclare une `OAUTH2_SPEC` et une fabrique, et
-n'est connu du reste du code que par le registre. Six points méritent d'être tracés.
+n'est connu du reste du code que par le registre. Six points méritent d'être tracés — auxquels
+s'ajoute le dépôt d'une sauvegarde, traité plus bas (issue #11).
 
 ### Pas de SDK Dropbox
 
-L'API Dropbox v2 est une API HTTP JSON ; les trois appels dont ce fork a besoin
-(`users/get_current_account`, puis le dépôt et le listage en #11 et #12) tiennent en
+L'API Dropbox v2 est une API HTTP JSON ; les appels dont ce fork a besoin
+(`users/get_current_account`, le dépôt en #11, le listage et la suppression en #12) tiennent en
 quelques lignes d'`aiohttp`. Le SDK officiel (`dropbox`) apporterait une dépendance
 supplémentaire — et sa propre gestion de jeton, redondante avec celle du socle — à
 l'installation de **tous** les utilisateurs de l'intégration, y compris ceux qui
@@ -352,6 +356,11 @@ contenu d'une sauvegarde déposée (l'envoi, le listage et la suppression s'en p
 restauration depuis le nuage est hors périmètre de l'epic #1. La demander « au cas où »
 contredirait le critère de moindre privilège de l'issue #10 ; elle sera ajoutée avec la
 fonctionnalité qui la justifiera, au prix d'une ré-autorisation par l'utilisateur.
+
+`files.metadata.write` est absente pour la même raison : elle ne servirait qu'à écrire des
+`property_groups`, qui exigent en plus un modèle de propriétés déclaré pour l'application. Le
+fork s'en passe — voir « Chez Dropbox, ce marqueur ne survit pas au dépôt » — et n'élargit donc
+pas l'autorisation demandée à l'utilisateur.
 
 Aucune portée de partage, de demande de fichier, de contact ni d'équipe n'est demandée.
 `token_access_type=offline` est ajouté à la demande d'autorisation : sans lui Dropbox ne
@@ -429,6 +438,242 @@ entière dans un journal.
 ferme la page d'autorisation — reçoit son propre message (`options.abort.autorisation_annulee`)
 au lieu d'être affiché brut. La table `MOTIFS_DE_REFUS` du flux est ouverte : tout autre
 code reste rendu par le message générique, qui le cite.
+
+### Dépôt d'une sauvegarde chez Dropbox (issue #11)
+
+Le fournisseur de l'issue #10 n'écrivait rien. L'issue #11 lui ajoute `async_upload()`, sans
+toucher au socle : le contrat de `RemoteDestination` et le coordinateur de l'issue #8 étaient
+déjà taillés pour ça. Sept décisions méritent d'être tracées.
+
+#### Deux modes d'envoi, choisis sur la taille annoncée
+
+L'API impose le découpage : `files/upload` refuse un corps de 150 Mo ou plus, et il faut alors
+passer par une session (`upload_session/start`, `append_v2`, `finish`). Une sauvegarde Home
+Assistant complète dépasse très souvent ce seuil.
+
+| Taille annoncée par le coordinateur | Mode retenu |
+| --- | --- |
+| Connue et inférieure à 150 Mo | Une requête `files/upload`, corps en flux |
+| 150 Mo et plus | Session fragmentée |
+| **Inconnue** (`Content-Length` absent côté Supervisor) | Session fragmentée |
+
+La taille inconnue bascule en session **par défaut de preuve** : envoyer en une requête une
+sauvegarde dont on ignore la taille, c'est parier qu'elle tient sous le seuil, et découvrir le
+contraire après avoir transféré les octets. La session, elle, fonctionne quelle que soit la
+taille finale.
+
+La taille annoncée est aussi reprise dans l'en-tête `Content-Length` de l'envoi simple. Sans
+elle, `aiohttp` bascule en `Transfer-Encoding: chunked`, que les points d'entrée de contenu de
+Dropbox ne garantissent pas.
+
+Elle ne fait pour autant **pas foi** : c'est une annonce, pas une mesure. L'envoi simple la
+reprenait comme nombre d'octets envoyés, et la vérification finale comparait alors cette annonce
+à elle-même dès que Dropbox était d'accord avec le flux réel — une annonce fausse passait
+inaperçue sur cette voie, là où la session, qui découpe le flux elle-même, l'aurait vue. Les deux
+voies comptent désormais les octets **réellement** transmis : la session en additionnant ses
+fragments, l'envoi simple via un compteur qui enveloppe le flux confié à `aiohttp` (`_Compteur`),
+puisque le transport le consomme hors de la vue du fournisseur.
+
+#### Fragments de 8 Mio, un seul en mémoire
+
+Dropbox recommande des fragments multiples de 4 Mio. **8 Mio** est le compromis retenu : deux
+fois moins de requêtes qu'à 4 Mio, pour une empreinte mémoire qui reste négligeable devant une
+sauvegarde de plusieurs gigaoctets, et très en deçà des 150 Mo qu'un fragment peut atteindre.
+
+Le flux de l'issue #8 arrive par tranches de 64 Kio ; `_fragments()` les accumule dans un
+**tampon unique**, vidé dès qu'il atteint la taille d'un fragment. Un seul fragment est donc en
+mémoire à la fois, quelle que soit la taille de la sauvegarde — c'est l'exigence de l'issue.
+
+Le premier fragment ouvre la session (`start`), les suivants s'ajoutent (`append_v2`) en
+indiquant l'**offset** déjà reçu, et `finish` valide le dépôt avec un corps vide. Cette dernière
+requête paraît superflue ; elle ne l'est pas : elle donne un point de validation unique, qui
+traite de la même façon une sauvegarde vide, une sauvegarde qui tombe pile sur une frontière de
+fragment et le cas courant.
+
+À la fin, deux confrontations ont lieu, sur les deux voies d'envoi indifféremment : les octets
+réellement transmis face à la taille **annoncée** par l'appelant quand elle est connue, puis face
+à la taille **enregistrée par Dropbox**. La première impute l'écart à l'annonce — sur la voie
+simple, cette annonce est le `Content-Length` de la requête, et un corps qui ne la respecte pas
+est un dépôt mal cadré, pas une nuance de comptabilité ; la seconde le met sur le compte du
+transfert. Les deux lèvent une `DestinationError`, avec un message qui dit laquelle a parlé :
+mieux vaut un échec bruyant qu'une archive tronquée que la rétention distante (#9) compterait
+comme une sauvegarde valide.
+
+Une taille annoncée **négative** est traitée comme une taille inconnue (`_taille_annoncee()`) :
+elle ne renseigne rien, n'a donc rien à faire dans un `Content-Length`, et ne doit pas non plus
+être confrontée aux octets envoyés — elle ferait échouer un dépôt intact.
+
+#### Nommage : le nom ne suffit pas, le slug l'accompagne
+
+Le fichier déposé s'appelle `<nom de la sauvegarde> [<slug>].tar`. Le nom seul n'identifie pas
+une sauvegarde — sur une installation Core, `generate_backup_name()` renvoie toujours
+`Core <version>`, exactement le problème qui a imposé la fenêtre d'armement de l'issue #8. Le
+slug, unique, est donc accolé entre crochets, ce qui garde un nom lisible dans l'explorateur
+Dropbox tout en désignant une sauvegarde précise.
+
+Le nom est **normalisé en NFKC avant filtrage**, comme le dossier distant (voir « Le dossier
+distant n'est pas un texte libre » ci-dessus) : sans cela une barre oblique pleine chasse
+(U+FF0F) survivrait au filtrage pour redevenir un séparateur de chemin chez le fournisseur. Les
+caractères que Dropbox refuse (`/ \ : ? * < > " |`) et les caractères non imprimables
+deviennent `_` ; les espaces sont réduites, les points et espaces de bordure retirés (Dropbox
+refuse un nom qui s'y termine) ; et le tout est borné à 200 caractères, la troncature portant
+sur la partie libre, jamais sur le slug ni sur `.tar`.
+
+La normalisation ne suffit pourtant pas à tenir cette promesse, et c'est le point que le premier
+jet manquait : NFKC ne ramène à `/` et `\` que les **formes de compatibilité** — pleine chasse
+U+FF0F et U+FF3C, petite forme U+FE68. Les autres confusables du séparateur la traversent
+intacts : barre oblique de division U+2215, barre de fraction U+2044, grand solidus U+29F8,
+solidus pointé U+2E4A, solidus très gras U+1F67C, diagonales de filet U+2571 et U+2572, et leurs
+symétriques inverses U+2216, U+29F5 et U+29F9. Ils sont donc filtrés **explicitement**
+(`SOLIDUS_CONFUSABLES`), au même titre que les caractères que Dropbox refuse.
+
+Rien de tout cela n'était exploitable : le nom forme un segment unique, que le fournisseur ne
+découpe pas. Deux raisons d'ajouter la liste malgré tout — une garantie annoncée mais partielle
+est une garantie sur laquelle une issue suivante s'appuiera à tort (le listage #12 et la purge
+#9 liront ces noms), et un nom visuellement indiscernable de `Sauvegardes/octobre.tar` dans
+l'explorateur Dropbox trompe l'utilisateur même sans faille technique. Le dossier distant, lui,
+est protégé autrement : il passe par une **liste blanche** (`chemin_de_dossier()`), qui refuse
+d'emblée tout ce qui n'est pas alphanumérique, espace ordinaire ou `-_.()`.
+
+La convention `nom_de_fichier_sauvegarde()` de l'issue #8 (`Sauvegarde_du_22.tar`, celle de
+`download_path`) n'est pas reprise telle quelle : elle passe par `slugify()`, qui écrase les
+espaces et les accents, et ne porte pas le slug. Elle sert de repli quand le nom est vide.
+
+#### Aucun écrasement silencieux : `mode: add` et `autorename: false`
+
+Les trois modes de dépôt de Dropbox ont été pesés :
+
+| Mode | Effet si le nom est déjà pris | Retenu ? |
+| --- | --- | --- |
+| `overwrite` | Le fichier existant est remplacé | Non : une sauvegarde perdue sans un mot |
+| `add` + `autorename: true` | Un second fichier est créé sous un nom voisin | Non : un doublon invisible que la rétention compterait à part |
+| `add` + `autorename: false` | Dropbox refuse (`path/conflict/file`) | **Oui** : l'échec est explicite et sans dégât |
+
+`mute: true` complète le trio, pour ne pas notifier l'utilisateur sur tous ses appareils à
+chaque sauvegarde.
+
+#### Le dossier cible est créé avant le transfert
+
+Dropbox crée les dossiers manquants au moment du dépôt, mais pas avant. `files/create_folder_v2`
+est donc appelé en préalable : le dossier apparaît dès la première sauvegarde, et un problème
+(chemin déjà occupé par un fichier, espace saturé) est signalé **avant** d'avoir transféré le
+moindre octet. Le conflit `path/conflict/folder` n'est pas une erreur — c'est le cas normal à
+partir de la deuxième sauvegarde.
+
+#### Nouvelles tentatives : seulement ce qui est encore en mémoire
+
+Trois tentatives au plus, jamais plus d'une minute d'attente. Le délai demandé par
+`Retry-After` prime — c'est lui qui évite d'aggraver une limitation de débit — et à défaut
+l'attente double à chaque tentative (1 s, 2 s).
+
+Deux restrictions, toutes deux volontaires :
+
+- **le statut ne suffit pas à décider.** Dropbox signale un espace saturé par un `507`, qui est
+  bien un `5xx` sans avoir la moindre chance de s'arranger en une minute. Le motif du corps
+  (`insufficient_space`, `conflict`) a donc le dernier mot sur le statut ;
+- **une requête dont le corps est un flux n'est pas rejouable.** Le flux d'une sauvegarde ne se
+  lit qu'une fois (contrat de l'issue #8) : il n'y a rien à renvoyer. L'envoi simple est donc
+  tenté une seule fois, et la sauvegarde suivante repartira de zéro. C'est précisément ce que la
+  session corrige pour les grosses sauvegardes, dont chaque fragment est encore en mémoire, et
+  dont l'envoi coûte trop cher pour être abandonné sur un incident d'une seconde. Les octets de
+  l'envoi simple ne sont pas conservés « au cas où » : garder jusqu'à 150 Mo en mémoire pour le
+  seul bénéfice d'un rejeu est un prix hors de proportion sur le matériel qui fait tourner Home
+  Assistant.
+
+Le jeton est redemandé à chaque tentative : une attente d'une minute peut suffire à le périmer,
+et la session OAuth2 de l'issue #7 le rafraîchit alors d'elle-même.
+
+Reprendre un téléversement interrompu (redémarrage de Home Assistant en plein transfert) reste
+hors périmètre, comme l'issue le pose : la session serait à persister, et Dropbox refuse un
+`append_v2` à un offset qu'il n'attend pas. Rien n'apparaît dans le dossier tant que `finish`
+n'a pas eu lieu : une session inachevée ne laisse donc pas de fichier partiel.
+
+Les délais réseau sont explicites (`ClientTimeout(total=None, connect=30, sock_read=120)`) :
+la valeur par défaut d'`aiohttp` est de **cinq minutes au total**, ce qui couperait le dépôt
+d'une grosse sauvegarde en plein transfert. Seule l'absence prolongée de données est fatale ;
+la durée totale, elle, reste bornée par le `upload_timeout` du coordinateur.
+
+Un dernier garde-fou borne **une seule requête** de transfert, pour le cas où elle ne rendrait
+jamais la main. Il n'est pas une constante : il est dérivé de ce même `upload_timeout`, lu dans
+les options de l'entrée à chaque dépôt. Figé sur la valeur livrée par défaut, il coupait une
+requête au bout de trente minutes alors que l'utilisateur avait relevé son budget global pour
+une connexion lente — un réglage qui restait donc sans effet sur la seule requête d'un envoi
+simple. Il vaut exactement le budget global, donc lui reste **inférieur ou égal** : c'est
+toujours le coordinateur qui tranche le premier, et une requête unique peut utiliser tout le
+budget que l'utilisateur lui a accordé.
+
+La lecture de l'option vit en un point unique, `delai_de_televersement()` dans
+`destinations/config_entry.py`, dont le coordinateur et les fournisseurs dépendent tous les
+deux : deux lectures indépendantes finiraient par diverger sur le repli ou sur la tolérance aux
+valeurs hors contrat, et c'est précisément cette divergence qui avait laissé la borne par
+requête derrière le réglage.
+
+#### Ce que la sauvegarde distante rapporte à la rétention
+
+`RemoteBackup` est renseignée depuis la réponse de Dropbox, et non depuis ce que le fork croit
+avoir envoyé : `remote_id` est l'identifiant opaque (`id:...`), seule clé de suppression,
+`path` le `path_display`, `size` et `created_at` la taille et le `server_modified` enregistrés
+**par Dropbox**.
+
+`metadata` porte le slug, l'empreinte du contenu (`content_hash`) et le marqueur de provenance
+produit par `marqueur_auto_backup()`. La clé de ce marqueur n'a **qu'une** définition, celle de
+`destinations/retention.py` : la dupliquer dans le fournisseur marchait tant que les deux
+valeurs coïncidaient, et aurait fait qu'un renommage côté rétention cesse en silence de
+reconnaître tous les dépôts Dropbox.
+
+#### Chez Dropbox, ce marqueur ne survit pas au dépôt
+
+C'est la limite à connaître avant d'écrire #12, et elle contredit ce que cet ADR affirmait :
+**l'API Dropbox v2 n'offre aucune métadonnée libre sur un fichier**. Il n'y a pas d'équivalent
+des `appProperties` de Google Drive. Le seul emplacement existant est `property_groups` de
+`CommitInfo`, inutilisable ici : il exige un *modèle de propriétés* déclaré au préalable pour
+l'application, puis la portée `files.metadata.write`, que le fork ne demande pas (cf. « Portées
+demandées, et pourquoi chacune »).
+
+Le marqueur posé dans `_sauvegarde_depuis()` ne vit donc **qu'en mémoire**, le temps que le
+coordinateur de #8 traite la sauvegarde — et le registre de #9 ne le persiste pas davantage : il
+ne garde que `remote_id`, `name`, `slug`, `created_at` et `size`. Aucun fichier déposé chez
+Dropbox ne porte de preuve de provenance.
+
+Pour #12, la provenance se reconstitue donc depuis le **registre** de #9 et, à défaut, depuis la
+**convention de nommage** `<nom> [<slug>].tar` : la piste A de la section « Reconnaître ses
+propres sauvegardes », rejetée comme preuve générale, redevient le seul repli quand le registre
+a été perdu — avec la prudence que cela impose, un nom n'étant pas une preuve. Le marqueur reste
+posé dans `RemoteBackup.metadata` parce qu'il ne coûte rien et qu'un fournisseur capable de le
+persister, lui, n'aura rien à changer au dépôt.
+
+**Risque d'orphelins, à arbitrer dans #12.** Un dépôt qui aboutit chez Dropbox mais que le fork
+rapporte en échec laisse un fichier que rien ne rattache à l'intégration : pas d'entrée au
+registre — `auto_backup.upload_successful` n'a pas été émis — et pas de marqueur à relire. Il ne
+sera jamais purgé et grossira le dossier de l'utilisateur en silence. Trois chemins y mènent :
+
+- le **rejeu** d'un `upload_session/finish` dont la première tentative avait en réalité abouti :
+  Dropbox répond `path/conflict/file`, que le fork traduit en échec (`mode: add`,
+  `autorename: false`) ;
+- un **écart de taille** entre ce que Dropbox enregistre et les octets envoyés : le dépôt est
+  déclaré en échec alors que le fichier est déjà commité ;
+- un **délai dépassé** après le commit mais avant que la réponse ne soit lue.
+
+#12 devra trancher : reconnaissance par la convention de nommage au listage, trace locale des
+dépôts incertains, ou acceptation documentée. Enrichir l'événement de téléversement pour que le
+registre garde le chemin et la date du fournisseur relève de la même issue (voir les points
+ouverts).
+
+#### Les crochets de #12 échouent par une erreur typée
+
+`async_list_backups()` et `async_delete_backup()` restent à écrire, mais ils ne lèvent pas
+`NotImplementedError` : depuis #9, une rétention configurée sur une destination Dropbox fait
+appeler le listage après **chaque** sauvegarde, et `retention._async_lister()` ne journalise
+sans trace d'appel que les erreurs typées du socle. Les deux crochets lèvent donc une
+`DestinationError` dont le message français renvoie à #12 : la purge saute la destination en une
+ligne lisible, au lieu d'empiler une trace d'appel pour une situation parfaitement attendue. Le
+fournisseur Google Drive tranche de la même façon pour #15 (voir « Nommage et marquage des
+fichiers »).
+
+Les journaux enfin : l'en-tête `Authorization` est construit dans une seule fonction et n'est
+journalisé nulle part, à aucun niveau. L'argument `Dropbox-API-Arg` porte le chemin distant —
+donc le nom du dossier et celui de la sauvegarde : il n'apparaît qu'en `debug`. Les niveaux
+supérieurs ne citent que des compteurs, le statut HTTP et le nom de la destination.
 
 ## Téléversement après création (issue #8)
 
@@ -713,13 +958,15 @@ morts : un `.storage` perdu (réinstallation, restauration partielle) rend nos p
 non purgeables, et un dossier distant partagé par deux instances Home Assistant ne voit chacune
 purger que les siennes.
 
-**C. Un marqueur dans les métadonnées du fournisseur.** Dropbox et Google Drive savent attacher
-des propriétés à un fichier (`property groups`, `appProperties`). Un fournisseur les pose au
-téléversement, la purge les relit au listage. La preuve voyage alors **avec le fichier** : elle
-survit à la perte du registre. Mais elle dépend de ce que chaque API sait stocker — souvent des
-chaînes seulement, parfois rien — et elle n'est exploitable qu'une fois le fournisseur capable de
-**lister**. Google Drive pose le marqueur depuis #14 mais ne lit rien avant #15 ; Dropbox attend
-#12 pour les deux.
+**C. Un marqueur dans les métadonnées du fournisseur.** Google Drive sait attacher des
+propriétés privées à un fichier (`appProperties`) : le fournisseur les pose au téléversement, la
+purge les relit au listage, et la preuve voyage alors **avec le fichier** — elle survit à la
+perte du registre. Mais elle dépend de ce que chaque API sait stocker, et elle n'est exploitable
+qu'une fois le fournisseur capable de **lister** : Google Drive pose le marqueur depuis #14 mais
+ne lit rien avant #15. **Dropbox, lui, ne sait rien stocker ici** : son seul emplacement
+(`property_groups`) réclame un modèle de propriétés et une portée que le fork ne demande pas, de
+sorte que le marqueur posé au dépôt par #11 ne vit qu'en mémoire (voir « Chez Dropbox, ce
+marqueur ne survit pas au dépôt ») ; #12 devra s'en passer.
 
 **Décision : B *et* C, en « ou » logique.** Une sauvegarde distante n'est candidate à la purge
 que si elle est **inscrite au registre** *ou* si elle **porte le marqueur** `auto_backup`. Les
@@ -1075,9 +1322,28 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`.
   **Traité à moitié en #14** : Google Drive pose `appProperties.auto_backup` sur chaque fichier
   déposé, mais aucun fournisseur ne sait encore le **relire**, faute de listage — `#15` doit le
-  faire pour Google Drive, `#12` poser *et* relire pour Dropbox. D'ici là, seule la voie du
-  registre protège les sauvegardes du fork, et une purge de destination Google Drive s'arrête au
-  listage sur une `DestinationError` explicite.
+  faire pour Google Drive. **Chez Dropbox, il ne sera jamais relu** : `#11` pose bien le marqueur
+  dans `RemoteBackup.metadata`, mais l'API v2 n'a aucun champ libre pour l'emporter (voir « Chez
+  Dropbox, ce marqueur ne survit pas au dépôt »). La voie du registre y est donc la seule, avec
+  la convention de nommage `<nom> [<slug>].tar` pour dernier repli, à arbitrer en `#12`. D'ici
+  là, une purge de destination Dropbox comme de destination Google Drive s'arrête au listage sur
+  une `DestinationError` explicite.
+
+- **Fichier déposé chez Dropbox mais rapporté en échec (issue #12)** : un dépôt commité que le
+  fork déclare en échec — rejeu de `finish` répondant `path/conflict/file`, écart de taille,
+  délai dépassé après le commit — n'entre pas au registre et ne porte aucun marqueur : il ne sera
+  jamais purgé. Le cas est documenté dans la section Dropbox ci-dessus ; son arbitrage
+  (reconnaissance par nommage, trace locale des dépôts incertains, ou acceptation assumée)
+  appartient à #12, qui écrit le listage.
+
+- **Le registre re-date l'entrée qu'il inscrit (issue #12)** : `#9` alimente le registre depuis
+  l'événement `auto_backup.upload_successful`, qui ne porte ni le chemin distant ni le
+  `server_modified` du fournisseur. `created_at` vaut donc l'instant de réception de l'événement,
+  et non la date enregistrée chez Dropbox — quelques secondes d'écart, sans conséquence
+  fonctionnelle : la suppression s'appuie sur `remote_id`, et la rétention en jours se compte en
+  jours. **Décision : accepté tel quel.** Enrichir l'événement (chemin, date du fournisseur) pour
+  que le registre garde ce que `RemoteBackup` sait déjà relèverait de #12, qui a besoin de ces
+  champs pour le listage.
 
 ## Conséquences
 
@@ -1140,3 +1406,17 @@ Ajouts de l'issue #9 :
 - Une sauvegarde distante n'est supprimable que si sa provenance est établie (registre ou
   marqueur) **et** qu'elle dépasse la rétention de sa destination ; un fichier étranger au fork
   est invisible pour la purge.
+
+Ajouts de l'issue #11 :
+
+- Une sauvegarde part réellement chez Dropbox : le socle et le coordinateur de `#8` n'ont pas
+  bougé d'une ligne, seul `DropboxDestination.async_upload()` a été écrit — la preuve que le
+  contrat de `RemoteDestination` tenait la route pour un fournisseur réel.
+- Une sauvegarde déposée porte le marqueur `auto_backup` dans `RemoteBackup.metadata`, mais
+  **rien ne l'emporte chez Dropbox** : l'API v2 n'offre aucune métadonnée libre. C'est le
+  registre de `#9` qui établit la provenance, et `#12` devra s'en accommoder (voir « Chez
+  Dropbox, ce marqueur ne survit pas au dépôt »).
+- `#14` héritera des mêmes questions — seuil d'envoi simple, fragmentation, rejeu borné — mais
+  pas du même code : les deux API n'ont ni le même protocole d'envoi par morceaux, ni les mêmes
+  codes d'erreur. Le jour où une troisième s'ajouterait, une fabrique commune de tentatives
+  vaudrait d'être extraite ; à deux fournisseurs, elle coûterait plus qu'elle ne rapporte.

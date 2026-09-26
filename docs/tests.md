@@ -50,7 +50,9 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
-| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
+| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès, et refus typé des crochets encore à écrire (#12). |
+| `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
+| `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/test_provider_google_drive_upload.py` | Téléversement Google Drive : dossier cible, envoi resumable par fragments, reprises, erreurs typées, journaux et parcours complet depuis le service. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
@@ -345,6 +347,86 @@ joignable, options upstream complétées — et trois s'y ajoutent :
   parcours complet vérifie qu'un **unique** appel au point « compte » sert le nom proposé et les
   données persistées, et qu'un échec de ce crochet **interrompt** l'ajout (abandon
   `echec_fournisseur`) sans laisser de problème de ré-authentification orphelin.
+- **Un crochet encore à écrire qui est appelé en fonctionnement échoue par une erreur typée**, et
+  un test l'exige. Le listage Dropbox (#12) est appelé par la purge distante après **chaque**
+  sauvegarde dès qu'une rétention est configurée : une `NotImplementedError` tombait dans la
+  clause de dernier recours du coordinateur, qui journalisait une trace d'appel complète à chaque
+  fois. Le test déroule donc le service `auto_backup.purge` sur une destination Dropbox porteuse
+  d'une rétention et vérifie le **journal** : aucun enregistrement porteur d'une trace, et une
+  seule ligne d'erreur, qui nomme la destination et renvoie à l'issue.
+
+  ```python
+  with caplog.at_level(logging.DEBUG):
+      await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+      await hass.async_block_till_done()
+
+  assert [enr.message for enr in caplog.records if enr.exc_info] == []
+  ```
+
+## Tester le dépôt d'une sauvegarde chez un fournisseur
+
+[`tests/test_provider_dropbox_upload.py`](../tests/test_provider_dropbox_upload.py) (issue #11)
+éprouve l'envoi réel d'une sauvegarde, et
+[`tests/test_provider_dropbox_upload_cas_limites.py`](../tests/test_provider_dropbox_upload_cas_limites.py)
+ses cas limites, en réutilisant ses fixtures plutôt qu'en les dupliquant. Six particularités
+s'ajoutent à celles ci-dessus.
+
+**Les seuils sont réduits par `patch`, jamais atteints pour de vrai.** Fabriquer 150 Mo d'octets
+pour franchir le seuil de fragmentation coûterait plus cher que ce que le test prouve ; ce sont
+les **mécanismes** qui sont vérifiés — nombre d'appels, offsets successifs, validation finale :
+
+```python
+with (
+    patch(f"{MODULE_DROPBOX}.SEUIL_ENVOI_SIMPLE", fragment),
+    patch(f"{MODULE_DROPBOX}.TAILLE_FRAGMENT", fragment),
+):
+    await televerser(destination, contenu=contenu)
+```
+
+Un test distinct garde les **valeurs livrées** sous surveillance (150 Mo, 8 Mio, multiple de
+4 Mio) : sans lui, un seuil changé par erreur passerait inaperçu, tous les autres tests le
+remplaçant par le leur. Pour que ces `patch` mordent, le code relit la constante au lieu de la
+figer en valeur par défaut d'un paramètre.
+
+**Le corps d'une requête se lit dans `aioclient_mock.mock_calls`**, dont chaque entrée est un
+quadruplet `(méthode, url, corps, en-têtes)`. Deux pièges :
+
+- un corps vide (la requête `finish`) est ramené à `None` par le simulateur ;
+- un corps **en flux** est enregistré tel quel, sans être consommé. Le lire après coup ne
+  fonctionne que si sa source est en mémoire ; quand le flux vient d'un vrai fichier refermé à la
+  fin du téléversement, il faut le consommer **pendant** la requête, avec un `side_effect` —
+  c'est ce que fait `servir_en_consommant()`.
+
+**Le simulateur de `files/upload` doit lire le corps de la requête**, et pas seulement le
+mémoriser : le fournisseur compte les octets **réellement** transmis pour vérifier la taille du
+dépôt, et un simulateur qui n'itère jamais le flux lui fait voir zéro octet — le test échouerait
+sur un code intact, ce qui n'apprend rien à personne. L'aide `simuler_l_envoi()` enregistre donc
+un `side_effect` consommant et rend les corps reçus :
+
+```python
+simuler_le_dossier(aioclient_mock)
+recu = simuler_l_envoi(aioclient_mock)
+
+await televerser(destination)
+
+assert recu == [CONTENU]
+```
+
+La session fragmentée n'a pas ce besoin : elle découpe le flux elle-même, ses fragments sont donc
+des `bytes` déjà lus quand la requête part.
+
+**Les réponses successives d'une même URL passent par `side_effect`.** Enregistrer deux fois la
+même URL sur `aioclient_mock` ne sert que la première ; l'aide `servir()` rend les réponses
+l'une après l'autre, la dernière valant pour tous les appels suivants. C'est ce qui permet
+d'éprouver « `429` avec `Retry-After`, puis succès » en une seule opération.
+
+**`asyncio.sleep` est neutralisé** par la fixture `sommeil`, qui mémorise les délais demandés :
+un test vérifie le délai **observé**, pas le temps écoulé. Les tests qui en ont besoin
+l'appellent directement sur la destination, hors de toute tâche de fond.
+
+**Le journal est éprouvé à deux moments** : un téléversement réussi, et un téléversement qui
+échoue après plusieurs tentatives. Dans les deux cas, ni `Authorization`, ni `Bearer`, ni aucun
+jeton ne doit apparaître, même en `debug`.
 
 ## Tester le téléversement vers Google Drive
 
@@ -481,8 +563,9 @@ entités), le socle des destinations distantes (contrat, registre, persistance),
 autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression), le
 téléversement après création (lecture en flux, événements, échecs, délai maximum), la connexion
 d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
-et la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant).
-L'envoi effectif d'un fichier chez chaque fournisseur (#11 et #14), son listage et sa suppression
-(#12 et #15) sont testés par leurs issues respectives.
+la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant) et le
+dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14). Le
+listage et la suppression chez chaque fournisseur (#12 et #15) sont testés par leurs issues
+respectives.
 
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).
