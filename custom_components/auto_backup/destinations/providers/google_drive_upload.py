@@ -97,11 +97,19 @@ VRAI_DRIVE = "true"
 UNITE_FRAGMENT = 256 * 1024
 TAILLE_FRAGMENT = 32 * UNITE_FRAGMENT  # 8 Mio
 
-# Bornes de nommage : un nom de fichier Drive peut aller jusqu'à 32 Ko, mais un
-# nom pareil ne se lit plus. La valeur d'une propriété privée est bornée par
-# Google (124 octets pour le couple clé + valeur).
+# Borne du nom de fichier : un nom Drive peut aller jusqu'à 32 Ko, mais un nom
+# pareil ne se lit plus. Celle-ci est donc un choix de lisibilité de ce fork, et
+# se compte en caractères.
 LONGUEUR_MAX_NOM = 120
-LONGUEUR_MAX_PROPRIETE = 100
+
+# Borne d'une propriété privée : celle-ci, à l'inverse, est **imposée par
+# Google** et non choisie par ce fork — l'API Drive refuse une entrée de
+# `appProperties` dont la clé et la valeur dépassent ensemble 124 **octets**, et
+# fait alors échouer tout l'appel, pas seulement la propriété fautive. Le budget
+# d'une valeur est donc ce qui reste une fois sa clé décomptée, et il se mesure
+# en octets UTF-8 : un caractère accentué en pèse deux, un idéogramme trois, un
+# emoji quatre.
+OCTETS_MAX_PROPRIETE = 124
 
 # Nouvelles tentatives : trois essais au total, délai doublé à chaque reprise et
 # plafonné. Un `Retry-After` envoyé par Google l'emporte sur ce calcul.
@@ -462,19 +470,43 @@ def nom_du_fichier(nom: str, slug: str | None = None) -> str:
     return f"{base}.tar"
 
 
+def _valeur_de_propriete(cle: str, valeur: str) -> str:
+    """Valeur tronquée à ce que la clé `cle` laisse du budget de Google.
+
+    `OCTETS_MAX_PROPRIETE` borne la clé **et** la valeur ensemble : le budget de
+    la valeur est ce qui reste une fois la clé décomptée. La coupe se fait en
+    octets UTF-8 et non en caractères, sinon un nom riche en accents,
+    idéogrammes ou emoji — deux à quatre octets par caractère — passerait la
+    borne côté Python et se ferait refuser côté Google. La valeur est encodée une
+    fois, coupée, puis redécodée en ignorant ce qui n'est plus une séquence
+    valide : c'est ce qui écarte d'office le caractère à cheval sur la coupe,
+    plutôt que d'envoyer un octet orphelin.
+    """
+    budget = OCTETS_MAX_PROPRIETE - len(cle.encode("utf-8"))
+    octets = valeur.encode("utf-8")
+    if len(octets) <= budget:
+        return valeur
+    return octets[:budget].decode("utf-8", errors="ignore")
+
+
 def proprietes_du_fichier(nom: str, slug: str | None) -> dict[str, str]:
     """Propriétés privées posées sur le fichier déposé.
 
     `auto_backup` marque l'origine du fichier — c'est lui qui autorise le
     listage et la purge distante à agir — et `slug` fait le lien avec la
     sauvegarde locale correspondante.
+
+    Chaque valeur est bornée par `_valeur_de_propriete()` : la limite de
+    `OCTETS_MAX_PROPRIETE` octets par couple clé + valeur est celle de l'API
+    Drive, pas un choix de ce fork, et la dépasser ferait échouer tout le
+    téléversement.
     """
     proprietes = {MARQUEUR_AUTO_BACKUP: VRAI_DRIVE}
-    lisible = _assainir(nom)[:LONGUEUR_MAX_PROPRIETE].strip()
+    lisible = _valeur_de_propriete(PROPRIETE_NOM, _assainir(nom)).strip()
     if lisible:
         proprietes[PROPRIETE_NOM] = lisible
     if slug:
-        proprietes[PROPRIETE_SLUG] = slug[:LONGUEUR_MAX_PROPRIETE]
+        proprietes[PROPRIETE_SLUG] = _valeur_de_propriete(PROPRIETE_SLUG, slug)
     return proprietes
 
 
@@ -855,6 +887,8 @@ __all__ = [
     "MARQUEUR_AUTO_BACKUP",
     "MIME_DOSSIER",
     "MIME_SAUVEGARDE",
+    "OCTETS_MAX_PROPRIETE",
+    "PROPRIETE_NOM",
     "PROPRIETE_SLUG",
     "TAILLE_FRAGMENT",
     "TENTATIVES_MAX",

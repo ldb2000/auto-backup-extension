@@ -762,6 +762,11 @@ propriétés privées sont invisibles dans l'interface de Drive mais **requêtab
 que le listage (#15) et la purge distante (#9) reconnaîtront les fichiers déposés par Auto Backup,
 et ne toucheront jamais à ceux de l'utilisateur.
 
+Leurs valeurs sont tronquées à **124 octets UTF-8 par propriété, clé comprise** : cette borne est
+celle de l'API Drive et non un choix de ce fork, et la dépasser ferait échouer tout l'appel. La
+coupe se compte donc en octets et non en caractères — un nom en accents, idéogrammes ou emoji pèse
+deux à quatre octets par caractère — et elle ne tombe jamais au milieu d'un caractère.
+
 ### Journaux
 
 Ni le jeton, ni l'en-tête `Authorization`, ni l'**URL de session** n'apparaissent dans les

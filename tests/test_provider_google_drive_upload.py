@@ -82,12 +82,16 @@ from custom_components.auto_backup.destinations.providers.google_drive import (
 from custom_components.auto_backup.destinations.providers.google_drive_upload import (
     MARQUEUR_AUTO_BACKUP,
     MIME_DOSSIER,
+    OCTETS_MAX_PROPRIETE,
+    PROPRIETE_NOM,
+    PROPRIETE_SLUG,
     TAILLE_FRAGMENT,
     UNITE_FRAGMENT,
     URL_ENVOI,
     URL_FICHIERS,
     entete_content_range,
     nom_du_fichier,
+    proprietes_du_fichier,
     requete_de_dossier,
 )
 
@@ -499,6 +503,62 @@ def test_le_nom_du_fichier_reste_lisible_et_unique(
 ) -> None:
     """Critère 2 : « <nom> [<slug>].tar », assaini, jamais vide."""
     assert nom_du_fichier(nom, slug) == attendu
+
+
+def test_un_nom_multi_octets_tient_dans_la_borne_en_octets_de_google() -> None:
+    """Critère 3 : la borne d'une propriété privée est celle de Google, en octets.
+
+    L'API Drive refuse une entrée de `appProperties` dont la clé et la valeur
+    dépassent ensemble 124 octets. Un nom riche en caractères multi-octets
+    (accents, idéogrammes, emoji) tient sous une borne comptée en caractères tout
+    en dépassant celle de Google : c'est le cas construit ici.
+    """
+    # Nom déjà assaini : pas de caractère réservé, pas d'espace doublé, donc
+    # `_assainir()` le laisse tel quel et la valeur produite en est un préfixe.
+    nom = "Sauvegarde été 漢字 🗄" * 5
+    # Moins de 100 caractères — l'ancienne borne, comptée en caractères, laissait
+    # donc ce nom passer intact, et ses 140 octets se faisaient refuser.
+    assert len(nom) < 100
+    assert len(nom.encode("utf-8")) > OCTETS_MAX_PROPRIETE
+
+    valeur = proprietes_du_fichier(nom, "abc123")[PROPRIETE_NOM]
+
+    budget = OCTETS_MAX_PROPRIETE - len(PROPRIETE_NOM.encode("utf-8"))
+    assert len(valeur.encode("utf-8")) <= budget
+    # Aucun caractère coupé en deux : la valeur reste un préfixe exact du nom, et
+    # ne porte pas de caractère de remplacement.
+    assert nom.startswith(valeur)
+    assert "�" not in valeur
+    # La coupe ne rogne pas plus que nécessaire : le caractère suivant est bien
+    # celui qui ne tenait plus dans le budget.
+    assert len((valeur + nom[len(valeur)]).encode("utf-8")) > budget
+
+
+@pytest.mark.parametrize(
+    "nom",
+    [
+        "N" * 300,
+        "é" * 300,
+        "漢" * 300,
+        "🗄" * 300,
+        "Sauvegarde été 漢字 🗄" * 20,
+        "é漢🗄" * 100,
+    ],
+)
+def test_aucune_propriete_ne_depasse_la_borne_en_octets_de_google(nom: str) -> None:
+    """Critère 3 : quelle que soit l'entrée, Google ne peut pas refuser l'appel.
+
+    Le dépassement de la borne fait échouer tout le téléversement, pas seulement
+    la propriété fautive : aucune valeur produite ne doit donc pouvoir la
+    franchir, clé comprise.
+    """
+    proprietes = proprietes_du_fichier(nom, "sauvegarde-été-🗄" * 20)
+
+    assert set(proprietes) == {MARQUEUR_AUTO_BACKUP, PROPRIETE_NOM, PROPRIETE_SLUG}
+    for cle, valeur in proprietes.items():
+        octets = len(cle.encode("utf-8")) + len(valeur.encode("utf-8"))
+        assert octets <= OCTETS_MAX_PROPRIETE, f"{cle} pèse {octets} octets"
+        assert "�" not in valeur
 
 
 def test_une_apostrophe_dans_le_dossier_est_echappee_pour_google() -> None:
