@@ -1352,13 +1352,10 @@ subsistent, chacun avec son test :
   chez Dropbox —, si bien que la cause reste diagnosticable une fois le code masqué. La réserve
   ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
 
-**Ce que l'issue #16 doit faire à sa fusion.** La branche `issue-16-entites-destinations` n'est
-pas fusionnée au moment où ce module est créé, et y garde son propre `assainir_le_message()`. Elle
-doit y **déléguer** : `assainir_le_message(message)` devient l'enveloppe qui ramène `None` et une
-chaîne vide à `cause inconnue`, puis appelle `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`.
-Aucun motif ne doit rester dans `entities.py` — c'est précisément la divergence que ce module
-supprime. L'ordre de fusion retenu est #17 puis #16, pour que #16 adopte ce module au moment de sa
-propre fusion.
+**Adoption par l'issue #16.** `assainir_le_message()` d'`entities.py` est l'enveloppe qui ramène
+`None` et une chaîne vide à `cause inconnue`, puis appelle
+`masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`. Aucun motif ne reste dans `entities.py` —
+c'est précisément la divergence que ce module supprime.
 
 **Textes en français dans le code.** Une notification persistante n'a pas de clé de traduction
 côté Home Assistant, contrairement aux problèmes et aux étapes du flux d'options : ses libellés
@@ -1446,37 +1443,17 @@ qui avait échoué, et quand », pas à « y a-t-il un problème maintenant ».
 Un attribut d'entité est lisible par toute personne ayant accès à l'instance, et l'enregistreur
 le conserve dans son historique. Or le message d'erreur d'un fournisseur recopie parfois la
 requête refusée, en-tête `Authorization` compris — et il n'écrit pas toujours le jeton derrière
-une clé reconnaissable. `assainir_le_message()` procède donc par passes successives, de la plus
-précise à la plus générale, avant toute exposition :
+une clé reconnaissable.
 
-1. **adresses électroniques** : « compte jean.dupont@example.com non autorisé » est une donnée
-   personnelle, masquée entièrement ;
-2. **en-têtes** `Bearer` et `Basic` ;
-3. **affectations d'une clé sensible** (`access_token`, `refresh_token`, `client_secret`,
-   `upload_id`, `token`, `code`...), quel que soit le séparateur : `=`, `:` ou une simple espace
-   (« invalid token sl.… »). `upload_id` en fait partie parce que l'URL d'une session de
-   téléversement reprenable **vaut jeton de reprise** : qui la connaît écrit dans le compte. Les
-   bornes de mot-clé ne sont pas `\b` — `_` est un caractère de mot, et `authorization_code=…`
-   doit être reconnu sur sa clé `code` ;
-4. **formes connues de jetons**, masquées même nues : Dropbox (`sl.`), Google (`ya29.`, `1//`) ;
-5. **suites opaques** d'au moins vingt caractères qui ne ressemblent pas à un mot (chiffres,
-   casses mêlées, `_` ou `+`).
-
-La valeur de remplacement est la même constante `***` que
-`DestinationConfig.as_dict(masquer=True)`, et le message est enfin borné à 255 caractères.
-
-Le masquage est volontairement **large** : masquer un code d'erreur HTTP coûte moins cher que
-laisser fuir un jeton de rafraîchissement. Il s'arrête néanmoins là où il détruirait le message
-sans rien protéger, car cet attribut est **affiché à l'utilisateur** :
-
-- un **mot ordinaire** qui suit un mot-clé séparé par une espace n'est pas masqué (« token
-  expiré », « code de la sauvegarde ») : sans cette réserve, les messages en français
-  deviendraient illisibles ;
-- le filtre générique **coupe aux `/`, `=` et `.`**, de sorte qu'un chemin d'URL reste entier
-  (`…googleapis.com/upload/drive/v3/files` est conservé, `upload_id=…` est masqué). La
-  contrepartie est assumée : un secret en base64 *standard* contenant un `/` n'est masqué que
-  par tronçons — les jetons des fournisseurs visés sont en base64url (`-`, `_`), où le cas ne se
-  présente pas, et leurs formes connues sont déjà couvertes par la passe 4.
+`assainir_le_message()` ne tient **aucun motif propre** : c'est une enveloppe qui ramène `None`
+et la chaîne vide à `cause inconnue`, puis délègue à
+`masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` du module commun `destinations/masquage.py`
+(voir la section « `destinations/masquage.py` : un seul masquage pour tout le fork »). Les
+passes, la valeur de remplacement `***` et les réserves assumées — mot ordinaire épargné derrière
+un mot-clé, coupure aux `/`, `=` et `.` qui garde les URL lisibles — sont celles de ce module, et
+décrites en tête de celui-ci. Un attribut d'entité masque donc exactement ce qu'une notification
+masque : une copie locale, plus étroite, laissait passer `accessToken: …`, les chemins
+`/backup/…` et `/config/…` ou `tokens=[…]`. Le message est enfin borné à 255 caractères.
 
 ### Le registre de la rétention distante fait autorité sur le compte
 
@@ -1707,15 +1684,11 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   que le registre garde ce que `RemoteBackup` sait déjà relèverait de #12, qui a besoin de ces
   champs pour le listage.
 
-- **Délégation du masquage par les entités d'état (issue #16)** : `destinations/masquage.py` est le
-  point unique de masquage du fork depuis #17 (voir la section « Un seul masquage pour tout le
-  fork » ci-dessus), mais la branche `issue-16-entites-destinations` n'est pas fusionnée et garde
-  son propre `assainir_le_message()`. **À faire à la fusion de #16** : en faire une enveloppe qui
-  ramène `None` et la chaîne vide à `cause inconnue`, puis appelle
-  `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` ; aucun motif ne doit rester dans
-  `entities.py`. L'ordre de fusion retenu est #17 puis #16.
+- **Délégation du masquage par les entités d'état (issue #16)** : résolu. `assainir_le_message()`
+  délègue à `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` de `destinations/masquage.py` ;
+  aucun motif ne reste dans `entities.py`.
 
-## Conséquences
+## Conséquences## Conséquences
 
 - Le code du fork est isolé dans `custom_components/auto_backup/destinations/`, soumis à
   l'intégralité des règles de lint et au formatage automatique, contrairement au code upstream
@@ -1750,8 +1723,9 @@ Ajouts de l'issue #16 :
   distante (#9), `hass.data[DATA_REMOTE_BACKUPS]` ; en son absence, un compteur interne
   alimenté par les événements et restauré au redémarrage sert de repli.
 - Les messages d'erreur exposés en attribut sont masqués et bornés par
-  `assainir_le_message()` : ni jeton — même nu, sans clé adjacente — ni adresse électronique ne
-  peut atteindre l'historique d'états.
+  `assainir_le_message()`, qui délègue au module commun `destinations/masquage.py` : ni jeton —
+  même nu, sans clé adjacente —, ni adresse électronique, ni chemin absolu ne peut atteindre
+  l'historique d'états.
 - L'état d'une destination distingue « jamais renseigné » de « remis à sa valeur neutre » par
   des marqueurs explicites : une restauration ne peut pas réinstaller une erreur résolue ni un
   compte purgé.
