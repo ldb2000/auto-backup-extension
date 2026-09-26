@@ -389,11 +389,18 @@ Deux points d'attention en ajoutant un test :
 - **l'URL de session est une valeur sensible** au même titre qu'un jeton : elle figure dans la
   liste des chaînes qu'un test vérifie absentes des journaux en niveau `debug`.
 
-Le dernier test du fichier est un **parcours complet** : appel de `auto_backup.backup` avec
-`upload_to`, création de sauvegarde simulée, puis vérification que l'événement
-`auto_backup.upload_successful` porte l'identifiant distant renvoyé par Drive. Il suit les règles
-de la section « Tester le téléversement d'une sauvegarde » ci-dessus — `wait_background_tasks=True`
-compris.
+Le fichier se termine par deux **parcours complets**, qui suivent les règles de la section
+« Tester le téléversement d'une sauvegarde » ci-dessus — `wait_background_tasks=True` compris :
+
+- appel de `auto_backup.backup` avec `upload_to`, création de sauvegarde simulée, puis vérification
+  que l'événement `auto_backup.upload_successful` porte l'identifiant distant renvoyé par Drive ;
+- le même parcours avec une **rétention configurée** sur la destination, qui déclenche la purge
+  distante (#9) après le téléversement. Le listage Google Drive n'existant pas avant #15, cette
+  purge échoue nécessairement : le test vérifie que l'échec est journalisé **sans trace d'appel**
+  (`"Traceback" not in caplog.text`, et aucun enregistrement porteur d'`exc_info`) et que le
+  message renvoie à l'issue. C'est un test de **bruit de journal** : sans lui, remplacer la
+  `DestinationError` des deux méthodes différées par une `NotImplementedError` repasserait
+  inaperçu, alors qu'il en résulterait une trace d'appel à chaque sauvegarde.
 
 ## Compatibilité Python
 

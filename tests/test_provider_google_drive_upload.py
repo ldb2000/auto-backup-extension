@@ -57,6 +57,7 @@ from custom_components.auto_backup.const import (
     CONF_FOLDER,
     CONF_PROVIDER,
     CONF_PROVIDER_DATA,
+    CONF_RETENTION_COUNT,
     DATA_AUTO_BACKUP,
     DATA_DESTINATIONS,
     DOMAIN,
@@ -1395,14 +1396,19 @@ def sauvegarde_locale(tmp_path: Path) -> Path:
     return chemin
 
 
+def _simuler_la_creation(hass: HomeAssistant, sauvegarde_locale: Path) -> None:
+    """Branche une création de sauvegarde simulée sur le gestionnaire chargé."""
+    handler = hass.data[DATA_AUTO_BACKUP]._handler
+    handler._manager = _faux_backup_manager(sauvegarde_locale)
+    handler.create_backup = AsyncMock(return_value={"slug": SLUG})
+
+
 @pytest.fixture
 def integration_prete(
     hass: HomeAssistant, entree_google: MockConfigEntry, sauvegarde_locale: Path
 ) -> Iterator[None]:
     """Remplace la création de sauvegarde par une création simulée."""
-    handler = hass.data[DATA_AUTO_BACKUP]._handler
-    handler._manager = _faux_backup_manager(sauvegarde_locale)
-    handler.create_backup = AsyncMock(return_value={"slug": SLUG})
+    _simuler_la_creation(hass, sauvegarde_locale)
     yield None
 
 
@@ -1435,3 +1441,52 @@ async def test_le_service_de_sauvegarde_televerse_vers_google_drive(
     assert succes[0].data[ATTR_SIZE] == len(CONTENU)
     assert bytes(faux.recu) == CONTENU
     assert faux.sessions[0]["appProperties"]["slug"] == SLUG
+
+
+async def test_la_purge_d_une_destination_drive_ne_journalise_aucune_trace(
+    hass: HomeAssistant,
+    integration_backup: None,
+    sauvegarde_locale: Path,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Le listage manquant (#15) est une erreur attendue, pas un défaut à tracer.
+
+    Dès qu'une rétention est configurée sur la destination, la purge distante
+    (#9) appelle `async_list_backups()` après **chaque** téléversement réussi.
+    Tant que #15 ne l'a pas implémenté, cet appel échoue nécessairement : il doit
+    le faire par une `DestinationError`, que le coordinateur de purge attend et
+    journalise en une ligne lisible. Une `NotImplementedError` y serait rattrapée
+    comme erreur inattendue et journalisée avec une trace d'appel à chaque
+    sauvegarde — un bruit de journal permanent pour une limite connue.
+    """
+    await _entree(hass, **{CONF_RETENTION_COUNT: 1})
+    _simuler_la_creation(hass, sauvegarde_locale)
+    faux = _FauxDrive(aioclient_mock)
+    succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+
+    with caplog.at_level(logging.ERROR):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_BACKUP,
+            {"name": NOM_SAUVEGARDE, ATTR_UPLOAD_TO: IDENTIFIANT_DESTINATION},
+            blocking=True,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    # Le téléversement aboutit : seule la purge qui le suit ne peut rien faire.
+    assert len(succes) == 1
+    assert bytes(faux.recu) == CONTENU
+
+    # L'échec du listage est expliqué en une ligne, et renvoie à l'issue.
+    assert "listage impossible" in caplog.text
+    assert "n'est pas encore implémenté" in caplog.text
+    assert "#15" in caplog.text
+
+    # Aucune trace d'appel : c'est ce que le journal ne doit plus contenir.
+    assert "Traceback" not in caplog.text
+    assert [
+        enregistrement.message
+        for enregistrement in caplog.records
+        if enregistrement.exc_info is not None
+    ] == []

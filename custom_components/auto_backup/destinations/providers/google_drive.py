@@ -3,7 +3,9 @@
 Ce module branche Google Drive sur le socle des destinations distantes : il
 déclare son autorisation OAuth2 (`OAUTH2_SPEC`), identifie le compte autorisé,
 vérifie l'accès et téléverse une sauvegarde. Le listage et la suppression (#15)
-viendront le compléter sans rien changer ici d'autre que leurs deux méthodes.
+viendront le compléter sans rien changer ici d'autre que leurs deux méthodes ;
+d'ici là, elles lèvent une `DestinationError` explicite, que la rétention
+distante (#9) traite comme l'échec attendu qu'elle est.
 
 Le téléversement lui-même — dossier cible et envoi resumable — vit dans
 `google_drive_upload.py`, importé **dans** `async_upload()` : ce module-ci
@@ -484,16 +486,32 @@ class GoogleDriveDestination(RemoteDestination):
         return distante
 
     async def async_list_backups(self) -> list[RemoteBackup]:
-        """Listage : implémenté par l'issue #15."""
-        raise NotImplementedError(
-            "le listage des sauvegardes Google Drive est implémenté par l'issue #15"
+        """Listage : implémenté par l'issue #15.
+
+        L'absence de listage est une **erreur attendue**, pas un défaut de
+        programmation : depuis la rétention distante (#9), une destination
+        Google Drive porteuse d'une rétention appelle cette méthode après chaque
+        téléversement réussi. Une `NotImplementedError` y serait rattrapée comme
+        erreur inattendue et journalisée en `ERROR` avec une trace d'appel, à
+        chaque sauvegarde. Une `DestinationError` dit la même chose au
+        coordinateur de purge, qui l'attend, la journalise en une ligne lisible
+        et passe à la destination suivante.
+        """
+        raise DestinationError(
+            "le listage des sauvegardes Google Drive n'est pas encore "
+            "implémenté, voir l'issue #15"
         )
 
     async def async_delete_backup(self, remote_id: str) -> None:
-        """Suppression : implémentée par l'issue #15."""
-        raise NotImplementedError(
-            "la suppression d'une sauvegarde Google Drive est implémentée par "
-            "l'issue #15"
+        """Suppression : implémentée par l'issue #15.
+
+        `DestinationError` pour la même raison que le listage ci-dessus. La
+        purge n'atteint pas encore cette méthode — elle abandonne la destination
+        dès le listage — mais un appel direct doit échouer de la même façon.
+        """
+        raise DestinationError(
+            "la suppression d'une sauvegarde Google Drive n'est pas encore "
+            "implémentée, voir l'issue #15"
         )
 
 

@@ -865,14 +865,24 @@ async def test_les_operations_de_sauvegarde_viennent_ensuite(
     arguments: tuple,
     issue: str,
 ) -> None:
-    """Hors périmètre des issues #13 et #14 : le contrat est déclaré, pas tenu."""
+    """Hors périmètre des issues #13 et #14 : le contrat est déclaré, pas tenu.
+
+    L'erreur levée est une `DestinationError` et **non** une
+    `NotImplementedError` : la rétention distante (#9) appelle
+    `async_list_backups()` après chaque téléversement réussi dès qu'une rétention
+    est configurée, et une erreur non typée y serait journalisée en `ERROR` avec
+    une trace d'appel à chaque sauvegarde. Le message renvoie à l'issue qui
+    livrera l'implémentation.
+    """
     destination = _destination(hass)
     appel = getattr(destination, operation)
 
-    with pytest.raises(NotImplementedError) as erreur:
+    with pytest.raises(DestinationError) as erreur:
         await appel(*arguments)
 
+    assert not isinstance(erreur.value, NotImplementedError)
     assert issue in str(erreur.value)
+    assert "pas encore" in str(erreur.value)
 
 
 async def test_le_televersement_accepte_la_forme_du_coordinateur(

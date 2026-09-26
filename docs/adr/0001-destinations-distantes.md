@@ -926,9 +926,15 @@ toutes les sauvegardes sans nom explicite s'appellent « Core <version> », des 
 recouvriraient.
 
 Chaque fichier porte `appProperties = {auto_backup: "true", slug: <slug>, name: <nom>}`. Ces
-propriétés privées sont invisibles dans l'interface de Drive mais **requêtables** : c'est par elles
-que le listage (#15) et la purge distante (#9) reconnaîtront les fichiers déposés par Auto Backup,
-et ne toucheront jamais à ceux de l'utilisateur.
+propriétés privées sont invisibles dans l'interface de Drive mais **requêtables** : c'est le
+marqueur que la purge distante (#9) exige avant toute suppression, de sorte qu'un document de
+l'utilisateur ne puisse jamais être touché. Le poser est tout ce que #14 peut faire : le relire
+demande de **lister**, ce que #15 apporte. Jusque-là, `async_list_backups()` et
+`async_delete_backup()` lèvent une `DestinationError` explicite — et non une
+`NotImplementedError` : la purge appelle le listage après **chaque** téléversement réussi dès
+qu'une rétention est configurée, et une erreur non typée y serait journalisée en `ERROR` avec une
+trace d'appel à chaque sauvegarde, alors qu'il s'agit d'une limite connue. Le message renvoie à
+l'issue #15 et la purge passe à la destination suivante.
 
 Leurs valeurs sont tronquées à **124 octets UTF-8 par propriété, clé comprise** : cette borne est
 celle de l'API Drive et non un choix de ce fork, et la dépasser ferait échouer tout l'appel. La
