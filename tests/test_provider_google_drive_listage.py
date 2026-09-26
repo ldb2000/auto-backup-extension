@@ -530,6 +530,31 @@ async def test_un_dossier_marque_n_est_jamais_pris_pour_une_sauvegarde(
     assert await _destination(hass).async_list_backups() == []
 
 
+async def test_un_fichier_marque_d_un_type_different_du_tar_reste_une_sauvegarde(
+    hass: HomeAssistant,
+    entree_drive: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Seul le type dossier est exclu, pas un autre type que celui du tar.
+
+    `_est_une_sauvegarde()` n'exige pas `mimeType == MIME_SAUVEGARDE` : elle
+    exclut uniquement `MIME_DOSSIER` (cf. son docstring, « il ne remonte jamais
+    un dossier »). Un fichier marqué Auto Backup d'un type inhabituel — jamais un
+    document de l'utilisateur, la portée `drive.file` ne rendant visible que ce
+    qu'Auto Backup a lui-même créé — reste donc purgeable. Ce test fige ce
+    comportement pour qu'un resserrement du filtre sur `MIME_SAUVEGARDE` soit un
+    choix délibéré, et non une régression silencieuse.
+    """
+    _FauxDrive(
+        aioclient_mock,
+        fichiers=[fichier_drive("type-inhabituel", mime="application/octet-stream")],
+    )
+
+    distantes = await _destination(hass).async_list_backups()
+
+    assert [distante.remote_id for distante in distantes] == ["type-inhabituel"]
+
+
 async def test_un_dossier_vide_ne_remonte_rien(
     hass: HomeAssistant,
     entree_drive: MockConfigEntry,
@@ -675,6 +700,56 @@ async def test_un_dossier_inconnu_est_resolu_puis_memorise(
     assert [creation["name"] for creation in faux.creations] == [DOSSIER]
     (persistee,) = entree.options[CONF_DESTINATIONS]
     assert persistee[CONF_PROVIDER_DATA][CLE_ID_DU_DOSSIER] == "dossier-cree-1"
+
+
+async def test_une_destination_sans_depot_prealable_ne_produit_aucun_effet_de_bord(
+    hass: HomeAssistant,
+    integration_backup: None,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Une destination qui n'a jamais rien déposé peut être purgée sans risque.
+
+    Le cas précédent (`test_un_dossier_inconnu_est_resolu_puis_memorise`) prouve
+    que le listage crée le dossier, vide, plutôt que d'échouer. Ce test va plus
+    loin et passe par le **service `purge`**, avec une rétention configurée : il
+    vérifie que ce chemin ne supprime rien, n'émet aucun événement, ne journalise
+    rien en `ERROR`, et surtout ne recrée pas le dossier une seconde fois — la
+    mémorisation du premier appel doit être effective avant le second.
+    """
+    entree = await _entree(
+        hass,
+        **{
+            CONF_PROVIDER_DATA: {"account_email": EMAIL_DU_COMPTE},
+            CONF_RETENTION_COUNT: 1,
+        },
+    )
+    faux = _FauxDrive(aioclient_mock, fichiers=[], dossiers={})
+    evenements = async_capture_events(hass, EVENT_REMOTE_PURGE)
+
+    with caplog.at_level(logging.ERROR):
+        await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+        await hass.async_block_till_done()
+
+    assert faux.recherches == [("root", DOSSIER)]
+    assert [creation["name"] for creation in faux.creations] == [DOSSIER]
+    assert faux.supprimes == []
+    assert evenements == []
+    assert [
+        enregistrement.message
+        for enregistrement in caplog.records
+        if enregistrement.levelno >= logging.ERROR
+    ] == []
+    (persistee,) = entree.options[CONF_DESTINATIONS]
+    assert persistee[CONF_PROVIDER_DATA][CLE_ID_DU_DOSSIER] == "dossier-cree-1"
+
+    # Un second appel réutilise le dossier mémorisé par le premier : ni nouvelle
+    # recherche, ni nouvelle création.
+    await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+    await hass.async_block_till_done()
+
+    assert faux.recherches == [("root", DOSSIER)]
+    assert len(faux.creations) == 1
 
 
 async def test_un_echec_passager_du_listage_est_reessaye(
@@ -984,6 +1059,47 @@ async def test_une_purge_qui_echoue_au_listage_ne_trace_pas_d_appel(
         enregistrement.message
         for enregistrement in caplog.records
         if enregistrement.exc_info is not None
+    ] == []
+
+
+async def test_une_troncature_de_pagination_n_empeche_pas_la_purge_d_aboutir(
+    hass: HomeAssistant,
+    integration_backup: None,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`PAGES_MAX` atteint ne met jamais la rétention en erreur.
+
+    Le listage ne lève rien quand il tronque à `PAGES_MAX` pages : il
+    journalise un avertissement et renvoie ce qu'il a lu (cf.
+    `test_le_listage_borne_le_nombre_de_pages_parcourues`). La purge doit donc
+    réussir sans exception ni bruit en `ERROR`, et supprimer les sauvegardes
+    expirées **parmi celles qu'elle a effectivement vues** — jamais sur une
+    présomption sur les sauvegardes situées au-delà de la troncature.
+    """
+    await _entree(hass, **{CONF_RETENTION_DAYS: 1})
+    fichiers = [
+        fichier_drive(f"tres-vieille-{rang}", jours=30)
+        for rang in range(PAGES_MAX + 10)
+    ]
+    faux = _FauxDrive(aioclient_mock, fichiers=fichiers, par_page=1)
+    evenements = async_capture_events(hass, EVENT_REMOTE_PURGE)
+
+    with caplog.at_level(logging.ERROR):
+        await hass.services.async_call(DOMAIN, SERVICE_PURGE, blocking=True)
+        await hass.async_block_till_done()
+
+    # Seules les PAGES_MAX premières sauvegardes ont été vues et supprimées ;
+    # les 10 restantes, jamais lues, n'ont pas été touchées.
+    assert len(faux.jetons_recus) == PAGES_MAX
+    assert len(faux.supprimes) == PAGES_MAX
+    assert len(faux.fichiers) == 10
+    assert len(evenements) == 1
+    assert len(evenements[0].data[ATTR_REMOTE_IDS]) == PAGES_MAX
+    assert [
+        enregistrement.message
+        for enregistrement in caplog.records
+        if enregistrement.levelno >= logging.ERROR
     ] == []
 
 
