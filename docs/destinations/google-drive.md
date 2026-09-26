@@ -127,7 +127,8 @@ Laissez le champ **Origines JavaScript autorisées** vide : Auto Backup n'en uti
 5. De retour dans Home Assistant, la destination est pré-nommée d'après le compte autorisé —
    par exemple `Google Drive – Camille Martin`. Ajustez le nom, le **dossier distant**
    (`Sauvegardes/Home Assistant` par exemple) et, si vous le souhaitez, une rétention propre à
-   cette destination.
+   cette destination — elle est enregistrée dès maintenant, mais ne s'appliquera qu'avec
+   l'issue #15 (voir « Ce qui n'est pas encore disponible »).
 6. Validez : la destination apparaît dans les options.
 
 L'adresse du compte autorisé est conservée avec la destination, ce qui permet de savoir plus
@@ -168,8 +169,9 @@ courant sur Home Assistant Core, où les sauvegardes sans nom explicite s'appell
 `Core <version>`.
 
 Les fichiers portent aussi un **marqueur d'origine** invisible (une propriété privée
-`auto_backup`), qui permettra au listage et à la purge distante de ne jamais toucher à vos propres
-documents.
+`auto_backup`). C'est lui que la purge distante exige avant de supprimer quoi que ce soit : vos
+propres documents, qui ne le portent pas, ne peuvent pas être touchés. Le listage capable de le
+relire chez Google arrive avec l'issue #15 (voir « Ce qui n'est pas encore disponible »).
 
 ### Si le transfert rencontre un incident
 
@@ -226,14 +228,25 @@ supprimées** : retirez-les à la main si vous le souhaitez. Pensez aussi à ret
 
 ## Ce qui n'est pas encore disponible
 
-La connexion du compte et le **dépôt des sauvegardes** sont disponibles. Restent à venir :
+La connexion du compte et le **dépôt des sauvegardes** sont disponibles. Reste à venir
+[#15](https://github.com/ldb2000/auto-backup-extension/issues/15) : **lister et supprimer** les
+sauvegardes déjà déposées sur Drive.
 
-- [#15](https://github.com/ldb2000/auto-backup-extension/issues/15) — lister et supprimer les
-  sauvegardes déjà déposées sur Drive ;
-- [#9](https://github.com/ldb2000/auto-backup-extension/issues/9) — appliquer la rétention
-  distante (nombre de sauvegardes conservées, durée de conservation) configurée sur la destination.
+**Conséquence sur la rétention distante.** La rétention distante existe (issue #9) et le champ
+est bien enregistré pour une destination Google Drive, mais elle **ne peut pas encore
+s'appliquer** ici : supprimer suppose de lister d'abord, et c'est précisément ce que #15 apporte.
+Tant qu'elle manque, la purge d'une destination Google Drive s'arrête au listage et se contente
+d'une ligne dans le journal :
+
+```text
+Purge distante de « Mon Drive » abandonnée : listage impossible
+(le listage des sauvegardes Google Drive n'est pas encore implémenté, voir l'issue #15)
+```
+
+Ce message est attendu et sans danger : rien n'est supprimé, ni sur Drive, ni en local.
 
 En attendant, les sauvegardes déposées s'accumulent dans le dossier distant : surveillez l'espace
 disponible de votre compte Google, ou faites le ménage à la main de temps en temps.
 
-Une destination configurée aujourd'hui profitera de ces ajouts sans rien reconfigurer.
+Une destination configurée aujourd'hui profitera de ces ajouts sans rien reconfigurer : la
+rétention que vous réglez dès maintenant s'appliquera dès que #15 sera livrée.

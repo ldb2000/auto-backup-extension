@@ -565,10 +565,14 @@ def test_aucune_propriete_ne_depasse_la_borne_en_octets_de_google(nom: str) -> N
 def test_une_apostrophe_dans_le_dossier_est_echappee_pour_google() -> None:
     """Sans échappement, l'apostrophe romprait la chaîne littérale de la requête.
 
-    `chemin_de_dossier()` interdit aujourd'hui l'apostrophe dans un dossier
-    saisi par le flux (issue #6) : ce cas ne peut donc pas survenir avec un
-    dossier configuré aujourd'hui. `requete_de_dossier()` reste néanmoins la
-    seule barrière pour un dossier persisté avant cette restriction.
+    `chemin_de_dossier()` interdit l'apostrophe dans un dossier (issue #6), et
+    `DestinationConfig.from_dict()` la rejoue à **chaque** chargement : un
+    dossier persisté avant cette restriction écarte sa destination avec un
+    avertissement au lieu d'atteindre cette requête. L'échappement est donc une
+    défense en profondeur, pas la barrière. Il deviendra réellement porteur en
+    #15, dont les filtres sur `appProperties` composeront des requêtes à partir
+    de valeurs venues de Google — noms et slugs de sauvegardes — que la
+    validation du dossier ne contrôle pas.
     """
     requete = requete_de_dossier("Sauvegarde d'automne", "root")
 

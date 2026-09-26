@@ -29,9 +29,13 @@ destination : c'est la seule façon de le retrouver au téléversement suivant.
 
 ## Mémoire
 
-Au plus **un fragment** (8 Mio) est détenu en mémoire, plus le morceau de lecture
-en cours (64 Kio côté coordinateur) : le flux est consommé au fur et à mesure et
-rien n'est recopié sur le disque.
+L'empreinte est **bornée par la taille d'un fragment** (8 Mio) et ne dépend pas
+de celle de la sauvegarde : le flux est consommé au fur et à mesure, jamais plus
+d'un fragment n'est en attente d'envoi, et rien n'est recopié sur le disque.
+Elle vaut cependant quelques fois cette taille et non exactement une fois :
+détacher un fragment du tampon d'accumulation (`bytes(tampon[:TAILLE_FRAGMENT])`)
+en fait transitoirement deux à trois copies, le temps que le `del` rende la
+place. C'est un multiple constant, assumé pour la lisibilité de la boucle.
 
 ## Journaux
 

@@ -717,8 +717,9 @@ purger que les siennes.
 des propriétés à un fichier (`property groups`, `appProperties`). Un fournisseur les pose au
 téléversement, la purge les relit au listage. La preuve voyage alors **avec le fichier** : elle
 survit à la perte du registre. Mais elle dépend de ce que chaque API sait stocker — souvent des
-chaînes seulement, parfois rien — et les fournisseurs réels ne posent ce marqueur qu'à partir
-des issues #12 et #15.
+chaînes seulement, parfois rien — et elle n'est exploitable qu'une fois le fournisseur capable de
+**lister**. Google Drive pose le marqueur depuis #14 mais ne lit rien avant #15 ; Dropbox attend
+#12 pour les deux.
 
 **Décision : B *et* C, en « ou » logique.** Une sauvegarde distante n'est candidate à la purge
 que si elle est **inscrite au registre** *ou* si elle **porte le marqueur** `auto_backup`. Les
@@ -892,7 +893,9 @@ est poussé par `PUT` successifs portant un en-tête `Content-Range`, chacun con
 Le flux du coordinateur arrive par morceaux de 64 Kio ; ils sont accumulés jusqu'à un fragment,
 puis poussés. Un fragment est **gardé en attente** tant que le flux n'est pas épuisé : on ne sait
 qu'un fragment est le dernier qu'en ayant lu la suite, et c'est le dernier qui annonce le total.
-Au plus un fragment est donc détenu en mémoire, et rien n'est jamais recopié sur le disque.
+L'empreinte mémoire est donc bornée par la taille d'un fragment — à un facteur constant près :
+détacher un fragment du tampon d'accumulation en fait transitoirement deux à trois copies — et ne
+dépend jamais de la taille de la sauvegarde. Rien n'est non plus recopié sur le disque.
 
 ### Nouvelles tentatives et reprise à l'offset annoncé
 
@@ -1069,11 +1072,12 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   encore d'issue dédiée.
 
 - **Marqueur de provenance chez les fournisseurs réels (issues #12 et #15)** : `#9` reconnaît le
-  marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`, mais
-  aucun fournisseur livré ne le pose encore : ni Dropbox (#10) ni Google Drive (#13) n'écrivent
-  de métadonnées. Les issues #12 et #15 devront passer ce marqueur à `async_upload()` **et** le
-  relire dans `async_list_backups()`, sans quoi seule la voie du registre protège les sauvegardes
-  du fork.
+  marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`.
+  **Traité à moitié en #14** : Google Drive pose `appProperties.auto_backup` sur chaque fichier
+  déposé, mais aucun fournisseur ne sait encore le **relire**, faute de listage — `#15` doit le
+  faire pour Google Drive, `#12` poser *et* relire pour Dropbox. D'ici là, seule la voie du
+  registre protège les sauvegardes du fork, et une purge de destination Google Drive s'arrête au
+  listage sur une `DestinationError` explicite.
 
 ## Conséquences
 

@@ -449,9 +449,11 @@ class GoogleDriveDestination(RemoteDestination):
         """Dépose une sauvegarde dans le dossier cible du Drive (issue #14).
 
         Le contenu est lu **en flux** et envoyé en mode « resumable », fragment
-        par fragment : une sauvegarde de plusieurs gigaoctets ne charge jamais
-        plus d'un fragment en mémoire. Le dossier cible est retrouvé ou créé au
-        premier appel, et son identifiant est mémorisé pour les suivants.
+        par fragment : l'empreinte mémoire est bornée par la taille d'un fragment
+        et ne dépend pas de celle de la sauvegarde (le détail est dans
+        `google_drive_upload.py`, section « Mémoire »). Le dossier cible est
+        retrouvé ou créé au premier appel, et son identifiant est mémorisé pour
+        les suivants.
 
         La signature suit celle du socle depuis l'issue #8 : le coordinateur
         (`destinations/upload.py`) appelle toujours avec `stream`, `size` et

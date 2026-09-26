@@ -101,6 +101,12 @@ trop anciennes partent d'abord, puis, s'il en reste plus que le nombre autorisé
 anciennes du lot restant sont supprimées jusqu'à revenir sous la limite. Une destination sans
 aucune rétention n'est jamais purgée.
 
+> **Aucun fournisseur ne sait encore supprimer.** La mécanique décrite ci-dessous est en place,
+> mais supprimer suppose de lister d'abord, et aucun fournisseur livré ne le fait : la purge d'une
+> destination Google Drive s'arrête au listage avec un message de journal explicite (issue #15),
+> et Dropbox ne téléverse pas encore (issues #11 et #12). La rétention que vous réglez aujourd'hui
+> est enregistrée et s'appliquera sans rien reconfigurer.
+
 **Rien de ce que vous avez déposé vous-même n'est supprimé.** Auto Backup tient un registre
 persistant des sauvegardes qu'il a lui-même téléversées (dans le stockage de Home Assistant,
 `auto_backup.remote_backups`) et ne purge que celles-là — ou celles qui portent son marqueur
