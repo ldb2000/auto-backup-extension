@@ -227,6 +227,48 @@ répondre sans fermer la connexion. Autrement dit, **si votre connexion est lent
 d'augmenter ce délai** : la valeur que vous choisissez vaut pour le téléversement entier comme
 pour la requête qui transporte la sauvegarde, et vous n'avez rien d'autre à régler.
 
+## Rétention : ce qui est supprimé, et ce qui ne l'est jamais
+
+Si vous avez réglé une rétention sur la destination — un nombre de jours, un nombre maximum de
+sauvegardes, ou les deux —, Auto Backup **supprime pour de bon** les sauvegardes en trop dans
+votre Dropbox. La purge a lieu après chaque téléversement réussi, si l'option « Purge
+automatique » est active, et à chaque appel du service `auto_backup.purge`.
+
+### Ce qui est purgé
+
+Seuls les fichiers qu'Auto Backup reconnaît comme **les siens**. L'API Dropbox ne permet pas
+d'apposer une marque invisible sur un fichier : la reconnaissance passe donc par deux voies,
+dans cet ordre.
+
+1. Le **registre** que Home Assistant tient de ses propres téléversements, dans son stockage
+   interne (`auto_backup.remote_backups`).
+2. À défaut, le **nom du fichier**, s'il a exactement la forme que produit le dépôt —
+   `Sauvegarde du soir [a1b2c3d4].tar` : un nom, un slug entre crochets, l'extension `.tar`.
+
+La seconde voie sert les cas où le registre ne sait rien : une réinstallation de Home
+Assistant, un stockage interne effacé, ou un dépôt qui a abouti chez Dropbox après avoir été
+rapporté en échec (voir « Limites connues »). Sans elle, ces fichiers resteraient chez vous
+indéfiniment, sans que rien ne puisse plus les rattacher à Auto Backup.
+
+### Ce qui n'est jamais touché
+
+Tout le reste du dossier : vos propres fichiers, les sauvegardes d'un autre outil, les
+sous-dossiers et ce qu'ils contiennent — la purge ne descend pas d'un niveau. Un fichier que
+les deux voies ci-dessus n'atteignent pas est ignoré, quelles que soient son ancienneté et sa
+taille.
+
+> **Une précaution, du coup** : ne déposez pas vous-même, dans le dossier de la destination, un
+> fichier nommé comme une sauvegarde d'Auto Backup (`… [quelque chose].tar`). Il serait pris
+> pour l'une des siennes, et la rétention pourrait le supprimer. Rangez vos fichiers ailleurs,
+> ou dans un sous-dossier.
+
+### Ce que vous voyez
+
+Une purge qui supprime quelque chose émet l'événement `auto_backup.remote_purge` — il nomme la
+destination et liste les identifiants supprimés — et écrit une ligne dans le journal de Home
+Assistant. Une sauvegarde déjà disparue de Dropbox, que vous auriez supprimée à la main, n'est
+pas une erreur : elle est simplement rayée du registre.
+
 ## En cas de problème
 
 | Message | Cause la plus fréquente |
@@ -242,6 +284,9 @@ pour la requête qui transporte la sauvegarde, et vous n'avez rien d'autre à r�
 | « le dépôt de … est incomplet : Dropbox a enregistré … » | La taille enregistrée par Dropbox ne correspond pas à ce qui a été envoyé (transfert interrompu). Le fichier partiel reste chez Dropbox : supprimez-le avant de relancer. |
 | « le dépôt de … est incomplet : … octets ont été lus pour … annoncés » | La sauvegarde lue n'avait pas la taille que Home Assistant avait annoncée. Rien n'est déposé de fiable : relancez la sauvegarde, et signalez le cas s'il se reproduit. |
 | « délai de téléversement dépassé » | La sauvegarde n'a pas fini de partir dans le temps imparti. Augmentez-le dans **Configurer → Réglages du téléversement**. |
+| « la sauvegarde distante … n'existe plus chez Dropbox » | Le fichier avait déjà disparu au moment de le supprimer. Ce n'est pas une erreur : la purge le compte comme supprimé et continue. |
+| « le listage des sauvegardes … n'a pas abouti dans le temps imparti » | Dropbox tarde à répondre, ou le dossier contient énormément de fichiers. La purge reprendra à la prochaine sauvegarde ; rien n'est supprimé entre-temps. |
+| « Listage Dropbox … tronqué après 20 pages » | Le dossier contient plus de 20 000 fichiers. Les sauvegardes non vues seront traitées aux purges suivantes ; faites du ménage si le message revient. |
 
 Le journal détaillé s'active avec :
 
@@ -268,17 +313,22 @@ un clic — que diagnostiquer plus tard une destination muette.
   d'équipe (`team_*`) ne sont pas demandées et les chemins d'espace partagé ne sont pas gérés.
 - **Une application Dropbox non publiée est limitée** à un petit nombre de comptes connectés
   (le vôtre suffit) ; cela n'a aucune incidence sur le volume de fichiers déposés.
-- **Le listage et la purge distante des sauvegardes arrivent dans une version suivante** : les
-  sauvegardes déposées chez Dropbox ne sont pas encore supprimées automatiquement, même si vous
-  avez renseigné une rétention pour la destination. Supprimez-les à la main d'ici là. Une
-  rétention renseignée n'est pas ignorée en silence : chaque purge le dit dans le journal de
-  Home Assistant, en nommant la destination.
 - **Un dépôt signalé en échec peut, rarement, avoir abouti.** Si Dropbox enregistre le fichier
   mais que la réponse n'arrive pas telle qu'attendue (nom déjà pris au moment de valider la
   session, taille enregistrée différente de ce qui a été envoyé, délai dépassé juste après la
-  validation), Home Assistant annonce un échec alors que le fichier est bien là. Jetez un œil au
-  dossier après un échec de téléversement : le fichier resté sur place ne sera pas repris par la
-  purge distante à venir.
+  validation), Home Assistant annonce un échec alors que le fichier est bien là. Il n'est pas
+  perdu de vue pour autant : la purge le reconnaît à son nom et l'inclut dans la rétention comme
+  les autres. En revanche, si vous **renommez** un fichier déposé par Auto Backup, il cesse
+  d'être reconnu et ne sera plus jamais supprimé automatiquement.
+- **Un très grand dossier n'est parcouru que partiellement à chaque purge** : le listage
+  s'arrête à 20 000 fichiers, en le disant dans le journal. Les sauvegardes non vues sont
+  traitées aux purges suivantes ; aucune n'est supprimée par erreur.
+- **La corbeille Dropbox n'est pas vidée** : un fichier supprimé par la rétention y reste le
+  temps que votre offre Dropbox prévoit, et continue d'y occuper de la place. C'est à vous de la
+  vider si besoin.
+- **Restaurer une sauvegarde depuis Dropbox n'est pas possible** depuis Home Assistant :
+  téléchargez le fichier `.tar` depuis Dropbox, puis utilisez la restauration habituelle. Auto
+  Backup ne demande d'ailleurs pas la permission de relire vos fichiers.
 - **Un téléversement interrompu ne reprend pas** : un redémarrage de Home Assistant en plein
   envoi abandonne le transfert, et la sauvegarde suivante repartira de zéro. Rien n'apparaît
   dans votre dossier tant qu'une session d'envoi n'a pas été validée : une session inachevée ne

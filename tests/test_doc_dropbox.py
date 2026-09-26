@@ -1,10 +1,11 @@
-"""Documentation de la destination Dropbox (issues #10 et #11).
+"""Documentation de la destination Dropbox (issues #10, #11 et #12).
 
 Critère de l'issue #10 : « GIVEN `docs/destinations/dropbox.md` WHEN je le lis
 THEN la création de l'application Dropbox, les portées à cocher et l'URI de
 redirection à renseigner y sont décrites en français. » L'issue #11 y ajoute le
 téléversement : nommage du fichier déposé, dossier cible et seuil de
-fragmentation.
+fragmentation. L'issue #12 y ajoute la rétention distante : ce que la purge
+supprime, ce qu'elle ne touche jamais, et les bornes du listage.
 
 Ce test est indépendant de `tests/test_provider_dropbox.py` : il ne réutilise
 aucune de ses assertions et relit le fichier de documentation lui-même, pour
@@ -19,8 +20,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from custom_components.auto_backup.const import DOMAIN, OAUTH_CALLBACK_PATH
+from custom_components.auto_backup.const import (
+    DOMAIN,
+    EVENT_REMOTE_PURGE,
+    OAUTH_CALLBACK_PATH,
+    STORAGE_KEY_REMOTE_BACKUPS,
+)
 from custom_components.auto_backup.destinations.providers.dropbox import (
+    LIMITE_PAR_PAGE,
+    PAGES_MAX,
     PORTEES,
     SEUIL_ENVOI_SIMPLE,
     TAILLE_FRAGMENT,
@@ -176,3 +184,56 @@ def test_la_doc_decrit_les_nouvelles_tentatives_du_code() -> None:
     assert TENTATIVES_MAX == 3
     assert "trois tentatives" in texte
     assert "429" in texte
+
+
+### Rétention distante (issue #12) ###
+
+
+def test_la_doc_decrit_les_deux_voies_de_reconnaissance_d_une_sauvegarde() -> None:
+    """La page explique **ce qui** est purgé, et par quoi il est reconnu.
+
+    C'est la question que se pose l'utilisateur avant d'activer une rétention :
+    ses propres fichiers risquent-ils quelque chose ? Les deux voies — le
+    registre interne et le nom du fichier — doivent donc être nommées, ainsi que
+    la précaution qui en découle.
+    """
+    texte = _texte_aplati()
+
+    assert f"{DOMAIN}.{STORAGE_KEY_REMOTE_BACKUPS}" in texte
+    assert nom_de_fichier_dropbox("Sauvegarde du soir", "a1b2c3d4") in texte
+    # La garantie, et la précaution qui va avec.
+    assert "jamais touché" in texte.casefold()
+    assert "ne déposez pas vous-même" in texte.casefold()
+
+
+def test_la_doc_annonce_l_evenement_reellement_emis_par_la_purge() -> None:
+    """L'événement cité est celui que le fork émet."""
+    assert EVENT_REMOTE_PURGE in _texte_aplati()
+
+
+def test_la_doc_annonce_les_bornes_du_listage_appliquees_par_le_code() -> None:
+    """Le nombre de pages et d'entrées annoncés sont ceux que le code applique.
+
+    Recopier ces valeurs à la main laisserait la page annoncer une borne que le
+    fournisseur n'applique plus.
+    """
+    # `_texte_aplati()` ramène toute espace, insécable comprise, à une espace
+    # simple : la borne s'y cherche donc écrite « 20 000 ».
+    texte = _texte_aplati()
+    entrees_max = f"{PAGES_MAX * LIMITE_PAR_PAGE:,}".replace(",", " ")
+
+    assert f"{PAGES_MAX} pages" in texte
+    assert f"{entrees_max} fichiers" in texte
+
+
+def test_la_doc_ne_presente_plus_la_purge_dropbox_comme_a_venir() -> None:
+    """La limite levée par l'issue #12 ne doit plus figurer dans la page.
+
+    Une limite qui n'existe plus ferait supprimer à la main des sauvegardes que
+    l'intégration purge désormais toute seule.
+    """
+    texte = _texte_aplati().casefold()
+
+    assert "arrivent dans une version suivante" not in texte
+    assert "#12" not in texte
+    assert "pas encore supprimées" not in texte

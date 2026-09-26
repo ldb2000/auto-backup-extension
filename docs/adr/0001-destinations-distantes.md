@@ -529,8 +529,9 @@ symétriques inverses U+2216, U+29F5 et U+29F9. Ils sont donc filtrés **explici
 
 Rien de tout cela n'était exploitable : le nom forme un segment unique, que le fournisseur ne
 découpe pas. Deux raisons d'ajouter la liste malgré tout — une garantie annoncée mais partielle
-est une garantie sur laquelle une issue suivante s'appuiera à tort (le listage #12 et la purge
-#9 liront ces noms), et un nom visuellement indiscernable de `Sauvegardes/octobre.tar` dans
+est une garantie sur laquelle une issue suivante s'appuiera à tort, et c'est arrivé : le listage
+de #12 **reconnaît ses propres dépôts par leur nom**, de sorte qu'un nom trompeur y deviendrait
+une provenance trompeuse. Et un nom visuellement indiscernable de `Sauvegardes/octobre.tar` dans
 l'explorateur Dropbox trompe l'utilisateur même sans faille technique. Le dossier distant, lui,
 est protégé autrement : il passe par une **liste blanche** (`chemin_de_dossier()`), qui refuse
 d'emblée tout ce qui n'est pas alphanumérique, espace ordinaire ou `-_.()`.
@@ -623,7 +624,7 @@ reconnaître tous les dépôts Dropbox.
 
 #### Chez Dropbox, ce marqueur ne survit pas au dépôt
 
-C'est la limite à connaître avant d'écrire #12, et elle contredit ce que cet ADR affirmait :
+C'est la limite qui a façonné #12, et elle contredit ce que cet ADR affirmait :
 **l'API Dropbox v2 n'offre aucune métadonnée libre sur un fichier**. Il n'y a pas d'équivalent
 des `appProperties` de Google Drive. Le seul emplacement existant est `property_groups` de
 `CommitInfo`, inutilisable ici : il exige un *modèle de propriétés* déclaré au préalable pour
@@ -635,17 +636,19 @@ coordinateur de #8 traite la sauvegarde — et le registre de #9 ne le persiste 
 ne garde que `remote_id`, `name`, `slug`, `created_at` et `size`. Aucun fichier déposé chez
 Dropbox ne porte de preuve de provenance.
 
-Pour #12, la provenance se reconstitue donc depuis le **registre** de #9 et, à défaut, depuis la
+La provenance se reconstitue donc, en #12, depuis le **registre** de #9 et, à défaut, depuis la
 **convention de nommage** `<nom> [<slug>].tar` : la piste A de la section « Reconnaître ses
 propres sauvegardes », rejetée comme preuve générale, redevient le seul repli quand le registre
 a été perdu — avec la prudence que cela impose, un nom n'étant pas une preuve. Le marqueur reste
 posé dans `RemoteBackup.metadata` parce qu'il ne coûte rien et qu'un fournisseur capable de le
-persister, lui, n'aura rien à changer au dépôt.
+persister, lui, n'aura rien à changer au dépôt ; au listage, Dropbox le **repose** sur ce qu'il a
+reconnu, faute de pouvoir le relire.
 
-**Risque d'orphelins, à arbitrer dans #12.** Un dépôt qui aboutit chez Dropbox mais que le fork
+**Risque d'orphelins, arbitré dans #12.** Un dépôt qui aboutit chez Dropbox mais que le fork
 rapporte en échec laisse un fichier que rien ne rattache à l'intégration : pas d'entrée au
-registre — `auto_backup.upload_successful` n'a pas été émis — et pas de marqueur à relire. Il ne
-sera jamais purgé et grossira le dossier de l'utilisateur en silence. Trois chemins y mènent :
+registre — `auto_backup.upload_successful` n'a pas été émis — et pas de marqueur à relire. Sans
+autre indice, il ne serait jamais purgé et grossirait le dossier de l'utilisateur en silence.
+Trois chemins y mènent :
 
 - le **rejeu** d'un `upload_session/finish` dont la première tentative avait en réalité abouti :
   Dropbox répond `path/conflict/file`, que le fork traduit en échec (`mode: add`,
@@ -654,21 +657,108 @@ sera jamais purgé et grossira le dossier de l'utilisateur en silence. Trois che
   déclaré en échec alors que le fichier est déjà commité ;
 - un **délai dépassé** après le commit mais avant que la réponse ne soit lue.
 
-#12 devra trancher : reconnaissance par la convention de nommage au listage, trace locale des
-dépôts incertains, ou acceptation documentée. Enrichir l'événement de téléversement pour que le
-registre garde le chemin et la date du fournisseur relève de la même issue (voir les points
-ouverts).
+**Tranché en #12 : reconnaissance par la convention de nommage** (voir « Provenance :
+registre, puis nom » ci-dessous).
 
-#### Les crochets de #12 échouent par une erreur typée
+#### Listage et suppression chez Dropbox (issue #12)
 
-`async_list_backups()` et `async_delete_backup()` restent à écrire, mais ils ne lèvent pas
-`NotImplementedError` : depuis #9, une rétention configurée sur une destination Dropbox fait
-appeler le listage après **chaque** sauvegarde, et `retention._async_lister()` ne journalise
-sans trace d'appel que les erreurs typées du socle. Les deux crochets lèvent donc une
-`DestinationError` dont le message français renvoie à #12 : la purge saute la destination en une
-ligne lisible, au lieu d'empiler une trace d'appel pour une situation parfaitement attendue. Le
-fournisseur Google Drive tranche de la même façon pour #15 (voir « Nommage et marquage des
-fichiers »).
+Les deux crochets qui restaient à écrire le sont. Ils n'ont demandé aucune modification du
+socle ni du coordinateur de purge : `async_list_backups()` et `async_delete_backup()` sont les
+deux seules méthodes ajoutées, plus une porte d'entrée dans le registre de #9
+(`retention.entrees_du_registre()`), que #15 réutilisera pour Google Drive.
+
+##### Provenance : registre, puis nom
+
+`retention._candidats()` n'accepte à la purge qu'une sauvegarde **inscrite au registre ou
+porteuse du marqueur**. Chez Dropbox, aucun fichier ne porte de marqueur — l'API n'a pas où le
+mettre. Le listage établit donc la provenance lui-même, dans cet ordre :
+
+1. **le registre** de #9, consulté par `entrees_du_registre()` : c'est une preuve, le fork a
+   vu le dépôt aboutir. Le registre fournit aussi le slug quand le nom ne le porte pas ;
+2. **la convention de nommage** `<nom> [<slug>].tar` posée par #11, reconnue par
+   `slug_de_la_convention()` : le motif est *construit depuis les constantes du nommage*
+   (`SUFFIXE_ARCHIVE`, `LONGUEUR_MAX_SLUG`, `LONGUEUR_MAX_NOM_FICHIER`) et non recopié, et un
+   test compare les deux fonctions sur ce que le dépôt produit réellement — sans quoi une
+   évolution du nommage rendrait en silence tous les dépôts précédents méconnaissables, donc
+   éternels.
+
+Ce que ni l'un ni l'autre ne reconnaît n'est **pas renvoyé** : un fichier déposé par
+l'utilisateur, un sous-dossier, une entrée sans identifiant exploitable. Le filtrage a donc lieu
+deux fois — au listage et dans `_candidats()` —, ce qui est voulu : la purge ne doit pas
+dépendre de la rigueur d'un fournisseur, et un fournisseur ne doit pas renvoyer ce qu'il ne sait
+pas identifier.
+
+Chaque sauvegarde reconnue repart avec le marqueur `auto_backup` dans ses métadonnées. Il n'a pas
+été **relu** chez Dropbox : il atteste la provenance que le listage vient d'établir, et c'est lui
+que `porte_le_marqueur()` reconnaît. Sans ce marqueur reposé, un fichier reconnu à son seul nom
+serait listé pour rien, `_candidats()` le rejetant faute d'entrée au registre.
+
+##### Orphelins : reconnus par leur nom, et pourquoi c'est le bon compromis
+
+L'alternative était d'accepter que les fichiers orphelins — dépôt abouti chez Dropbox mais
+rapporté en échec — restent chez l'utilisateur pour toujours. Elle a été écartée : ces fichiers
+sont les plus gros que le dossier contienne, l'utilisateur n'a aucun moyen de savoir lesquels sont
+des restes, et le fork ne saurait plus jamais rien en dire.
+
+Le risque inverse est qu'un fichier étranger nommé `… [quelque chose].tar` soit pris pour une
+sauvegarde du fork et supprimé par la rétention. Il est borné par construction :
+
+- seul **le dossier de la destination** est listé, et jamais récursivement (`recursive: false`) :
+  ce dossier est celui qu'Auto Backup crée et remplit, et avec une application « App folder »
+  il vit à l'intérieur du dossier privé de l'application ;
+- le nom doit porter **à la fois** le suffixe `.tar` et un slug non vide entre crochets, à la
+  toute fin, dans la longueur que le dépôt s'impose ;
+- la documentation utilisateur l'annonce et demande de ne rien déposer de tel dans ce dossier.
+
+Une trace locale des dépôts incertains — troisième voie envisagée — aurait ajouté un second
+registre à tenir, à migrer et à nettoyer, pour ne couvrir que les orphelins produits **après**
+sa mise en place : ni ceux d'aujourd'hui, ni ceux d'une instance réinstallée. Le nom, lui, est
+déjà écrit sur le fichier.
+
+Conséquence assumée : **un fichier déposé par Auto Backup puis renommé à la main cesse d'être
+reconnu**, à moins d'être encore au registre. Il ne sera plus purgé, ce qui est le sens même du
+geste de l'utilisateur.
+
+##### Pagination et bornes
+
+`files/list_folder` rend une page et un curseur, `files/list_folder/continue` la suivante tant
+que `has_more` est vrai. Tout est parcouru : une rétention qui s'arrêterait à la première page
+conserverait indéfiniment les sauvegardes des suivantes, et compterait faux.
+
+Le contrat de `RemoteDestination` (#9) demande au fournisseur de borner lui-même ses appels, le
+coordinateur de purge ne posant qu'un filet grossier (`DEFAULT_PURGE_TIMEOUT`, 300 s). Trois
+bornes y répondent :
+
+| Borne | Valeur | Ce qu'elle évite |
+| --- | --- | --- |
+| Délai d'une requête | `DELAI_APPEL`, 30 s | Un appel JSON qui ne rend jamais la main. C'est le délai d'un appel d'API, **pas** le budget de téléversement : le listage n'échange que quelques kilo-octets, il n'a pas à hériter d'une demi-heure. |
+| Délai du listage entier | `DELAI_LISTAGE`, 240 s | Que la pagination, légitime page par page, dépasse à elle seule le filet du coordinateur — qui couperait alors à la place du fournisseur. La borne reste en deçà des 300 s, avec de la marge pour les nouvelles tentatives d'une page refusée. |
+| Nombre de pages | `PAGES_MAX` × `LIMITE_PAR_PAGE`, 20 × 1000 | Un curseur qui ne se termine pas. Le dépassement **tronque** le listage avec un avertissement : tronquer ne fait jamais supprimer autre chose, les sauvegardes non vues étant conservées une purge de plus. |
+
+Un curseur invalidé par Dropbox (`reset`) est traité comme une erreur de listage : la purge
+abandonne cette destination et la reprendra entière à la prochaine. Reprendre le parcours à
+chaud n'apporterait rien — la purge est appelée après chaque sauvegarde.
+
+##### Suppression idempotente
+
+`files/delete_v2` accepte l'identifiant opaque (`id:...`) là où il attend un chemin : c'est ce
+que le dépôt et le listage rapportent tous les deux, et il reste valide si le fichier a été
+déplacé ou renommé. Un fichier déjà absent (`path_lookup/not_found`) lève
+`DestinationNotFoundError`, que `retention._async_supprimer()` traite comme « déjà purgé » : le
+but est atteint, l'entrée quitte le registre. C'est aussi ce qui rend la nouvelle tentative
+inoffensive — une suppression rejouée après une réponse perdue retombe exactement sur ce cas.
+
+Un dossier encore absent au listage (`path/not_found`) suit la même logique : ce n'est pas une
+erreur, c'est l'état normal d'une destination dont aucune sauvegarde n'est encore partie.
+
+##### Accès refusé : une seule porte
+
+Le signalement de ré-autorisation vit désormais en un point unique du fournisseur,
+`_erreur_d_acces()`, partagé par l'identification du compte, le dépôt, le listage et la
+suppression. L'accès peut être refusé à n'importe lequel de ces appels ; un seul chemin qui
+oublierait de créer le problème Home Assistant laisserait la destination échouer en silence à
+chaque sauvegarde. Le dépôt garde son propre traducteur pour le reste (`insufficient_space`,
+`path/conflict/file`, messages parlant d'un transfert en cours), le cycle de vie a le sien.
 
 Les journaux enfin : l'en-tête `Authorization` est construit dans une seule fonction et n'est
 journalisé nulle part, à aucun niveau. L'argument `Dropbox-API-Arg` porte le chemin distant —
@@ -966,7 +1056,9 @@ qu'une fois le fournisseur capable de **lister** : Google Drive pose le marqueur
 ne lit rien avant #15. **Dropbox, lui, ne sait rien stocker ici** : son seul emplacement
 (`property_groups`) réclame un modèle de propriétés et une portée que le fork ne demande pas, de
 sorte que le marqueur posé au dépôt par #11 ne vit qu'en mémoire (voir « Chez Dropbox, ce
-marqueur ne survit pas au dépôt ») ; #12 devra s'en passer.
+marqueur ne survit pas au dépôt »). #12 s'en passe : son listage établit la provenance par le
+registre puis par la convention de nommage, et **repose** le marqueur sur ce qu'il a reconnu,
+pour que la règle des deux conditions ci-dessous joue sans changement.
 
 **Décision : B *et* C, en « ou » logique.** Une sauvegarde distante n'est candidate à la purge
 que si elle est **inscrite au registre** *ou* si elle **porte le marqueur** `auto_backup`. Les
@@ -1320,30 +1412,31 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 
 - **Marqueur de provenance chez les fournisseurs réels (issues #12 et #15)** : `#9` reconnaît le
   marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`.
-  **Traité à moitié en #14** : Google Drive pose `appProperties.auto_backup` sur chaque fichier
-  déposé, mais aucun fournisseur ne sait encore le **relire**, faute de listage — `#15` doit le
-  faire pour Google Drive. **Chez Dropbox, il ne sera jamais relu** : `#11` pose bien le marqueur
-  dans `RemoteBackup.metadata`, mais l'API v2 n'a aucun champ libre pour l'emporter (voir « Chez
-  Dropbox, ce marqueur ne survit pas au dépôt »). La voie du registre y est donc la seule, avec
-  la convention de nommage `<nom> [<slug>].tar` pour dernier repli, à arbitrer en `#12`. D'ici
-  là, une purge de destination Dropbox comme de destination Google Drive s'arrête au listage sur
-  une `DestinationError` explicite.
+  **Traité en #12 pour Dropbox** : l'API v2 n'ayant aucun champ libre pour l'emporter (voir
+  « Chez Dropbox, ce marqueur ne survit pas au dépôt »), le listage établit la provenance par le
+  registre puis par la convention de nommage, et repose le marqueur sur ce qu'il a reconnu.
+  **Reste ouvert pour `#15`** : Google Drive pose `appProperties.auto_backup` depuis `#14` et
+  peut, lui, le **relire** au listage — c'est la voie qui survit à la perte du registre, et il
+  faudra la suivre là-bas plutôt que d'imiter le repli par le nom. D'ici là, une purge de
+  destination Google Drive s'arrête au listage sur une `DestinationError` explicite.
 
-- **Fichier déposé chez Dropbox mais rapporté en échec (issue #12)** : un dépôt commité que le
-  fork déclare en échec — rejeu de `finish` répondant `path/conflict/file`, écart de taille,
-  délai dépassé après le commit — n'entre pas au registre et ne porte aucun marqueur : il ne sera
-  jamais purgé. Le cas est documenté dans la section Dropbox ci-dessus ; son arbitrage
-  (reconnaissance par nommage, trace locale des dépôts incertains, ou acceptation assumée)
-  appartient à #12, qui écrit le listage.
+- **Fichier déposé chez Dropbox mais rapporté en échec (issue #12)** : **tranché en #12 —
+  reconnaissance par la convention de nommage.** Un dépôt commité que le fork déclare en échec
+  n'entre pas au registre ; son nom suffit désormais à le rattacher à l'intégration, donc à le
+  purger. Les deux autres voies (acceptation documentée, trace locale des dépôts incertains) et
+  le risque résiduel — un fichier étranger nommé de la même façon dans ce dossier — sont pesés
+  dans « Orphelins : reconnus par leur nom, et pourquoi c'est le bon compromis ».
 
 - **Le registre re-date l'entrée qu'il inscrit (issue #12)** : `#9` alimente le registre depuis
   l'événement `auto_backup.upload_successful`, qui ne porte ni le chemin distant ni le
   `server_modified` du fournisseur. `created_at` vaut donc l'instant de réception de l'événement,
   et non la date enregistrée chez Dropbox — quelques secondes d'écart, sans conséquence
   fonctionnelle : la suppression s'appuie sur `remote_id`, et la rétention en jours se compte en
-  jours. **Décision : accepté tel quel.** Enrichir l'événement (chemin, date du fournisseur) pour
-  que le registre garde ce que `RemoteBackup` sait déjà relèverait de #12, qui a besoin de ces
-  champs pour le listage.
+  jours. **Confirmé accepté tel quel en #12** : le listage lit la date chez Dropbox
+  (`server_modified`) et `retention._candidats()` lui donne la priorité sur celle du registre,
+  qui ne sert plus que de repli pour une sauvegarde que le fournisseur ne daterait pas. Enrichir
+  l'événement n'apporterait donc rien, et le chemin distant ne sert à aucune opération : la
+  suppression passe par `remote_id`.
 
 ## Conséquences
 
@@ -1407,6 +1500,18 @@ Ajouts de l'issue #9 :
   marqueur) **et** qu'elle dépasse la rétention de sa destination ; un fichier étranger au fork
   est invisible pour la purge.
 
+Ajouts de l'issue #12 :
+
+- La rétention distante d'une destination Dropbox **supprime réellement**. Le socle, le
+  coordinateur de purge de `#9` et le téléversement de `#8` n'ont pas bougé : deux méthodes de
+  fournisseur et une porte d'entrée dans le registre ont suffi.
+- La provenance d'une sauvegarde peut se **reconstituer** sans aide du fournisseur distant :
+  registre d'abord, convention de nommage ensuite. C'est la voie qu'il faudra suivre pour tout
+  fournisseur sans métadonnée libre ; `#15` n'en a pas besoin, Google Drive sachant relire le
+  marqueur qu'il a posé.
+- Un fournisseur borne lui-même ses appels réseau, comme le contrat l'exige : délai par requête,
+  délai du listage entier, nombre de pages. Le filet du coordinateur n'a plus à se déclencher.
+
 Ajouts de l'issue #11 :
 
 - Une sauvegarde part réellement chez Dropbox : le socle et le coordinateur de `#8` n'ont pas
@@ -1414,8 +1519,8 @@ Ajouts de l'issue #11 :
   contrat de `RemoteDestination` tenait la route pour un fournisseur réel.
 - Une sauvegarde déposée porte le marqueur `auto_backup` dans `RemoteBackup.metadata`, mais
   **rien ne l'emporte chez Dropbox** : l'API v2 n'offre aucune métadonnée libre. C'est le
-  registre de `#9` qui établit la provenance, et `#12` devra s'en accommoder (voir « Chez
-  Dropbox, ce marqueur ne survit pas au dépôt »).
+  registre de `#9` qui établit la provenance, et `#12` s'en est accommodé (voir « Chez Dropbox,
+  ce marqueur ne survit pas au dépôt »).
 - `#14` héritera des mêmes questions — seuil d'envoi simple, fragmentation, rejeu borné — mais
   pas du même code : les deux API n'ont ni le même protocole d'envoi par morceaux, ni les mêmes
   codes d'erreur. Le jour où une troisième s'ajouterait, une fabrique commune de tentatives

@@ -27,11 +27,9 @@ distante et dépôt effectif des sauvegardes chez Dropbox comme sur Google Drive
 configurées (voir « Téléversement des sauvegardes » ci-dessous), et chaque destination applique
 sa propre rétention aux sauvegardes qu'elle a reçues (voir « Rétention distante »).
 
-- **Dropbox** : la **connexion du compte et le dépôt des sauvegardes sont disponibles** — voir le
-  guide [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; le listage et la purge
-  distante arrivent avec l'issue #12. Tant qu'ils manquent, la rétention distante ne peut pas
-  s'appliquer à une destination Dropbox : elle est configurable, mais aucune sauvegarde n'y est
-  encore supprimée.
+- **Dropbox** : **tout le cycle de vie est disponible** — connexion du compte, dépôt des
+  sauvegardes, et rétention distante qui supprime réellement les sauvegardes expirées. Voir le
+  guide [Connecter un compte Dropbox](docs/destinations/dropbox.md).
 - **Google Drive** : la **connexion du compte et le téléversement sont disponibles** — voir le
   guide [Connecter Google Drive](docs/destinations/google-drive.md) ; le listage et la suppression
   chez Google arrivent avec l'issue #15. Tant qu'ils manquent, la rétention distante ne peut pas
@@ -108,17 +106,24 @@ trop anciennes partent d'abord, puis, s'il en reste plus que le nombre autorisé
 anciennes du lot restant sont supprimées jusqu'à revenir sous la limite. Une destination sans
 aucune rétention n'est jamais purgée.
 
-> **Aucun fournisseur ne sait encore supprimer.** La mécanique décrite ci-dessous est en place,
-> mais supprimer suppose de lister d'abord, et aucun fournisseur livré ne le fait : la purge
-> d'une destination Dropbox (issue #12) comme d'une destination Google Drive (issue #15) s'arrête
-> au listage, avec un message de journal explicite qui nomme la destination. La rétention que
-> vous réglez aujourd'hui est enregistrée et s'appliquera sans rien reconfigurer.
+> **Google Drive ne sait pas encore supprimer.** Supprimer suppose de lister d'abord : côté
+> Dropbox c'est fait, côté Google Drive cela arrive avec l'issue #15. En attendant, la purge
+> d'une destination Google Drive s'arrête au listage, avec un message de journal explicite qui
+> nomme la destination. La rétention que vous réglez aujourd'hui est enregistrée et s'appliquera
+> sans rien reconfigurer.
 
 **Rien de ce que vous avez déposé vous-même n'est supprimé.** Auto Backup tient un registre
 persistant des sauvegardes qu'il a lui-même téléversées (dans le stockage de Home Assistant,
 `auto_backup.remote_backups`) et ne purge que celles-là — ou celles qui portent son marqueur
 dans les métadonnées du fournisseur. Tout autre fichier présent dans le dossier distant est
 ignoré par la purge, quels que soient son âge et son nom.
+
+> **Chez Dropbox, une nuance** : l'API ne permet pas d'apposer une marque invisible sur un
+> fichier. À défaut de registre — réinstallation, stockage interne effacé, dépôt abouti mais
+> rapporté en échec —, Auto Backup reconnaît ses sauvegardes à la **forme de leur nom**
+> (`Sauvegarde du soir [a1b2c3d4].tar`), et à elle seule. Conséquence : ne déposez pas
+> vous-même un fichier nommé de cette façon dans le dossier de la destination. Le détail est
+> dans le [guide Dropbox](docs/destinations/dropbox.md#rétention--ce-qui-est-supprimé-et-ce-qui-ne-lest-jamais).
 
 La purge distante se déclenche :
 
