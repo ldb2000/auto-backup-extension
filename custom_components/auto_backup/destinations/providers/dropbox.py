@@ -4,7 +4,8 @@ Ce module apporte **l'accès au compte** — déclarer ce que Dropbox attend pou
 autoriser l'application, obtenir un jeton durable, vérifier que l'accès
 fonctionne en identifiant le compte connecté — et le **dépôt d'une sauvegarde**
 dans le dossier de la destination (issue #11). Le listage et la suppression
-(#12) restent hors périmètre et lèvent `NotImplementedError`.
+(#12) restent hors périmètre : les deux crochets échouent par une
+`DestinationError` qui renvoie à cette issue.
 
 Le dépôt suit les deux modes imposés par l'API : une requête unique
 (`files/upload`) en deçà de 150 Mo, une **session fragmentée**
@@ -221,9 +222,20 @@ CLE_EMPREINTE = "content_hash"
 # de voir écrit littéralement dans le code (RUF001).
 SEPARATEUR_NOM = "\N{EN DASH}"
 
+# Le listage et la suppression chez Dropbox arrivent avec l'issue #12. D'ici là,
+# les deux crochets échouent par une `DestinationError` — l'erreur typée du socle
+# — et non par `NotImplementedError` : depuis #9, la purge distante appelle
+# `async_list_backups()` à chaque sauvegarde dès qu'une rétention est configurée
+# sur la destination, et elle ne journalise proprement, sans trace d'appel, que
+# les erreurs typées. Le message dit à l'utilisateur ce qui ne se fera pas.
 MESSAGE_LISTAGE = (
-    "le listage et la suppression des sauvegardes Dropbox ne sont pas encore "
-    "implémentés (issue #12)"
+    "le listage des sauvegardes déposées chez Dropbox n'est pas encore implémenté "
+    "(issue #12) : la rétention distante de cette destination reste sans effet "
+    "jusque-là"
+)
+MESSAGE_SUPPRESSION = (
+    "la suppression d'une sauvegarde chez Dropbox n'est pas encore implémentée "
+    "(issue #12) : le fichier doit être retiré à la main depuis Dropbox"
 )
 
 
@@ -1176,12 +1188,24 @@ class DropboxDestination(RemoteDestination):
     ### Cycle de vie des sauvegardes : issue #12 ###
 
     async def async_list_backups(self) -> list[RemoteBackup]:
-        """Hors périmètre de l'issue #10 : implémenté par l'issue #12."""
-        raise NotImplementedError(MESSAGE_LISTAGE)
+        """Listage à venir avec l'issue #12 : échoue par une erreur typée.
+
+        La purge distante (#9) appelle cette méthode dès qu'une rétention est
+        configurée sur la destination, donc à chaque sauvegarde : `DestinationError`
+        lui suffit pour sauter la destination en une ligne de journal lisible, là
+        où `NotImplementedError` tombait dans sa clause de dernier recours et
+        journalisait une trace d'appel complète.
+        """
+        raise DestinationError(MESSAGE_LISTAGE)
 
     async def async_delete_backup(self, remote_id: str) -> None:
-        """Hors périmètre de l'issue #10 : implémenté par l'issue #12."""
-        raise NotImplementedError(MESSAGE_LISTAGE)
+        """Suppression à venir avec l'issue #12 : échoue par une erreur typée.
+
+        Jamais atteinte en fonctionnement — le listage échoue avant — mais elle
+        répond de la même façon : l'appelant n'a pas à connaître l'état
+        d'avancement du fournisseur pour traiter son refus.
+        """
+        raise DestinationError(MESSAGE_SUPPRESSION)
 
 
 __all__ = [
