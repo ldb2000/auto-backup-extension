@@ -172,10 +172,37 @@ MOTIF_CONFLIT_DOSSIER = "conflict/folder"
 # Nommage du fichier déposé : « <nom de la sauvegarde> [<slug>].tar ».
 SUFFIXE_ARCHIVE = ".tar"
 NOM_DE_REPLI = "sauvegarde"
-# Dropbox refuse ces caractères dans un nom de fichier, et un segment de chemin
-# y est borné à 255 caractères. La borne retenue est plus basse : un nom plus
-# long ne dit rien de plus et compliquerait l'affichage comme la recherche.
-CARACTERES_INTERDITS = frozenset('/\\:?*<>"|')
+# Caractères que Dropbox refuse dans un nom de fichier.
+CARACTERES_REFUSES_PAR_DROPBOX = '/\\:?*<>"|'
+
+# Confusables du séparateur de chemin qui **survivent** à NFKC. La normalisation
+# ne ramène à « / » et « \ » que les formes de compatibilité (pleine chasse
+# U+FF0F et U+FF3C, petite forme U+FE68) ; ces dix caractères-ci, eux, la
+# traversent intacts, tout en étant visuellement indiscernables d'une barre
+# oblique dans l'explorateur Dropbox.
+#
+# Aucun n'est exploitable en l'état — le nom de fichier forme un segment unique,
+# et le fournisseur ne le découpe pas — mais les laisser passer ferait mentir la
+# garantie que ce module annonce, et un découpage introduit plus tard (listage
+# #12, purge #9) hériterait d'un nom déjà trompeur. Ils sont écrits en séquences
+# d'échappement : `ruff` refuse un confusable écrit littéralement (RUF001).
+SOLIDUS_CONFUSABLES = (
+    "\N{FRACTION SLASH}"
+    "\N{DIVISION SLASH}"
+    "\N{BIG SOLIDUS}"
+    "\N{DOTTED SOLIDUS}"
+    "\N{VERY HEAVY SOLIDUS}"
+    "\N{BOX DRAWINGS LIGHT DIAGONAL UPPER RIGHT TO LOWER LEFT}"
+    "\N{SET MINUS}"
+    "\N{REVERSE SOLIDUS OPERATOR}"
+    "\N{BIG REVERSE SOLIDUS}"
+    "\N{BOX DRAWINGS LIGHT DIAGONAL UPPER LEFT TO LOWER RIGHT}"
+)
+
+# Un segment de chemin Dropbox est borné à 255 caractères. La borne retenue est
+# plus basse : un nom plus long ne dit rien de plus et compliquerait l'affichage
+# comme la recherche.
+CARACTERES_INTERDITS = frozenset(CARACTERES_REFUSES_PAR_DROPBOX + SOLIDUS_CONFUSABLES)
 LONGUEUR_MAX_NOM_FICHIER = 200
 LONGUEUR_MAX_SLUG = 60
 
@@ -354,10 +381,14 @@ def _assaini(valeur: str) -> str:
     La valeur est d'abord normalisée en **NFKC**, comme le dossier distant
     (cf. `destinations/schema.py`) : sans cela une barre oblique pleine chasse
     (U+FF0F) survivrait au filtrage pour redevenir un séparateur de chemin chez
-    le fournisseur. Les caractères refusés par Dropbox et les caractères non
-    imprimables deviennent `_`, les espaces sont ramenées à une seule, et les
-    points comme les espaces de bordure sont retirés — Dropbox refuse un nom qui
-    s'y termine.
+    le fournisseur. La normalisation ne suffit pourtant pas : elle ne ramène à
+    « / » que les formes de compatibilité, et laisse passer intacts les autres
+    confusables de la barre oblique (U+2215, U+2044, U+29F8...), d'où la liste
+    `SOLIDUS_CONFUSABLES`, filtrée comme les caractères que Dropbox refuse.
+
+    Ces caractères et les caractères non imprimables deviennent `_`, les espaces
+    sont ramenées à une seule, et les points comme les espaces de bordure sont
+    retirés — Dropbox refuse un nom qui s'y termine.
     """
     normalise = unicodedata.normalize("NFKC", valeur)
     filtre = "".join(

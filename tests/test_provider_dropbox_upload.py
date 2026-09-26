@@ -24,6 +24,7 @@ import asyncio
 import json
 import logging
 import time
+import unicodedata
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -84,6 +85,7 @@ from custom_components.auto_backup.destinations.providers.dropbox import (
     MULTIPLE_FRAGMENT,
     PROVIDER_DROPBOX,
     SEUIL_ENVOI_SIMPLE,
+    SOLIDUS_CONFUSABLES,
     TAILLE_FRAGMENT,
     TENTATIVES_MAX,
     URL_CREATION_DOSSIER,
@@ -452,6 +454,37 @@ def test_le_nom_du_fichier_neutralise_les_confusables() -> None:
     obtenu = nom_de_fichier_dropbox("dossier\uff0ffichier", SLUG)
 
     assert obtenu.startswith("dossier_fichier ")
+
+
+@pytest.mark.parametrize(
+    "confusable",
+    [
+        pytest.param(caractere, id=f"U+{ord(caractere):04X}")
+        for caractere in SOLIDUS_CONFUSABLES
+    ],
+)
+def test_aucun_confusable_de_barre_oblique_ne_survit(confusable: str) -> None:
+    """NFKC ne neutralise pas tous les confusables du séparateur de chemin.
+
+    Elle ne ramène à « / » et « \\ » que les formes de compatibilité (U+FF0F,
+    U+FF3C, U+FE68). La barre oblique de division (U+2215), la barre de fraction
+    (U+2044), le grand solidus (U+29F8) et leurs voisins la traversent intacts :
+    ils doivent donc être filtrés explicitement, dans le nom comme dans le slug,
+    faute de quoi le fichier déposé afficherait ce qui ressemble à un séparateur
+    de chemin.
+    """
+    assert unicodedata.normalize("NFKC", confusable) == confusable, (
+        "ce caractère est déjà neutralisé par NFKC : il n'a rien à faire dans "
+        "SOLIDUS_CONFUSABLES"
+    )
+
+    assert (
+        nom_de_fichier_dropbox(f"avant{confusable}apres", SLUG)
+        == f"avant_apres [{SLUG}].tar"
+    )
+    assert nom_de_fichier_dropbox(NOM_SAUVEGARDE, f"a{confusable}b") == (
+        f"{NOM_SAUVEGARDE} [a_b].tar"
+    )
 
 
 def test_le_repli_se_fonde_sur_le_nom_d_archive_propose() -> None:

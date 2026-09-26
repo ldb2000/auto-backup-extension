@@ -168,7 +168,9 @@ Le nom de la sauvegarde seul ne suffirait pas à s'y retrouver : sur une install
 Assistant Core, les sauvegardes automatiques s'appellent toutes `Core <version>`. Le **slug**
 — l'identifiant unique que Home Assistant donne à chaque sauvegarde — est donc accolé entre
 crochets. Les caractères que Dropbox refuse dans un nom de fichier (`/ \ : ? * < > " |`) sont
-remplacés par `_`, et un nom très long est raccourci, le slug et le `.tar` étant conservés.
+remplacés par `_`, ainsi que les caractères Unicode qui *ressemblent* à une barre oblique sans en
+être une (U+2215, U+2044...), pour qu'un nom déposé ne puisse jamais faire croire à un
+sous-dossier. Un nom très long est raccourci, le slug et le `.tar` étant conservés.
 
 > **Avec « App folder »**, tout cela se passe à l'intérieur de
 > `Applications/<nom de votre app>/` : le dossier distant y est créé, et vous n'avez rien à

@@ -476,6 +476,22 @@ deviennent `_` ; les espaces sont réduites, les points et espaces de bordure re
 refuse un nom qui s'y termine) ; et le tout est borné à 200 caractères, la troncature portant
 sur la partie libre, jamais sur le slug ni sur `.tar`.
 
+La normalisation ne suffit pourtant pas à tenir cette promesse, et c'est le point que le premier
+jet manquait : NFKC ne ramène à `/` et `\` que les **formes de compatibilité** — pleine chasse
+U+FF0F et U+FF3C, petite forme U+FE68. Les autres confusables du séparateur la traversent
+intacts : barre oblique de division U+2215, barre de fraction U+2044, grand solidus U+29F8,
+solidus pointé U+2E4A, solidus très gras U+1F67C, diagonales de filet U+2571 et U+2572, et leurs
+symétriques inverses U+2216, U+29F5 et U+29F9. Ils sont donc filtrés **explicitement**
+(`SOLIDUS_CONFUSABLES`), au même titre que les caractères que Dropbox refuse.
+
+Rien de tout cela n'était exploitable : le nom forme un segment unique, que le fournisseur ne
+découpe pas. Deux raisons d'ajouter la liste malgré tout — une garantie annoncée mais partielle
+est une garantie sur laquelle une issue suivante s'appuiera à tort (le listage #12 et la purge
+#9 liront ces noms), et un nom visuellement indiscernable de `Sauvegardes/octobre.tar` dans
+l'explorateur Dropbox trompe l'utilisateur même sans faille technique. Le dossier distant, lui,
+est protégé autrement : il passe par une **liste blanche** (`chemin_de_dossier()`), qui refuse
+d'emblée tout ce qui n'est pas alphanumérique, espace ordinaire ou `-_.()`.
+
 La convention `nom_de_fichier_sauvegarde()` de l'issue #8 (`Sauvegarde_du_22.tar`, celle de
 `download_path`) n'est pas reprise telle quelle : elle passe par `slugify()`, qui écrase les
 espaces et les accents, et ne porte pas le slug. Elle sert de repli quand le nom est vide.
