@@ -564,8 +564,8 @@ autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression
 téléversement après création (lecture en flux, événements, échecs, délai maximum), la connexion
 d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
 la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant) et le
-dépôt réel d'une sauvegarde chez Dropbox (issue #11). L'envoi effectif d'un fichier chez Google
-Drive (#14), le listage et la suppression chez chaque fournisseur (#12 et #15) sont testés par
-leurs issues respectives.
+dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14). Le
+listage et la suppression chez chaque fournisseur (#12 et #15) sont testés par leurs issues
+respectives.
 
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).
