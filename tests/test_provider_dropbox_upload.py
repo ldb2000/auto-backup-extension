@@ -74,6 +74,7 @@ from custom_components.auto_backup.const import (
 )
 from custom_components.auto_backup.destinations import (
     DestinationAuthError,
+    DestinationConfig,
     DestinationError,
     DestinationManager,
     DestinationQuotaError,
@@ -1103,6 +1104,22 @@ async def test_le_garde_fou_par_requete_suit_le_delai_configure(
     destination = await destination_configuree(options)
 
     assert destination._delai_de_requete == attendu
+
+
+async def test_le_garde_fou_par_requete_se_replie_sans_entree(
+    hass: HomeAssistant,
+) -> None:
+    """Sans entrée de configuration, le garde-fou vaut la valeur livrée.
+
+    Une destination construite hors du gestionnaire n'est reliée à aucune entrée :
+    l'option `upload_timeout` est alors introuvable, et une requête sans borne
+    serait pire que le repli.
+    """
+    destination = DropboxDestination(
+        hass, DestinationConfig.from_dict(config_dropbox())
+    )
+
+    assert destination._delai_de_requete == float(DEFAULT_UPLOAD_TIMEOUT)
 
 
 async def test_le_garde_fou_par_requete_ne_depasse_pas_le_budget_global(
