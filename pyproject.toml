@@ -3,13 +3,17 @@ name = "auto-backup-extension"
 version = "0.0.0"
 description = "Intégration Home Assistant « Auto Backup », étendue aux destinations Dropbox et Google Drive."
 readme = "README.md"
-# 3.14.2 est le plancher réel : Home Assistant >= 2026.3 exige Python >= 3.14.2.
+# Plancher unique du projet : `hacs.json` annonce Home Assistant 2026.3.0 aux
+# utilisateurs, et Home Assistant >= 2026.3 exige Python >= 3.14.2. Le même
+# interpréteur vaut donc en développement et chez les utilisateurs ; c'est ce que
+# vérifie `tests/test_compatibilite_python.py`, qui dérive son plancher d'analyse
+# de la version déclarée dans `hacs.json`.
 requires-python = ">=3.14.2"
 # Dépendances utilisées par l'intégration `custom_components/auto_backup`.
 # `homeassistant` fournit aussi aiohttp, voluptuous et slugify, importés par l'intégration.
 dependencies = [
     "aiofiles>=24.1.0",
-    "homeassistant>=2025.1.0",
+    "homeassistant>=2026.3.0",
 ]
 
 [dependency-groups]
@@ -40,14 +44,15 @@ markers = [
 ]
 
 [tool.ruff]
-# `target-version` décrit l'interpréteur de **développement** (cf. `requires-python`),
-# pas celui des utilisateurs. Le plancher annoncé dans `hacs.json` (Home Assistant
-# 2025.1) tourne sous Python 3.12 : le code livré dans `custom_components/` doit
-# rester analysable par un interpréteur 3.12, sans quoi l'intégration lèverait une
-# `SyntaxError` au chargement chez ces utilisateurs. En particulier, un `except`
-# multiple garde ses parenthèses — la forme PEP 758 `except A, B:` n'existe qu'à
-# partir de 3.14. `tests/test_compatibilite_python.py` veille sur cette règle,
-# documentée dans `docs/tests.md` (section « Compatibilité Python »).
+# `target-version` décrit l'interpréteur de **développement** (cf. `requires-python`).
+# Il coïncide aujourd'hui avec celui des utilisateurs : le plancher annoncé dans
+# `hacs.json` (Home Assistant 2026.3) exige Python 3.14. Le code livré dans
+# `custom_components/` doit rester analysable par un interpréteur 3.14, sans quoi
+# l'intégration lèverait une `SyntaxError` au chargement chez ces utilisateurs — les
+# deux planchers ne sont pas liés, le dépôt suivant la dernière version de Home
+# Assistant alors que celui annoncé ne bouge que sur décision explicite.
+# `tests/test_compatibilite_python.py` veille sur cette règle, documentée dans
+# `docs/tests.md` (section « Compatibilité Python »).
 target-version = "py314"
 line-length = 88
 # Racines d'imports du dépôt. `tests/` en fait partie : pytest l'ajoute à
