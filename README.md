@@ -19,10 +19,21 @@ documentées dans [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 ### Ce que ce fork ajoute
 
 En plus des fonctionnalités de l'upstream (sauvegardes complètes ou partielles, rétention locale,
-capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud :
+capteurs d'état), ce fork vise l'envoi automatique des sauvegardes vers le cloud.
 
-- **Dropbox** : téléversement de la sauvegarde créée et rétention distante dédiée.
-- **Google Drive** : téléversement de la sauvegarde créée et rétention distante dédiée.
+**Actuellement disponible : connexion des comptes cloud, mécanique de téléversement et rétention
+distante.** L'option `upload_to` des services de sauvegarde envoie la sauvegarde créée vers les
+destinations configurées (voir « Téléversement des sauvegardes » ci-dessous), et chaque
+destination applique sa propre rétention aux sauvegardes qu'elle a reçues (voir « Rétention
+distante ») ; ce qui manque encore est le dialogue avec chaque fournisseur — envoyer, lister et
+supprimer un fichier chez lui.
+
+- **Dropbox** : la **connexion du compte est disponible** — voir le guide
+  [Connecter un compte Dropbox](docs/destinations/dropbox.md) ; l'envoi effectif du fichier et sa
+  suppression chez Dropbox arrivent avec les issues #11 et #12.
+- **Google Drive** : la **connexion du compte est disponible** — voir le guide
+  [Connecter Google Drive](docs/destinations/google-drive.md) ; l'envoi effectif du fichier et sa
+  suppression chez Google Drive arrivent avec les issues #14 et #15.
 
 La configuration des destinations se fait depuis l'interface de Home Assistant, avec les
 identifiants d'application OAuth de l'utilisateur : aucun secret n'est stocké dans ce dépôt.
@@ -44,12 +55,6 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
 
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
 destination et invitant à la ré-autoriser ; les autres destinations continuent de fonctionner.
-
-**Dropbox** est le premier fournisseur livré : la connexion d'un compte est opérationnelle, le
-téléversement après création de sauvegarde est implémenté, et la marche à suivre — création de
-l'application Dropbox, type d'accès conseillé, portées à cocher, URI de redirection à déclarer —
-est décrite dans [`docs/destinations/dropbox.md`](docs/destinations/dropbox.md). Google Drive
-viendra s'enregistrer dans ce même parcours.
 
 ### Téléversement des sauvegardes
 

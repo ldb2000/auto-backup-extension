@@ -16,10 +16,22 @@ menu -> ajouter_destination -> identifiants -> autorisation (étape externe)
      -> jeton -> [description du compte] -> destination -> options enregistrées
 ```
 
-La description du compte (issue #10) est facultative : le fournisseur peut
-proposer un nom par défaut (« Dropbox - Jean Dupont ») et des données à
-persister (identifiant de compte). Un fournisseur qui ne le fait pas, ou dont
-l'appel échoue, laisse simplement le formulaire de nommage vide.
+La description du compte (issues #10 et #13) est facultative : le fournisseur
+peut proposer un nom par défaut (« Dropbox - Jean Dupont ») et des données à
+persister (identifiant ou adresse du compte). Un fournisseur qui ne surcharge
+aucun des deux crochets de `RemoteDestination` suit exactement le parcours
+d'origine, sans le moindre appel réseau supplémentaire.
+
+Les deux crochets — `async_nom_par_defaut()` et `async_donnees_du_fournisseur()`
+— sont des **méthodes d'instance** appelées sur une seule destination
+provisoire, construite par `create_destination()` : un fournisseur qui mémorise
+la réponse du service n'a donc qu'un aller-retour réseau à faire pour les deux.
+
+Leur échec **interrompt** l'ajout (abandon `echec_fournisseur`, le détail
+citant la cause : API non activée, portée manquante, compte injoignable). Une
+destination que le fournisseur refuse déjà d'identifier ne fonctionnerait pas
+davantage une fois créée : mieux vaut le dire tout de suite que laisser
+l'utilisateur découvrir la panne à la première sauvegarde.
 
 L'étape externe est celle de Home Assistant (`async_external_step`) ; c'est la
 vue du fork (`destinations/oauth.py`) qui reprend le flux, la vue standard ne
@@ -124,6 +136,20 @@ def _retention(user_input: Mapping[str, Any], cle: str) -> int | None:
         return int(float(valeur))
     except (TypeError, ValueError) as err:
         raise DestinationConfigError(f"{cle} doit être un nombre entier") from err
+
+
+def _libelle_du_fournisseur(provider_id: str) -> str:
+    """Libellé lisible d'un fournisseur, ou son identifiant technique à défaut.
+
+    Le libellé est déclaré par le fournisseur lui-même (`RemoteDestination.LABEL`,
+    issue #10) et lu par le registre. Un fournisseur qui n'en déclare pas — ou qui
+    a disparu du registre pendant que le formulaire était ouvert — reste affiché
+    sous son identifiant, faute de mieux.
+    """
+    try:
+        return provider_label(provider_id)
+    except UnknownProviderError:
+        return provider_id
 
 
 def _delai_de_televersement(valeur: Any) -> int:
@@ -333,7 +359,7 @@ class GestionDesDestinationsMixin:
                         options=[
                             SelectOptionDict(
                                 value=identifiant,
-                                label=provider_label(identifiant),
+                                label=_libelle_du_fournisseur(identifiant),
                             )
                             for identifiant in fournisseurs
                         ],
@@ -470,10 +496,18 @@ class GestionDesDestinationsMixin:
             _LOGGER.error("Jeton inexploitable : %s", err)
             return self.async_abort(reason="jeton_invalide")
 
+        try:
+            await self._async_decrire_le_compte()
+        except DestinationError as err:
+            _LOGGER.error("Le fournisseur a refusé la première requête : %s", err)
+            return self.async_abort(
+                reason="echec_fournisseur",
+                description_placeholders={"detail": str(err)},
+            )
+
         if self._destination_id is not None:
             return self._terminer_la_reautorisation()
 
-        await self._async_decrire_le_compte()
         return await self.async_step_destination()
 
     async def async_step_destination(
@@ -537,6 +571,8 @@ class GestionDesDestinationsMixin:
         if user_input is not None:
             schema = self.add_suggested_values_to_schema(schema, user_input)
         elif self._nom_propose:
+            # Nom proposé par le fournisseur d'après le compte autorisé : il
+            # reste modifiable, et l'unicité est vérifiée à la validation.
             schema = self.add_suggested_values_to_schema(
                 schema, {CONF_NAME: self._nom_propose}
             )
@@ -569,41 +605,46 @@ class GestionDesDestinationsMixin:
             provider_data=self._provider_data,
         )
 
-    ### Description du compte autorisé (issue #10) ###
+    ### Description du compte autorisé (issues #10 et #13) ###
 
     async def _async_decrire_le_compte(self) -> None:
         """Demande au fournisseur un nom par défaut et les données du compte.
 
-        Les deux crochets sont facultatifs (`RemoteDestination`) : un fournisseur
-        qui ne les surcharge pas ne provoque aucun appel réseau. Un échec — compte
-        injoignable, réponse inattendue, accès déjà refusé — n'interrompt pas
-        l'ajout : l'utilisateur nomme alors sa destination lui-même, plutôt que de
-        perdre une autorisation qu'il vient d'accorder.
+        Les deux crochets sont déclarés par `RemoteDestination` et facultatifs :
+        un fournisseur qui ne les surcharge pas renvoie `None` des deux côtés et
+        ne provoque aucun appel réseau. Ils sont appelés sur **une seule**
+        destination provisoire : un fournisseur qui mémorise la réponse du
+        service n'a qu'un aller-retour à faire pour les deux.
+
+        Un échec — compte injoignable, API non activée, portée manquante, accès
+        déjà refusé — est **propagé** : l'appelant interrompt l'ajout en citant
+        la cause. Une destination que le fournisseur refuse déjà d'identifier ne
+        fonctionnerait pas davantage une fois créée, et l'utilisateur corrige
+        immédiatement ce qu'un message d'abandon lui désigne. `UnknownProviderError`
+        (fournisseur disparu du registre entre-temps) est une `DestinationError` :
+        elle suit le même chemin.
+
+        La méthode est aussi jouée lors d'une ré-autorisation, pour rafraîchir
+        les données du compte : elles peuvent désigner un autre compte qu'à
+        l'autorisation initiale.
         """
         self._nom_propose = None
         self._provider_data = None
-
-        try:
-            destination = create_destination(self.hass, self._config_provisoire())
-        except DestinationConfigError as err:
-            _LOGGER.debug("Compte du fournisseur non décrit : %s", err)
-            return
+        destination = create_destination(self.hass, self._config_provisoire())
 
         try:
             nom = await destination.async_nom_par_defaut()
             donnees = await destination.async_donnees_du_fournisseur()
-        except (DestinationError, ClientError, TimeoutError) as err:
-            _LOGGER.warning(
-                "Le compte du fournisseur « %s » n'a pas pu être identifié : %s",
-                self._provider,
-                err,
-            )
-            return
+        except (ClientError, TimeoutError) as err:
+            raise DestinationError(
+                f"le fournisseur « {self._provider} » n'a pas répondu : {err}"
+            ) from err
         finally:
             # Un accès refusé ici (portée oubliée, jeton déjà révoqué) signalerait
             # la destination **provisoire** à ré-autoriser : le problème créé
             # nommerait une destination qui n'existe pas, que l'utilisateur ne
-            # pourrait donc ni ré-autoriser ni supprimer. Il est effacé aussitôt.
+            # pourrait donc ni ré-autoriser ni supprimer. Il est effacé aussitôt,
+            # que les crochets aient abouti ou non.
             async_effacer_la_reauthentification(self.hass, IDENTIFIANT_PROVISOIRE)
 
         propose = nom.strip() if isinstance(nom, str) else ""
@@ -631,6 +672,8 @@ class GestionDesDestinationsMixin:
             self._client_id = config.client_id
             self._client_secret = config.client_secret
             self._token = None
+            self._provider_data = None
+            self._nom_propose = None
             if not config.utilise_oauth:
                 # Identifiants d'application perdus (options éditées à la main) :
                 # ils sont redemandés avant de repartir chez le fournisseur.
@@ -672,6 +715,9 @@ class GestionDesDestinationsMixin:
                 client_id=self._client_id or config.client_id,
                 client_secret=self._client_secret or config.client_secret,
                 token=self._token,
+                # Le compte peut avoir changé : les données fraîchement lues
+                # priment, celles d'origine servent de repli.
+                provider_data=self._provider_data or config.provider_data,
             )
             if config.destination_id == identifiant
             else config
@@ -735,7 +781,7 @@ class GestionDesDestinationsMixin:
         return [
             SelectOptionDict(
                 value=config.destination_id,
-                label=f"{config.name} ({config.provider})",
+                label=f"{config.name} ({_libelle_du_fournisseur(config.provider)})",
             )
             for config in configurations
         ]
@@ -749,13 +795,14 @@ class GestionDesDestinationsMixin:
             return False
 
     def _libelle_du_fournisseur(self) -> str:
-        """Nom lisible du fournisseur en cours (« Dropbox »), pour l'affichage."""
+        """Nom lisible du fournisseur en cours (« Dropbox »), pour l'affichage.
+
+        Il alimente les placeholders `{fournisseur}` des étapes `identifiants` et
+        `destination` : l'utilisateur n'y lit jamais `google_drive`.
+        """
         if not self._provider:
             return ""
-        try:
-            return provider_label(self._provider)
-        except UnknownProviderError:
-            return self._provider
+        return _libelle_du_fournisseur(self._provider)
 
     def _config_provisoire(self) -> DestinationConfig:
         """Configuration de travail de la destination en cours d'ajout.

@@ -66,10 +66,16 @@ from custom_components.auto_backup.destinations.flow import (
     IDENTIFIANT_PROVISOIRE,
     GestionDesDestinationsMixin,
     _identifiant_disponible,
+    _libelle_du_fournisseur,
     _retention,
 )
 from custom_components.auto_backup.destinations.providers.dropbox import (
+    LIBELLE_DROPBOX,
     PROVIDER_DROPBOX,
+)
+from custom_components.auto_backup.destinations.providers.google_drive import (
+    LIBELLE_GOOGLE_DRIVE,
+    PROVIDER_GOOGLE_DRIVE,
 )
 from destinations_factices import (
     CLIENT_ID_FACTICE,
@@ -252,11 +258,12 @@ async def test_sans_fournisseur_enregistre_l_ajout_est_impossible(
     entree_auto_backup: MockConfigEntry,
     ouvrir_les_options: OuvrirLesOptions,
 ) -> None:
-    """Registre vide : le flux le dit au lieu d'un formulaire vide.
+    """Registre vide : le flux le dit au lieu d'afficher un formulaire vide.
 
-    Le cas ne se produit plus en fonctionnement normal depuis que Dropbox est
-    livré (issue #10) : le registre est simulé vide pour éprouver la branche, qui
-    reste utile à une installation dont un fournisseur aurait été retiré.
+    Le cas ne se produit plus en fonctionnement normal depuis que l'intégration
+    livre des fournisseurs réels (Dropbox #10, Google Drive #13) : le registre
+    est simulé vide pour éprouver la branche, qui reste utile à une installation
+    dont un fournisseur aurait été retiré.
     """
     with patch(
         "custom_components.auto_backup.destinations.flow.list_providers",
@@ -278,9 +285,9 @@ async def test_le_choix_du_fournisseur_liste_le_registre(
 ) -> None:
     """Critère : les fournisseurs proposés sont ceux du registre.
 
-    Dropbox y figure depuis l'issue #10, sous son libellé lisible ; les
-    fournisseurs factices, qui n'en déclarent pas, restent affichés sous leur
-    identifiant technique.
+    Dropbox (#10) et Google Drive (#13), enregistrés par l'intégration
+    elle-même, y figurent sous leur libellé lisible ; les fournisseurs factices,
+    qui n'en déclarent pas, restent affichés sous leur identifiant technique.
     """
     resultat = await ouvrir_les_options(entree.entry_id, "ajouter_destination")
 
@@ -290,8 +297,10 @@ async def test_le_choix_du_fournisseur_liste_le_registre(
     }
     assert list(libelles) == list(list_providers())
     assert {PROVIDER_FACTICE, PROVIDER_OAUTH_FACTICE} <= set(libelles)
+    # Un fournisseur sans libellé garde son identifiant technique.
     assert libelles[PROVIDER_FACTICE] == PROVIDER_FACTICE
-    assert libelles[PROVIDER_DROPBOX] == "Dropbox"
+    assert libelles[PROVIDER_DROPBOX] == LIBELLE_DROPBOX
+    assert libelles[PROVIDER_GOOGLE_DRIVE] == LIBELLE_GOOGLE_DRIVE
 
 
 ### Parcours complet d'ajout ###
@@ -959,6 +968,19 @@ def test_une_retention_illisible_est_refusee() -> None:
     """Une valeur non numérique ne peut pas devenir une rétention."""
     with pytest.raises(DestinationConfigError):
         _retention({CONF_RETENTION_DAYS: "sept"}, CONF_RETENTION_DAYS)
+
+
+def test_un_fournisseur_sans_libelle_garde_son_identifiant() -> None:
+    """Le libellé est facultatif : un fournisseur qui n'en a pas reste lisible.
+
+    Le cas couvre aussi un fournisseur absent du registre : une destination
+    peut citer un fournisseur retiré depuis, et le sélecteur de suppression
+    doit tout de même l'afficher.
+    """
+    assert _libelle_du_fournisseur(PROVIDER_FACTICE) == PROVIDER_FACTICE
+    assert _libelle_du_fournisseur("fournisseur_inexistant") == (
+        "fournisseur_inexistant"
+    )
 
 
 def test_le_libelle_du_fournisseur_retombe_sur_l_identifiant() -> None:

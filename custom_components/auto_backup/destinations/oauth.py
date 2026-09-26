@@ -347,6 +347,16 @@ class DestinationOAuth2Session:
         self._verrou = asyncio.Lock()
 
     @property
+    def hass(self) -> HomeAssistant:
+        """Instance Home Assistant servie par cette session.
+
+        Un fournisseur n'a besoin que de la session pour appeler son API : il y
+        trouve le jeton d'accès et, par cette propriété, la session HTTP
+        partagée du cœur (`async_get_clientsession`).
+        """
+        return self._hass
+
+    @property
     def config(self) -> DestinationConfig:
         """Configuration de la destination servie par cette session."""
         return self._config

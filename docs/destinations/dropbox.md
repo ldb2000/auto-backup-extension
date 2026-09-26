@@ -150,7 +150,8 @@ en service : **Configurer → Ré-autoriser une destination**.
 | « Home Assistant n'a pas d'URL externe configurée » | L'URL Internet n'est pas renseignée dans Paramètres → Système → Réseau. |
 | « Le fournisseur a refusé le code d'autorisation » | Clé ou secret erroné, ou URI de redirection déclarée chez Dropbox différente de celle affichée par Auto Backup. |
 | « L'autorisation a été refusée ou annulée » | Vous avez cliqué sur *Cancel* dans la fenêtre Dropbox, ou fermé l'onglet. Rien n'a été créé : recommencez quand vous voulez. |
-| `missing_scope` dans le journal | Une portée n'a pas été cochée (ou l'a été après l'autorisation). Cochez-la dans l'onglet *Permissions*, puis **Ré-autoriser une destination**. |
+| « Le fournisseur a refusé la première requête : … » | Juste après l'autorisation, Auto Backup demande à Dropbox qui est le compte connecté. Si cet appel échoue, **l'ajout s'arrête et rien n'est enregistré** : le message cite la cause renvoyée par Dropbox (portée manquante, service indisponible). Corrigez-la, puis relancez **Ajouter une destination** — vous n'avez rien à nettoyer. |
+| `missing_scope` dans le message ou le journal | Une portée n'a pas été cochée (ou l'a été après l'autorisation). Cochez-la dans l'onglet *Permissions*, puis recommencez l'ajout — ou, si la destination existe déjà, **Ré-autoriser une destination**. |
 | Dropbox ouvre une page « invalid redirect_uri » | L'URI déclarée ne correspond pas exactement (protocole, port, `/` final). |
 
 Le journal détaillé s'active avec :
@@ -163,6 +164,11 @@ logger:
 
 Aucun secret n'y figure : ni clé, ni secret d'application, ni jeton, ni identifiant de
 compte.
+
+**Pourquoi l'ajout s'arrête-t-il au lieu de continuer ?** Une destination que Dropbox refuse
+déjà d'identifier ne fonctionnerait pas davantage une fois créée : elle échouerait à chaque
+sauvegarde, sans rien dire de ce qu'il faut corriger. Mieux vaut recommencer l'ajout — c'est
+un clic — que diagnostiquer plus tard une destination muette.
 
 ## Limites connues
 

@@ -15,6 +15,10 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
 - **[Connecter un compte Dropbox](destinations/dropbox.md)** : création de l'application
   Dropbox (type d'accès, portées à cocher), URI de redirection à déclarer, récupération de
   la clé et du secret, connexion depuis les options, limites connues.
+- **[Connecter Google Drive](destinations/google-drive.md)** : création du projet Google Cloud,
+  activation de l'API Drive, écran de consentement, identifiants OAuth « Application Web »,
+  URI de redirection et prérequis d'URL externe publique, portée `drive.file` et ses
+  conséquences.
 
 ## Maintenance
 

@@ -157,9 +157,11 @@ IDENTIFIANT_PROVISOIRE = "autorisation_en_cours"
 # `destinations/providers/` et s'enregistrent par `enregistrer_les_fournisseurs()`.
 
 # Données **non secrètes** renvoyées par le fournisseur au moment de l'autorisation et
-# conservées avec la destination : identifiant du compte Dropbox (`account_id`), par
-# exemple. Elles évitent de rappeler l'API pour savoir à quel compte une destination
-# est rattachée, et servent à détecter qu'une ré-autorisation a changé de compte.
+# conservées avec la destination : identifiant du compte Dropbox (`account_id`) ou
+# adresse du compte Google Drive (`account_email`), par exemple. Elles évitent de
+# rappeler l'API pour savoir à quel compte une destination est rattachée, et servent à
+# détecter qu'une ré-autorisation a changé de compte. Facultatif : une destination qui
+# n'en a pas est persistée exactement comme avant.
 CONF_PROVIDER_DATA = "provider_data"
 
 ### RÉTENTION ET PURGE DISTANTES (issue #9) ###
