@@ -53,6 +53,7 @@ from ..errors import DestinationAuthError, DestinationError, DestinationQuotaErr
 from ..models import DestinationConfig, RemoteBackup
 from ..oauth import OAuth2ProviderSpec, async_session_de_la_destination
 from ..reauth import async_signaler_la_reauthentification
+from ..retention import marqueur_auto_backup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -206,11 +207,12 @@ CARACTERES_INTERDITS = frozenset(CARACTERES_REFUSES_PAR_DROPBOX + SOLIDUS_CONFUS
 LONGUEUR_MAX_NOM_FICHIER = 200
 LONGUEUR_MAX_SLUG = 60
 
-# Clés des métadonnées attachées à une sauvegarde distante. `auto_backup` est le
-# marqueur qui distingue les sauvegardes déposées par l'intégration de tout autre
-# fichier du dossier : la purge distante (#9) et le listage (#12) s'y fient pour
-# ne jamais supprimer un fichier de l'utilisateur.
-CLE_MARQUEUR = "auto_backup"
+# Clés des métadonnées attachées à une sauvegarde distante. Le marqueur de
+# provenance, lui, n'est pas défini ici : il vient de `marqueur_auto_backup()`
+# (`destinations/retention.py`), seul endroit où sa clé est écrite. Le dupliquer
+# ici marchait tant que les deux valeurs coïncidaient, et aurait silencieusement
+# orphelinné tous les dépôts Dropbox le jour où la rétention renommerait la
+# sienne.
 CLE_SLUG = "slug"
 CLE_EMPREINTE = "content_hash"
 
@@ -937,8 +939,13 @@ class DropboxDestination(RemoteDestination):
         vient de là : l'identifiant opaque (`id:...`), seule clé de suppression,
         le chemin affichable, la taille et la date enregistrées **par Dropbox**,
         et des métadonnées portant le slug de la sauvegarde, l'empreinte du
-        contenu et le marqueur `auto_backup`. Ce marqueur est ce qui autorisera
-        la purge à ne supprimer que les fichiers déposés par l'intégration.
+        contenu et le marqueur de provenance.
+
+        Ces métadonnées **ne sont pas stockées chez Dropbox** : l'API v2 n'offre
+        aucun champ libre sur un fichier (cf. `docs/adr/0001`). Elles ne servent
+        donc qu'à l'appelant du dépôt — le coordinateur de #8, qui inscrit la
+        sauvegarde au registre de #9 sur-le-champ. Le marqueur y est posé pour
+        qu'un fournisseur capable de le persister n'ait rien à changer ici.
 
         La réponse est traitée comme une donnée externe : seul l'identifiant est
         exigé, le reste retombe sur ce que le dépôt connaît déjà.
@@ -951,7 +958,7 @@ class DropboxDestination(RemoteDestination):
             )
         metadonnees: dict[str, Any] = dict(metadata or {})
         metadonnees[CLE_SLUG] = slug
-        metadonnees[CLE_MARQUEUR] = True
+        metadonnees.update(marqueur_auto_backup())
         empreinte = _texte(charge.get(CLE_EMPREINTE))
         if empreinte:
             metadonnees[CLE_EMPREINTE] = empreinte
@@ -1179,7 +1186,6 @@ class DropboxDestination(RemoteDestination):
 
 __all__ = [
     "CLE_ACCOUNT_ID",
-    "CLE_MARQUEUR",
     "LIBELLE_DROPBOX",
     "PORTEES",
     "PROVIDER_DROPBOX",

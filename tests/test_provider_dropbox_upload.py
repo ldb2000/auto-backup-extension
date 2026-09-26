@@ -81,7 +81,6 @@ from custom_components.auto_backup.destinations import (
 )
 from custom_components.auto_backup.destinations.providers.dropbox import (
     CLE_ACCOUNT_ID,
-    CLE_MARQUEUR,
     MULTIPLE_FRAGMENT,
     PROVIDER_DROPBOX,
     SEUIL_ENVOI_SIMPLE,
@@ -95,6 +94,10 @@ from custom_components.auto_backup.destinations.providers.dropbox import (
     URL_SESSION_FIN,
     DropboxDestination,
     nom_de_fichier_dropbox,
+)
+from custom_components.auto_backup.destinations.retention import (
+    CLE_MARQUEUR,
+    porte_le_marqueur,
 )
 
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
@@ -1184,13 +1187,16 @@ async def test_la_sauvegarde_distante_porte_ce_qu_attend_la_retention(
     assert distante.created_at == DATE_DEPOT
     assert distante.path == CHEMIN_DISTANT
     # Le marqueur distingue les sauvegardes déposées par l'intégration de tout
-    # autre fichier du dossier : la purge distante s'y fie pour ne rien
-    # supprimer qui ne lui appartienne pas.
+    # autre fichier du dossier. Sa clé n'a qu'une définition, celle de la
+    # rétention distante : le dépôt est relu par `porte_le_marqueur()` lui-même,
+    # de sorte qu'un renommage côté rétention casse ce test au lieu d'orpheliner
+    # en silence tous les dépôts Dropbox.
     assert distante.metadata == {
         "slug": SLUG,
         "content_hash": EMPREINTE,
         CLE_MARQUEUR: True,
     }
+    assert porte_le_marqueur(distante)
 
 
 async def test_une_taille_non_numerique_est_ignoree(
