@@ -159,6 +159,17 @@
             "description": "Purge expired backups, locally and on remote destinations."
         }
     },
+    "selector": {
+        "folders": {
+            "options": {
+                "config": "Configuration",
+                "share": "Share",
+                "ssl": "SSL",
+                "media": "Media",
+                "addons": "Local add-ons"
+            }
+        }
+    },
     "issues": {
         "reauthentification_requise": {
             "title": "Auto Backup: destination “{nom}” must be re-authorized",

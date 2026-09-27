@@ -20,6 +20,9 @@ refuse en CI un fichier de traduction mal structuré. Faute de pouvoir rejouer
 - les actions de `services.yaml` sont intégralement traduites — `hassfest`
   exige un nom et une description pour chaque action et chaque champ déclarés
   dans la section `services` ;
+- chaque sélecteur `select` doté d'un `translation_key` (#47) a sa section
+  `selector` en français et en anglais, qui traduit toutes ses options et
+  rien d'autre, sans changer les valeurs transmises à l'action ;
 - les langues héritées de l'upstream, que le fork ne complète pas, ne
   contiennent aucune clé que l'anglais ne connaîtrait plus ;
 - le code des flux n'écrit aucun texte en dur dans ses placeholders.
@@ -39,8 +42,14 @@ from typing import Any
 
 import pytest
 import yaml
+from homeassistant.helpers import selector as selecteurs_ha
 
-from custom_components.auto_backup import config_flow, const
+from custom_components.auto_backup import (
+    SCHEMA_BACKUP,
+    SCHEMA_BACKUP_PARTIAL,
+    config_flow,
+    const,
+)
 from custom_components.auto_backup.destinations import (
     flow,
     notifications,
@@ -652,6 +661,103 @@ def test_les_traductions_de_upload_to_different_entre_les_langues() -> None:
     assert francais != anglais
 
 
+### Options des sélecteurs de `services.yaml` (#47) ###
+
+# Champs dont les options de dossiers sont traduites. `exclude` (action
+# `backup_full`) n'y figure pas : c'est un sélecteur `object`, sans options.
+CHAMPS_DE_DOSSIERS = {
+    ("backup", "include_folders"),
+    ("backup", "exclude_folders"),
+    ("backup_partial", "folders"),
+}
+
+
+def _selecteurs_traduits() -> dict[tuple[str, str], dict[str, Any]]:
+    """Sélecteurs `select` de `services.yaml` dotés d'un `translation_key`."""
+    return {
+        (action, champ): definition["selector"]["select"]
+        for action, service in _services_yaml().items()
+        for champ, definition in ((service or {}).get("fields") or {}).items()
+        if "translation_key" in (definition.get("selector") or {}).get("select", {})
+    }
+
+
+def _valeurs(select: dict[str, Any]) -> list[str]:
+    return [
+        option["value"] if isinstance(option, dict) else option
+        for option in select["options"]
+    ]
+
+
+def test_les_champs_de_dossiers_portent_une_cle_de_traduction() -> None:
+    """Critère 1 de #47 : les trois listes de dossiers partagent `folders`."""
+    traduits = _selecteurs_traduits()
+
+    assert set(traduits) == CHAMPS_DE_DOSSIERS
+    assert {select["translation_key"] for select in traduits.values()} == {"folders"}
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_chaque_option_de_selecteur_est_traduite_sans_orphelin(langue: str) -> None:
+    """`hassfest` exige la clé ; le frontend remplace le libellé par sa traduction.
+
+    Chaque option déclarée a un texte, et la section `selector` ne contient
+    ni sélecteur ni option que `services.yaml` ignorerait.
+    """
+    attendues: dict[str, set[str]] = {}
+    for select in _selecteurs_traduits().values():
+        attendues.setdefault(select["translation_key"], set()).update(_valeurs(select))
+
+    traduction = _traduction(langue)["selector"]
+    assert set(traduction) == set(attendues)
+    for cle, valeurs in attendues.items():
+        options = traduction[cle]["options"]
+        assert set(options) == valeurs, f"{langue}/{cle}"
+        assert all(texte.strip() for texte in options.values()), f"{langue}/{cle}"
+
+
+def test_les_options_de_dossiers_different_entre_les_langues() -> None:
+    """Le français n'est pas une copie de l'anglais."""
+    francais = _traduction("fr")["selector"]["folders"]["options"]
+    anglais = _traduction("en")["selector"]["folders"]["options"]
+
+    assert francais != anglais
+
+
+def test_les_langues_heritees_se_replient_sur_l_anglais_pour_les_selecteurs() -> None:
+    """Choix de #47 : les langues héritées ne reçoivent pas de section `selector`.
+
+    Home Assistant complète alors ces langues par l'anglais ; ajouter plus tard
+    une traduction reste possible, les clés orphelines étant contrôlées par
+    `test_les_langues_heritees_restent_valides`.
+    """
+    assert all("selector" not in _traduction(langue) for langue in LANGUES_HERITEES)
+
+
+@pytest.mark.parametrize(
+    ("action", "champ", "valeur"),
+    [
+        (action, champ, valeur)
+        for (action, champ), select in sorted(_selecteurs_traduits().items())
+        for valeur in _valeurs(select)
+    ],
+)
+def test_la_valeur_envoyee_a_l_action_ne_change_pas(
+    action: str, champ: str, valeur: str
+) -> None:
+    """Critère 2 de #47 : traduire le libellé ne touche pas la valeur transmise.
+
+    La valeur choisie traverse le sélecteur de Home Assistant puis le schéma
+    de l'action sans être altérée.
+    """
+    select = _selecteurs_traduits()[(action, champ)]
+    selecteur = selecteurs_ha.selector({"select": select})
+
+    assert selecteur([valeur]) == [valeur]
+    schema = {"backup": SCHEMA_BACKUP, "backup_partial": SCHEMA_BACKUP_PARTIAL}
+    assert schema[action]({champ: [valeur]})[champ] == [valeur]
+
+
 ### Clés de traduction et langues héritées ###
 
 
@@ -667,6 +773,12 @@ def test_les_cles_de_traduction_sont_des_identifiants_valides(langue: str) -> No
         *traduction["exceptions"],
         *traduction["services"],
         *(cle for plateforme in traduction["entity"].values() for cle in plateforme),
+        *traduction["selector"],
+        *(
+            option
+            for selecteur in traduction["selector"].values()
+            for option in selecteur["options"]
+        ),
     ]
     invalides = [cle for cle in cles if not CLE_DE_TRADUCTION.match(cle)]
     assert not invalides

@@ -159,6 +159,17 @@
             "description": "Supprime les sauvegardes expirées, localement et sur les destinations distantes."
         }
     },
+    "selector": {
+        "folders": {
+            "options": {
+                "config": "Configuration",
+                "share": "Dossier partagé (share)",
+                "ssl": "SSL",
+                "media": "Médias",
+                "addons": "Modules complémentaires locaux"
+            }
+        }
+    },
     "issues": {
         "reauthentification_requise": {
             "title": "Auto Backup : la destination « {nom} » doit être ré-autorisée",
