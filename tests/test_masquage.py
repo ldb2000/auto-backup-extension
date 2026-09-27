@@ -397,6 +397,54 @@ def test_reserve_un_mot_interminable_a_capitale_est_masque() -> None:
     assert masquer_un_nom(mot) == mot
 
 
+# Homoglyphe cyrillique U+0430 (petite lettre a cyrillique), écrit par son
+# échappement : à l'œil, il ne se distingue pas du « a » latin, et c'est
+# justement ce qui en fait un séparateur invisible pour la passe 6.
+HOMOGLYPHE_CYRILLIQUE = "\u0430"
+
+
+@pytest.mark.parametrize(
+    ("brut", "avant", "apres"),
+    [
+        pytest.param(
+            f"refus du fournisseur : FaCtIcE01234{HOMOGLYPHE_CYRILLIQUE}56789FaCtIcE",
+            "FaCtIcE01234",
+            "56789FaCtIcE",
+            id="homoglyphe-au-milieu",
+        ),
+        pytest.param(
+            f"refus : FaCtIcE0123456789{HOMOGLYPHE_CYRILLIQUE}bcdefghijkl",
+            "FaCtIcE0123456789",
+            "bcdefghijkl",
+            id="homoglyphe-decale",
+        ),
+    ],
+)
+def test_reserve_une_suite_coupee_par_un_caractere_non_ascii_sort_intacte(
+    brut: str, avant: str, apres: str
+) -> None:
+    """Angle mort documenté (#54) : un caractère non ASCII coupe la suite opaque.
+
+    La passe 6 ne reconnaît une suite que sur `[A-Za-z0-9_+-]`. Un caractère non
+    ASCII — ici un homoglyphe cyrillique — la découpe en deux morceaux de moins
+    de `LONGUEUR_MIN_SUITE_OPAQUE` caractères chacun, que le dernier filet ne
+    voit plus : la suite entière sort intacte. Accepté : les jetons des
+    fournisseurs intégrés sont en ASCII et reconnus par leur forme (passe 4) ou
+    par la clé qui les accompagne toujours (passe 3), aucun secret n'est
+    fabriqué par un tiers, et élargir la passe à l'Unicode masquerait les mots
+    français accentués.
+    """
+    suite = f"{avant}{HOMOGLYPHE_CYRILLIQUE}{apres}"
+    assert suite in brut
+    assert len(suite) >= LONGUEUR_MIN_SUITE_OPAQUE
+    assert len(avant) < LONGUEUR_MIN_SUITE_OPAQUE
+    assert len(apres) < LONGUEUR_MIN_SUITE_OPAQUE
+    # Sans l'homoglyphe, la même suite est bien masquée par la passe 6.
+    assert masquer(f"{avant}a{apres}") == VALEUR_MASQUEE
+
+    assert masquer(brut) == brut
+
+
 ### Codes d'erreur connus des fournisseurs (#48) ###
 
 # Codes que la passe 6 masquait avant #48, faute de liste blanche : c'est pour
@@ -795,6 +843,8 @@ def test_les_vecteurs_sont_bien_rassembles() -> None:
     """Garde-fou : une collecte vide rendrait le test suivant trivialement vert."""
     assert len(ENTREES_DES_VECTEURS) >= 40
     assert f"invalid access token {JETON_DROPBOX}" in ENTREES_DES_VECTEURS
+    # Réserve de #54 : une entrée non ASCII est éprouvée elle aussi.
+    assert any(HOMOGLYPHE_CYRILLIQUE in entree for entree in ENTREES_DES_VECTEURS)
 
 
 @pytest.mark.parametrize("brut", ENTREES_DES_VECTEURS)
@@ -912,3 +962,69 @@ def test_l_adr_tranche_l_ajout_d_un_champ_error_code() -> None:
     # Et la liste blanche de #48 est présentée comme la réponse en attendant.
     assert "CODES_D_ERREUR_CONNUS" in texte
     assert "#48" in section or "#48" in texte
+
+
+### Documentation de l'angle mort Unicode (critère 1 de #54) ###
+
+MASQUAGE_PY = (
+    RACINE_DEPOT / "custom_components" / "auto_backup" / "destinations" / "masquage.py"
+)
+
+
+def _fenetre_autour_de(
+    texte: str, marqueur: str, avant: int = 400, apres: int = 1400
+) -> str:
+    """Fenêtre de texte centrée sur `marqueur`, espaces normalisés.
+
+    Les deux documents ne placent pas `#54` au même endroit de leur
+    paragraphe (avant ou après la référence à l'alphabet ASCII, selon le
+    document) : une fenêtre plutôt qu'un simple découpage en deux évite de
+    dépendre de cet ordre. Les espaces sont normalisés pour qu'un retour à la
+    ligne au milieu d'une phrase ne casse pas une recherche de sous-chaîne.
+    """
+    aplati = " ".join(texte.split())
+    index = aplati.find(marqueur)
+    assert index != -1, f"{marqueur!r} introuvable"
+    return aplati[max(0, index - avant) : index + apres]
+
+
+def test_la_docstring_et_l_adr_documentent_l_angle_mort_non_ascii() -> None:
+    """Critère 1 de #54 : la docstring de `masquage.py` et l'ADR décrivent l'angle mort.
+
+    Il ne suffit pas que « #54 » ou « ASCII » apparaisse quelque part dans
+    chaque texte : la même référence doit porter, dans le même paragraphe,
+    l'angle mort (un caractère non ASCII coupe une suite opaque), sa cause
+    (la passe 6 ne reconnaît qu'un alphabet ASCII) et la raison de son
+    acceptation (les jetons des fournisseurs intégrés sont en ASCII et
+    repérés en passe 4, et aucun secret n'est fabriqué par un tiers) —
+    exactement les termes du critère d'acceptation de #54.
+    """
+    docstring = MASQUAGE_PY.read_text(encoding="utf-8")
+    adr = ADR_0001.read_text(encoding="utf-8")
+
+    for texte, origine in ((docstring, "la docstring de masquage.py"), (adr, "l'ADR")):
+        section = _fenetre_autour_de(texte, "#54")
+
+        # L'angle mort et sa cause : la passe 6 ne reconnaît qu'un alphabet
+        # ASCII, qu'un caractère non ASCII vient couper.
+        assert "non ASCII" in section, f"{origine} ne décrit pas l'angle mort"
+        assert "[A-Za-z0-9_+-]" in section, (
+            f"{origine} ne cite pas l'alphabet reconnu par la passe 6 (la cause)"
+        )
+
+        # La justification de l'acceptation : jetons ASCII des fournisseurs
+        # intégrés, reconnus en passe 4, et aucun secret fabriqué par un tiers.
+        assert "passe 4" in section, (
+            f"{origine} ne justifie pas l'acceptation par la reconnaissance en passe 4"
+        )
+        assert "aucun secret n'est fabriqué par un tiers" in section, (
+            f"{origine} ne justifie pas l'acceptation par l'absence de secret fabriqué "
+            "par un tiers"
+        )
+
+        # La condition de réouverture, cohérente avec le hors périmètre de
+        # l'issue : le motif n'est pas élargi tant qu'aucun fournisseur
+        # n'émet de jetons hors ASCII.
+        assert "fournisseur dont les jetons sortent de l'ASCII" in section, (
+            f"{origine} ne pose pas la condition de réouverture"
+        )
