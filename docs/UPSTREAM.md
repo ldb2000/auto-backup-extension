@@ -309,8 +309,9 @@ corrige pas : masquer ce message demanderait de **modifier** une ligne upstream,
 règle « que des ajouts » ci-dessus exclut. Le risque reste borné : l'événement ne relaie que
 l'échec d'une sauvegarde **locale** (message du Supervisor ou de Home Assistant), jamais une
 réponse de Dropbox ou de Google Drive. Les échecs de ces fournisseurs passent par l'événement
-`auto_backup.upload_failed`, qui transporte la cause brute, et par les entités du fork —
-celles-ci masquent cette cause dans les états historisés et les attributs affichés. À
+`auto_backup.upload_failed`, dont le champ `error` ne transporte que la cause **masquée** par
+`masquer()` (issue #44), et par les entités et notifications du fork, qui la masquent de
+nouveau à la lecture, sans effet puisque le masquage est idempotent. À
 reconsidérer si l'upstream ajoute un jour son propre masquage, ou si le fork décide de
 remplacer ce capteur.
 
