@@ -184,7 +184,8 @@ listage — il demande d'ailleurs à Google de ne lui renvoyer *que* les fichier
   avec un délai croissant, et **reprend exactement là où il s'était arrêté** — les fragments déjà
   reçus ne sont pas renvoyés ;
 - **espace de stockage épuisé** : l'envoi s'arrête immédiatement (réessayer n'y changerait rien) et
-  l'événement `auto_backup.upload_failed` porte le message correspondant ;
+  l'événement `auto_backup.upload_failed` porte le code `quota_exceeded` et le message
+  correspondant ;
 - **autorisation révoquée** : la destination est signalée à ré-autoriser, comme décrit plus bas ;
 - **dans tous les cas, la sauvegarde locale reste intacte**, et les autres destinations demandées
   sont traitées normalement.

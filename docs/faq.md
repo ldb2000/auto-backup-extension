@@ -140,7 +140,8 @@ aucun secret : identifiants distants, noms, slugs, dates et tailles.
 Non. Ni les jetons, ni le secret d'application, ni l'en-tête d'autorisation ne sont journalisés,
 même en niveau `debug`. Les messages d'erreur affichés — notifications persistantes, attribut
 `last_error` de l'entité de problème, champ `error` de l'événement `auto_backup.upload_failed` —
-sont masqués des secrets avant affichage.
+sont écrits par Auto Backup et traduits : ils ne reprennent pas le texte renvoyé par le
+fournisseur. Ce texte ne va que dans le journal, masqué de ses secrets.
 
 ### Comment retirer l'accès d'Auto Backup ?
 
@@ -192,7 +193,7 @@ Les causes les plus fréquentes :
 
 Elles continuent d'être **créées localement**, normalement. Les envois vers la destination
 concernée échouent aussitôt, sans contacter le fournisseur, avec l'événement
-`auto_backup.upload_failed` (« ré-authentification requise ») ; sa purge distante est sautée. Les
+`auto_backup.upload_failed` (code `access_revoked`) ; sa purge distante est sautée. Les
 autres destinations continuent de fonctionner. Une fois la destination ré-autorisée, les
 sauvegardes suivantes repartent ; celles créées entre-temps ne sont pas renvoyées
 automatiquement.
