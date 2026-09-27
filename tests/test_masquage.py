@@ -877,3 +877,38 @@ def test_upstream_ne_decrit_plus_une_cause_transportee_brute() -> None:
     assert "#44" in texte
     section = texte.split("auto_backup.upload_failed", 1)[1]
     assert "masqu" in section.casefold()
+
+
+### ADR : le champ structuré `error_code` (critère 6 de #48) ###
+
+ADR_0001 = RACINE_DEPOT / "docs" / "adr" / "0001-destinations-distantes.md"
+
+
+def test_l_adr_tranche_l_ajout_d_un_champ_error_code() -> None:
+    """Critère 6 : l'ADR tranche l'ajout éventuel d'un champ `error_code`.
+
+    Un tel champ serait un ajout au contrat public de `auto_backup.upload_failed`
+    sans rupture (`error` resterait présent et inchangé) : l'issue #48 exige que
+    l'ADR le dise explicitement, faute de quoi une resynchronisation future
+    pourrait rouvrir le débat sans connaître les raisons déjà pesées. Il ne
+    suffit pas que « error_code » apparaisse quelque part dans le document :
+    la décision doit être prise, et justifiée, à son sujet.
+    """
+    texte = ADR_0001.read_text(encoding="utf-8")
+
+    assert "error_code" in texte, "l'ADR ne mentionne pas le champ `error_code`"
+    section = texte.split("error_code", 1)[1]
+
+    # La décision est prise : ce n'est pas retenu maintenant, et c'est reporté
+    # à une issue précise plutôt que laissé en suspens.
+    assert "#46" in texte
+    assert "reporté" in texte.casefold() or "report" in texte.casefold()
+
+    # Elle est justifiée comme un ajout au contrat public, exactement dans les
+    # termes du critère d'acceptation de #48.
+    assert "contrat public" in texte
+    assert "sans rupture" in texte
+
+    # Et la liste blanche de #48 est présentée comme la réponse en attendant.
+    assert "CODES_D_ERREUR_CONNUS" in texte
+    assert "#48" in section or "#48" in texte
