@@ -18,6 +18,7 @@ pour qu'une dérive entre la documentation et le code fasse échouer ces tests.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -26,6 +27,11 @@ from typing import Any
 import pytest
 import voluptuous as vol
 import yaml
+from homeassistant.components.automation.config import (
+    ValidationStatus,
+    async_validate_config_item,
+)
+from homeassistant.core import HomeAssistant
 
 from custom_components.auto_backup import MAP_SERVICES
 from custom_components.auto_backup.const import (
@@ -65,6 +71,9 @@ GUIDES = (
     DOCS / "destinations" / "google-drive.md",
 )
 SERVICES_YAML = RACINE_DEPOT / "custom_components" / DOMAIN / "services.yaml"
+FR_TRANSLATIONS = (
+    RACINE_DEPOT / "custom_components" / DOMAIN / "translations" / "fr.json"
+)
 
 # Pages destinées aux utilisateurs, dont les noms cités sont vérifiés.
 PAGES_UTILISATEUR = (README, DOC_SERVICES, DOC_FAQ, *GUIDES)
@@ -109,6 +118,12 @@ def _services_declares() -> dict[str, dict[str, Any]]:
 
 def _evenements() -> set[str]:
     return set(CHAMPS_DES_EVENEMENTS)
+
+
+def _menu_options() -> dict[str, str]:
+    """Libellés du menu des options, tels que déclarés dans `fr.json`."""
+    traductions = json.loads(FR_TRANSLATIONS.read_text(encoding="utf-8"))
+    return traductions["options"]["step"]["menu"]["menu_options"]
 
 
 ### README ###
@@ -158,6 +173,38 @@ def test_le_readme_renvoie_vers_la_documentation_detaillee(cible: str) -> None:
 @pytest.mark.parametrize("cible", ["services.md", "faq.md"])
 def test_l_index_de_docs_reference_les_nouvelles_pages(cible: str) -> None:
     assert f"]({cible})" in _lire(DOC_INDEX)
+
+
+### Guides des destinations ###
+
+
+ETAPE_NUMEROTEE = re.compile(r"^##\s+\d+\.\s+\S", re.MULTILINE)
+
+
+@pytest.mark.parametrize("page", GUIDES, ids=lambda p: str(p.relative_to(RACINE_DEPOT)))
+def test_chaque_guide_decrit_pas_a_pas_la_creation_des_identifiants_oauth(
+    page: Path,
+) -> None:
+    """Critère 2 : une page par destination, avec une procédure pas à pas."""
+    texte = _lire(page)
+
+    # Au moins quatre étapes numérotées (créer l'application, portées, URI de
+    # redirection, relever les identifiants, connecter le compte...).
+    assert len(ETAPE_NUMEROTEE.findall(texte)) >= 4
+
+    for mot in ("OAuth", "redirection", "client"):
+        assert mot in texte, mot
+
+    # La dernière étape doit mener à l'ajout réel de la destination, avec le
+    # libellé exact du menu des options (source de vérité : `fr.json`).
+    assert _menu_options()["ajouter_destination"] in texte
+
+
+def test_chaque_guide_renvoie_vers_la_page_des_services_et_la_faq() -> None:
+    for page in GUIDES:
+        texte = _lire(page)
+        assert "](../services.md)" in texte
+        assert "](../faq.md)" in texte
 
 
 ### Liens internes ###
@@ -399,6 +446,24 @@ def test_une_automatisation_planifiee_envoie_la_sauvegarde_dans_le_cloud() -> No
     assert "Nombre maximum de sauvegardes conservées" in texte
 
 
+async def test_les_automatisations_d_exemple_sont_valides_pour_home_assistant(
+    hass: HomeAssistant,
+) -> None:
+    """Les exemples de `docs/services.md` sont acceptés par le vrai validateur
+    d'automatisations de Home Assistant (syntaxe `triggers`/`actions` récente,
+    conditions, templates Jinja) et pas seulement par notre propre lecture YAML.
+    """
+    automatisations = _automatisations(DOC_SERVICES)
+    assert automatisations
+
+    for automatisation in automatisations:
+        config = await async_validate_config_item(hass, "automation", automatisation)
+        assert config.validation_status == ValidationStatus.OK, (
+            automatisation.get("id"),
+            config.validation_error,
+        )
+
+
 def test_les_libelles_de_retention_cites_sont_ceux_de_l_interface() -> None:
     traductions = _lire(
         RACINE_DEPOT / "custom_components" / DOMAIN / "translations" / "fr.json"
@@ -452,3 +517,44 @@ def test_un_dossier_distant_par_instance_est_recommande(page: Path) -> None:
     texte = _aplati(page).casefold()
     assert "par instance" in texte
     assert "chaque instance" in texte
+
+
+### CHANGELOG ###
+
+
+CHANGELOG = RACINE_DEPOT / "CHANGELOG.md"
+TITRE_DE_VERSION = re.compile(r"^## \[.+\]", re.MULTILINE)
+TITRE_DE_SECTION = re.compile(r"^### (\w+)", re.MULTILINE)
+
+
+def test_le_changelog_suit_un_format_de_versions_lisible() -> None:
+    """Critère 5 : un format de versions lisible (Keep a Changelog)."""
+    texte = _lire(CHANGELOG)
+
+    assert texte.startswith("# Changelog")
+    assert "Keep a Changelog" in texte
+    assert "Versioning Sémantique" in texte
+
+    # Au moins une version, entre crochets comme le veut Keep a Changelog.
+    versions = TITRE_DE_VERSION.findall(texte)
+    assert versions, "aucun titre de version au format « ## [...] »"
+
+    # Chaque version se découpe en sections (Ajouté, Modifié, Sécurité...),
+    # toutes nommées en français.
+    sections = set(TITRE_DE_SECTION.findall(texte))
+    assert sections, "aucune section « ### ... » sous une version"
+    assert sections & {"Ajouté", "Modifié", "Sécurité", "Corrigé", "Supprimé"}
+
+
+def test_le_changelog_decrit_en_francais_les_apports_de_cette_version() -> None:
+    """Critère 5 : destinations cloud, rétention distante, entités, notifications."""
+    texte = _aplati(CHANGELOG)
+
+    for mot in ("Dropbox", "Google Drive"):
+        assert mot in texte, mot
+    for expression in (
+        "rétention distante",
+        "entités",
+        "notification",
+    ):
+        assert expression.casefold() in texte.casefold(), expression
