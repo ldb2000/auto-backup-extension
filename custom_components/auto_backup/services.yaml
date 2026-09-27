@@ -23,6 +23,7 @@ backup:
         select:
           multiple: true
           custom_value: true
+          translation_key: folders
           options:
             - label: Config
               value: config
@@ -49,6 +50,7 @@ backup:
         select:
           multiple: true
           custom_value: true
+          translation_key: folders
           options:
             - label: Config
               value: config
@@ -165,6 +167,7 @@ backup_partial:
         select:
           multiple: true
           custom_value: true
+          translation_key: folders
           options:
             - label: Config
               value: config

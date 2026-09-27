@@ -20,6 +20,9 @@ refuse en CI un fichier de traduction mal structuré. Faute de pouvoir rejouer
 - les actions de `services.yaml` sont intégralement traduites — `hassfest`
   exige un nom et une description pour chaque action et chaque champ déclarés
   dans la section `services` ;
+- chaque sélecteur `select` doté d'un `translation_key` (#47) a sa section
+  `selector` en français et en anglais, qui traduit toutes ses options et
+  rien d'autre, sans changer les valeurs transmises à l'action ;
 - les langues héritées de l'upstream, que le fork ne complète pas, ne
   contiennent aucune clé que l'anglais ne connaîtrait plus ;
 - le code des flux n'écrit aucun texte en dur dans ses placeholders.
@@ -36,11 +39,31 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import selector as selecteurs_ha
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.auto_backup import config_flow, const
+try:
+    from homeassistant.components.hassio.const import (  # HA 2026.5+
+        ATTR_ADDONS,
+        ATTR_FOLDERS,
+    )
+except ImportError:
+    from homeassistant.components.hassio import (  # HA < 2026.5
+        ATTR_ADDONS,
+        ATTR_FOLDERS,
+    )
+
+from custom_components.auto_backup import (
+    SCHEMA_BACKUP,
+    SCHEMA_BACKUP_PARTIAL,
+    config_flow,
+    const,
+)
 from custom_components.auto_backup.destinations import (
     flow,
     notifications,
@@ -652,6 +675,181 @@ def test_les_traductions_de_upload_to_different_entre_les_langues() -> None:
     assert francais != anglais
 
 
+### Options des sélecteurs de `services.yaml` (#47) ###
+
+# Champs dont les options de dossiers sont traduites. `exclude` (action
+# `backup_full`) n'y figure pas : c'est un sélecteur `object`, sans options.
+CHAMPS_DE_DOSSIERS = {
+    ("backup", "include_folders"),
+    ("backup", "exclude_folders"),
+    ("backup_partial", "folders"),
+}
+
+
+def _selecteurs_traduits() -> dict[tuple[str, str], dict[str, Any]]:
+    """Sélecteurs `select` de `services.yaml` dotés d'un `translation_key`."""
+    return {
+        (action, champ): definition["selector"]["select"]
+        for action, service in _services_yaml().items()
+        for champ, definition in ((service or {}).get("fields") or {}).items()
+        if "translation_key" in (definition.get("selector") or {}).get("select", {})
+    }
+
+
+def _valeurs(select: dict[str, Any]) -> list[str]:
+    return [
+        option["value"] if isinstance(option, dict) else option
+        for option in select["options"]
+    ]
+
+
+def test_les_champs_de_dossiers_portent_une_cle_de_traduction() -> None:
+    """Critère 1 de #47 : les trois listes de dossiers partagent `folders`."""
+    traduits = _selecteurs_traduits()
+
+    assert set(traduits) == CHAMPS_DE_DOSSIERS
+    assert {select["translation_key"] for select in traduits.values()} == {"folders"}
+
+
+def test_le_champ_exclude_de_backup_full_est_un_selecteur_object_sans_options() -> None:
+    """Critère 1 de #47 : `exclude` (`backup_full`) n'a pas d'options à traduire.
+
+    L'énoncé cite ce champ à côté des trois listes de dossiers, mais c'est un
+    sélecteur `object` (un JSON libre `{"addons": [...], "folders": [...]}`),
+    sans `options` ni `translation_key` possibles — ce test fige cette
+    différence, pour qu'un futur ajout d'options à ce champ ne passe pas
+    inaperçu.
+    """
+    champ = _services_yaml()["backup_full"]["fields"]["exclude"]
+
+    assert set(champ["selector"]) == {"object"}
+    assert ("backup_full", "exclude") not in _selecteurs_traduits()
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_chaque_option_de_selecteur_est_traduite_sans_orphelin(langue: str) -> None:
+    """`hassfest` exige la clé ; le frontend remplace le libellé par sa traduction.
+
+    Chaque option déclarée a un texte, et la section `selector` ne contient
+    ni sélecteur ni option que `services.yaml` ignorerait.
+    """
+    attendues: dict[str, set[str]] = {}
+    for select in _selecteurs_traduits().values():
+        attendues.setdefault(select["translation_key"], set()).update(_valeurs(select))
+
+    traduction = _traduction(langue)["selector"]
+    assert set(traduction) == set(attendues)
+    for cle, valeurs in attendues.items():
+        options = traduction[cle]["options"]
+        assert set(options) == valeurs, f"{langue}/{cle}"
+        assert all(texte.strip() for texte in options.values()), f"{langue}/{cle}"
+
+
+def test_les_options_de_dossiers_different_entre_les_langues() -> None:
+    """Le français n'est pas une copie de l'anglais."""
+    francais = _traduction("fr")["selector"]["folders"]["options"]
+    anglais = _traduction("en")["selector"]["folders"]["options"]
+
+    assert francais != anglais
+
+
+def test_les_langues_heritees_se_replient_sur_l_anglais_pour_les_selecteurs() -> None:
+    """Choix de #47 : les langues héritées ne reçoivent pas de section `selector`.
+
+    Home Assistant complète alors ces langues par l'anglais ; ajouter plus tard
+    une traduction reste possible, les clés orphelines étant contrôlées par
+    `test_les_langues_heritees_restent_valides`.
+    """
+    assert all("selector" not in _traduction(langue) for langue in LANGUES_HERITEES)
+
+
+@pytest.mark.parametrize(
+    ("action", "champ", "valeur"),
+    [
+        (action, champ, valeur)
+        for (action, champ), select in sorted(_selecteurs_traduits().items())
+        for valeur in _valeurs(select)
+    ],
+)
+def test_la_valeur_envoyee_a_l_action_ne_change_pas(
+    action: str, champ: str, valeur: str
+) -> None:
+    """Critère 2 de #47 : traduire le libellé ne touche pas la valeur transmise.
+
+    La valeur choisie traverse le sélecteur de Home Assistant puis le schéma
+    de l'action sans être altérée.
+    """
+    select = _selecteurs_traduits()[(action, champ)]
+    selecteur = selecteurs_ha.selector({"select": select})
+
+    assert selecteur([valeur]) == [valeur]
+    schema = {"backup": SCHEMA_BACKUP, "backup_partial": SCHEMA_BACKUP_PARTIAL}
+    assert schema[action]({champ: [valeur]})[champ] == [valeur]
+
+
+@pytest.mark.parametrize(
+    ("action", "champ", "valeur"),
+    [
+        (action, champ, valeur)
+        for (action, champ), select in sorted(_selecteurs_traduits().items())
+        for valeur in _valeurs(select)
+    ],
+)
+async def test_l_appel_de_service_reel_transmet_la_valeur_choisie(
+    hass: HomeAssistant,
+    entree_auto_backup: MockConfigEntry,
+    action: str,
+    champ: str,
+    valeur: str,
+) -> None:
+    """Critère 2 de #47, rejoué via un appel de service réel.
+
+    Complète `test_la_valeur_envoyee_a_l_action_ne_change_pas` : ici, c'est
+    `hass.services.async_call` — donc le handler et le schéma réellement
+    enregistrés par `async_setup_entry` — qui reçoit la valeur choisie dans le
+    sélecteur traduit. Seule `AutoBackup.async_create_backup` est simulée (la
+    « sauvegarde » factice) ; le remaniement réel de `__init__.py`, qui
+    transforme `include_folders`/`exclude_folders`/`folders` en `include`/
+    `exclude` juste avant de l'appeler, s'exécute donc pour de vrai.
+    """
+    gestionnaire = hass.data[const.DATA_AUTO_BACKUP]
+    creation = AsyncMock()
+    gestionnaire.async_create_backup = creation
+
+    await hass.services.async_call(
+        const.DOMAIN, action, {champ: [valeur]}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    creation.assert_awaited_once()
+    donnees = creation.await_args.args[0]
+    cle = const.ATTR_EXCLUDE if champ == "exclude_folders" else const.ATTR_INCLUDE
+    assert donnees[cle] == {
+        ATTR_FOLDERS: [valeur],
+        ATTR_ADDONS: [],
+    }
+
+
+def test_l_ecart_de_traduction_des_dossiers_est_consigne_dans_upstream_md() -> None:
+    """Critère 3 de #47 : l'écart (`translation_key`, section `selector`) est consigné.
+
+    `tests/test_conformite_upstream.py` vérifie déjà que `services.yaml` et les
+    deux traductions étendues figurent dans la section « Écarts volontaires » de
+    `docs/UPSTREAM.md` ; ce test cible le passage ajouté par #47 lui-même, et
+    vérifie qu'il nomme les trois champs de dossiers concernés, ainsi que le
+    champ `exclude` volontairement laissé de côté et sa raison.
+    """
+    texte = (RACINE_DEPOT / "docs" / "UPSTREAM.md").read_text(encoding="utf-8")
+
+    assert texte.count("#47") >= 2, "docs/UPSTREAM.md ne cite pas assez l'issue #47"
+    assert "translation_key: folders" in texte
+    for champ in ("include_folders", "exclude_folders", "folders"):
+        assert champ in texte, f"docs/UPSTREAM.md ne nomme pas le champ {champ}"
+    assert "`exclude`" in texte and "sélecteur `object`" in texte, (
+        "docs/UPSTREAM.md doit expliquer pourquoi `exclude` n'est pas concerné"
+    )
+
+
 ### Clés de traduction et langues héritées ###
 
 
@@ -667,6 +865,12 @@ def test_les_cles_de_traduction_sont_des_identifiants_valides(langue: str) -> No
         *traduction["exceptions"],
         *traduction["services"],
         *(cle for plateforme in traduction["entity"].values() for cle in plateforme),
+        *traduction["selector"],
+        *(
+            option
+            for selecteur in traduction["selector"].values()
+            for option in selecteur["options"]
+        ),
     ]
     invalides = [cle for cle in cles if not CLE_DE_TRADUCTION.match(cle)]
     assert not invalides
