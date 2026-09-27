@@ -147,6 +147,14 @@ caractère près.
   `translations/en.json`, qui couvre **toutes** les actions et tous leurs champs — `hassfest`
   exige un nom et une description pour chaque action traduite, et traduire le seul
   `upload_to` rendrait le formulaire bilingue.
+  L'issue #47 ajoute une ligne `translation_key: folders` au sélecteur `select` des trois
+  champs de dossiers upstream (`include_folders` et `exclude_folders` de `backup`, `folders`
+  de `backup_partial`), juste après `custom_value: true`. C'est un **ajout pur** : les options
+  upstream, avec leurs `label` anglais et leurs `value`, restent intactes. Le frontend remplace
+  le libellé d'une option par `selector.folders.options.<value>` quand cette traduction existe,
+  et garde sinon le `label` d'origine ; la valeur transmise à l'action (`config`, `share`,
+  `ssl`, `media`, `addons`) ne change donc pas. Le champ `exclude` de `backup_full` n'est pas
+  concerné : c'est un sélecteur `object`, sans options à traduire.
 - `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées par l'issue #6 —
   l'import de `preserve_fork_options()` et son appel dans `OptionsFlowHandler.async_step_init`.
   Le flux d'options upstream remplace l'intégralité des options par le contenu de son
@@ -193,6 +201,11 @@ caractère près.
   qui remplacent deux textes que `destinations/flow.py` écrivait en dur en français.
   `tests/test_traductions.py` vérifie que chaque clé référencée par le code existe dans les
   deux langues, qu'aucune n'est orpheline et que les placeholders concordent.
+  L'issue #47 y ajoute une section `selector`, insérée entre `services` et `issues` : les
+  libellés des options de dossiers (`selector.folders.options.config`, `share`, `ssl`, `media`,
+  `addons`), lus par le frontend grâce au `translation_key` ajouté dans `services.yaml`. Les
+  langues héritées (`cs`, `de`, `pt_PT`, `sk`, `ur`) ne reçoivent pas cette section : elles se
+  replient sur l'anglais, faute de traducteur pour ces langues.
   L'issue #45 y ajoute une section `exceptions`, insérée après `issues` : les titres et
   messages des notifications persistantes (`notification_echec_titre`,
   `notification_echec_message`, `notification_reauth_titre`, `notification_reauth_message`)
