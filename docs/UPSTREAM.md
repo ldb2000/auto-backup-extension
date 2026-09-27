@@ -141,9 +141,11 @@ caractère près.
   `backup`, `backup_full` et `backup_partial` (défini une fois avec l'ancre YAML `&upload_to`,
   référencé deux fois), à la fin de la liste des champs de chacun. Aucun champ upstream n'est
   touché. Son libellé et sa description restent **en anglais**, comme tout le reste du fichier
-  upstream : ce fichier est la source de vérité des libellés par défaut de l'interface, et les
-  traductions françaises vivent dans `translations/fr.json`, qui n'a pas encore de section
-  `services`. Traduire ce seul champ rendrait le formulaire bilingue pour tout le monde.
+  upstream : ce fichier donne les libellés par défaut de l'interface. Depuis l'issue #18, leurs
+  traductions vivent dans la section `services` de `translations/fr.json` et
+  `translations/en.json`, qui couvre **toutes** les actions et tous leurs champs — `hassfest`
+  exige un nom et une description pour chaque action traduite, et traduire le seul
+  `upload_to` rendrait le formulaire bilingue.
 - `custom_components/auto_backup/config_flow.py` : deux lignes ajoutées par l'issue #6 —
   l'import de `preserve_fork_options()` et son appel dans `OptionsFlowHandler.async_step_init`.
   Le flux d'options upstream remplace l'intégralité des options par le contenu de son
@@ -179,6 +181,14 @@ caractère près.
   upstream. Chacun de ces noms porte le marqueur `{destination}`, remplacé à l'exécution par
   le nom de la destination (`Entity.translation_placeholders`) : c'est ce qui distingue les
   entités de deux destinations partageant le même device.
+  L'issue #18 complète l'ensemble : une section `services` (toutes les actions de
+  `services.yaml` et leurs champs, `upload_to` compris), placée en tête du fichier ; les noms
+  des attributs du capteur de problème (`state_attributes`) ; une description
+  (`data_description`) pour chaque champ des étapes du fork ; les abandons
+  `options.abort.autorisation_refusee_sans_motif` et `options.abort.fournisseur_injoignable`,
+  qui remplacent deux textes que `destinations/flow.py` écrivait en dur en français.
+  `tests/test_traductions.py` vérifie que chaque clé référencée par le code existe dans les
+  deux langues, qu'aucune n'est orpheline et que les placeholders concordent.
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
