@@ -381,7 +381,7 @@
             },
             "parametres_destination": {
                 "title": "Modifier « {destination} »",
-                "description": "Fournisseur « {fournisseur} ». Modifiez le nom, le dossier distant ou la rétention de cette destination. Son autorisation, ses entités et la liste des sauvegardes qu'elle a déjà déposées sont conservées.\n\nChanger de dossier distant vous sera fait confirmer : les sauvegardes de l'ancien dossier ne seront plus ni listées, ni purgées par Auto Backup.",
+                "description": "Fournisseur « {fournisseur} ». Modifiez le nom, le dossier distant ou la rétention de cette destination. Son autorisation, ses entités et la liste des sauvegardes qu'elle a déjà déposées sont conservées.\n\nSi vous changez de dossier distant, une confirmation vous sera demandée : les sauvegardes de l'ancien dossier ne seront plus ni listées, ni purgées par Auto Backup.",
                 "data": {
                     "name": "Nom de la destination",
                     "folder": "Dossier distant",
