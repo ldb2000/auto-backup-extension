@@ -92,12 +92,13 @@ messages en français. Restent trois angles morts connus et acceptés :
   `_+` : un mot français à capitale initiale (« Anticonstitutionnellement »),
   cas théorique, ou un code d'erreur de fournisseur **absent** de
   `CODES_D_ERREUR_CONNUS`. Les codes de la liste, eux, restent lisibles depuis
-  #48 : une automatisation peut filtrer sur `expired_access_token` ou
-  `userRateLimitExceeded` dans le champ `error` de `auto_backup.upload_failed`.
-  La liste est exacte et fermée : un code nouveau d'un fournisseur reste masqué
-  jusqu'à ce qu'on l'y ajoute, source à l'appui. Cette réserve ne porte que sur
-  la cause d'un échec : les noms passent par `masquer_un_nom()`, hors de portée
-  de cette passe.
+  #48 dans le journal (`expired_access_token`, `userRateLimitExceeded`). Le
+  champ `error` de `auto_backup.upload_failed` ne les porte plus depuis #46 :
+  il est le message traduit du code stable du fork, `error_code`, sur lequel
+  une automatisation filtre. La liste est exacte et fermée : un code nouveau
+  d'un fournisseur reste masqué jusqu'à ce qu'on l'y ajoute, source à l'appui.
+  Cette réserve ne porte que sur la cause d'un échec : les noms passent par
+  `masquer_un_nom()`, hors de portée de cette passe.
 
 **Pourquoi la liste blanche ne rouvre aucune fuite.** Elle n'agit qu'en passe
 6, sur une suite que les passes précédentes n'ont pas déjà remplacée : la

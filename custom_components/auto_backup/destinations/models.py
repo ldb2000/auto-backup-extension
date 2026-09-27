@@ -24,7 +24,7 @@ from ..const import (
     CONF_RETENTION_DAYS,
     DEFAULT_DESTINATION_FOLDER,
 )
-from .errors import DestinationConfigError
+from .errors import CodeErreur, DestinationConfigError
 from .schema import (
     DESTINATION_SCHEMA,
     TOKEN_SCHEMA,
@@ -57,7 +57,9 @@ def _valide_dossier(nom_champ: str, valeur: Any) -> str:
     try:
         return chemin_de_dossier(valeur)
     except vol.Invalid as err:
-        raise DestinationConfigError(f"{nom_champ} invalide : {err}") from err
+        raise DestinationConfigError(
+            f"{nom_champ} invalide : {err}", code=CodeErreur.DOSSIER_INVALIDE
+        ) from err
 
 
 def _valide_retention(nom_champ: str, valeur: Any) -> int | None:

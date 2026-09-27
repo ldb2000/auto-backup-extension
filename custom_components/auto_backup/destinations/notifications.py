@@ -54,10 +54,6 @@ from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.helpers.translation import (
-    async_get_cached_translations,
-    async_get_translations,
-)
 
 from ..const import (
     ATTR_DESTINATION,
@@ -68,7 +64,6 @@ from ..const import (
     DATA_DESTINATIONS,
     DATA_NOTIFICATIONS,
     DEFAULT_NOTIFY_ON_FAILURE,
-    DOMAIN,
     EVENT_UPLOAD_FAILED,
     EVENT_UPLOAD_SUCCESSFUL,
     IDENTIFIANT_PROVISOIRE,
@@ -79,6 +74,12 @@ from .errors import UnknownProviderError
 from .masquage import masquer, masquer_un_nom
 from .models import DestinationConfig
 from .registry import provider_label
+from .traductions import (
+    async_charger_les_textes,
+    chemin_de_traduction,
+    textes_en_cache,
+)
+from .traductions import texte as _texte
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,9 +100,8 @@ def identifiant_de_notification_de_reauthentification(destination_id: str) -> st
 
 ### Textes ###
 
-# Catégorie de traduction des textes de notification : voir l'en-tête du module.
-CATEGORIE_DE_TRADUCTION = "exceptions"
-
+# Catégorie et mécanisme de traduction : `destinations/traductions.py`, partagé
+# avec les messages des échecs de destination (#46).
 CLE_TITRE_ECHEC = "notification_echec_titre"
 CLE_MESSAGE_ECHEC = "notification_echec_message"
 CLE_TITRE_REAUTH = "notification_reauth_titre"
@@ -121,43 +121,13 @@ CLES_DE_TRADUCTION = (
 
 def _chemin(cle: str) -> str:
     """Clé aplatie d'un texte dans le cache de traductions de Home Assistant."""
-    return f"component.{DOMAIN}.{CATEGORIE_DE_TRADUCTION}.{cle}.message"
-
-
-def _textes_complets(textes: dict[str, str]) -> bool:
-    """Indique si toutes les clés de notification sont présentes."""
-    return all(_chemin(cle) in textes for cle in CLES_DE_TRADUCTION)
+    return chemin_de_traduction(cle)
 
 
 @callback
 def _textes_en_cache(hass: HomeAssistant) -> dict[str, str] | None:
-    """Textes déjà chargés pour la langue courante, ou `None` s'ils manquent.
-
-    Home Assistant charge les traductions d'une intégration à son installation,
-    puis à chaque changement de langue : le cache suffit presque toujours, et
-    aucune notification ne relit les fichiers.
-    """
-    textes = async_get_cached_translations(
-        hass, hass.config.language, CATEGORIE_DE_TRADUCTION, DOMAIN
-    )
-    return textes if _textes_complets(textes) else None
-
-
-def _texte(textes: dict[str, str], cle: str, **placeholders: object) -> str:
-    """Texte traduit d'une clé, placeholders remplacés.
-
-    Un texte introuvable (fichier de traduction abîmé) affiche sa clé plutôt
-    que de faire échouer la notification.
-    """
-    modele = textes.get(_chemin(cle))
-    if modele is None:
-        _LOGGER.warning("Traduction « %s » introuvable", cle)
-        return cle
-    try:
-        return modele.format(**placeholders)
-    except KeyError, IndexError, ValueError:
-        _LOGGER.warning("Placeholders invalides dans la traduction « %s »", cle)
-        return modele
+    """Textes de notification déjà chargés pour la langue courante, ou `None`."""
+    return textes_en_cache(hass, CLES_DE_TRADUCTION)
 
 
 @callback
@@ -189,21 +159,8 @@ def _async_creer_la_notification(
         return
 
     async def charger_puis_creer() -> None:
-        try:
-            textes = await async_get_translations(
-                hass, hass.config.language, CATEGORIE_DE_TRADUCTION, {DOMAIN}
-            )
-        except Exception as err:  # la notification prime sur sa traduction
-            _LOGGER.warning(
-                "Chargement des traductions des notifications impossible (%s) : "
-                "repli sur l'anglais en cache",
-                type(err).__name__,
-            )
-            textes = async_get_cached_translations(
-                hass, "en", CATEGORIE_DE_TRADUCTION, DOMAIN
-            )
-            if not _textes_complets(textes):
-                textes = {}
+        # Repli anglais puis clés en cas d'échec : `traductions.py`.
+        textes = await async_charger_les_textes(hass, CLES_DE_TRADUCTION)
         if not toujours_d_actualite():
             _LOGGER.debug(
                 "Notification « %s » abandonnée : la panne a été résolue pendant "

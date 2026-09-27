@@ -61,6 +61,7 @@ from ...const import DEFAULT_UPLOAD_TIMEOUT
 from ..config_entry import async_entree_auto_backup, delai_de_televersement
 from ..destination import RemoteDestination
 from ..errors import (
+    CodeErreur,
     DestinationAuthError,
     DestinationError,
     DestinationNotFoundError,
@@ -193,6 +194,13 @@ TYPE_JSON = "application/json"
 MOTIF_ESPACE = "insufficient_space"
 MOTIF_CONFLIT = "conflict"
 MOTIF_CONFLIT_DOSSIER = "conflict/folder"
+# Motifs qui ne servent qu'à choisir le code stable de l'erreur (#46), d'après la
+# spécification Dropbox API v2 : `auth.AuthError.missing_scope`, et les
+# `files.WriteError` d'un chemin que Dropbox refuse (`malformed_path`,
+# `disallowed_name`) — le nom du fichier étant assaini par le fork, c'est le
+# dossier cible qui est en cause.
+MOTIF_PORTEE_MANQUANTE = "missing_scope"
+MOTIFS_DE_CHEMIN_INVALIDE = ("malformed_path", "disallowed_name")
 
 # Nommage du fichier déposé : « <nom de la sauvegarde> [<slug>].tar ».
 SUFFIXE_ARCHIVE = ".tar"
@@ -774,11 +782,13 @@ class DropboxDestination(RemoteDestination):
         except TimeoutError as err:
             raise DestinationError(
                 f"Dropbox n'a pas répondu dans le temps imparti pour la "
-                f"destination « {self.name} »"
+                f"destination « {self.name} »",
+                code=CodeErreur.DELAI_DEPASSE,
             ) from err
         except ClientError as err:
             raise DestinationError(
-                f"Dropbox est injoignable pour la destination « {self.name} » : {err}"
+                f"Dropbox est injoignable pour la destination « {self.name} » : {err}",
+                code=CodeErreur.RESEAU_INJOIGNABLE,
             ) from err
 
     def _charge_de_la_reponse(
@@ -824,7 +834,11 @@ class DropboxDestination(RemoteDestination):
         async_signaler_la_reauthentification(self._hass, self._config)
         return DestinationAuthError(
             f"Dropbox refuse l'accès de la destination « {self.name} » "
-            f"(HTTP {statut}) : {resume}"
+            f"(HTTP {statut}) : {resume}",
+            # L'`error_summary` ouvre le résumé : la troncature ne le cache pas.
+            code=CodeErreur.PORTEE_MANQUANTE
+            if MOTIF_PORTEE_MANQUANTE in resume.lower()
+            else None,
         )
 
     def _verifier_le_statut(self, statut: int, corps: str) -> None:
@@ -838,11 +852,13 @@ class DropboxDestination(RemoteDestination):
         if statut == 429:
             raise DestinationError(
                 f"Dropbox limite temporairement les appels de la destination "
-                f"« {self.name} » (HTTP 429) : {resume}"
+                f"« {self.name} » (HTTP 429) : {resume}",
+                code=CodeErreur.LIMITATION_DE_DEBIT,
             )
         raise DestinationError(
             f"Dropbox a refusé la requête de la destination « {self.name} » "
-            f"(HTTP {statut}) : {resume}"
+            f"(HTTP {statut}) : {resume}",
+            code=CodeErreur.FOURNISSEUR_EN_PANNE if 500 <= statut < 600 else None,
         )
 
     ### Dépôt d'une sauvegarde : issue #11 ###
@@ -1268,6 +1284,14 @@ class DropboxDestination(RemoteDestination):
                 f"est saturé : libérez de la place ou réduisez la rétention "
                 f"({resume})"
             )
+        if any(
+            chemin_invalide in motif for chemin_invalide in MOTIFS_DE_CHEMIN_INVALIDE
+        ):
+            return DestinationError(
+                f"Dropbox refuse le chemin « {chemin} » de la destination "
+                f"« {self.name} » ({resume})",
+                code=CodeErreur.DOSSIER_INVALIDE,
+            )
         if MOTIF_CONFLIT in motif:
             return DestinationError(
                 f"un fichier nommé « {chemin} » existe déjà chez Dropbox pour la "
@@ -1280,13 +1304,15 @@ class DropboxDestination(RemoteDestination):
             return DestinationError(
                 f"Dropbox limite les appels de la destination « {self.name} » et "
                 f"les a refusés après {TENTATIVES_MAX} tentatives : le dépôt de "
-                f"« {chemin} » repartira à la prochaine sauvegarde ({resume})"
+                f"« {chemin} » repartira à la prochaine sauvegarde ({resume})",
+                code=CodeErreur.LIMITATION_DE_DEBIT,
             )
         if 500 <= reponse.statut < 600:
             return DestinationError(
                 f"Dropbox est en panne passagère (HTTP {reponse.statut}) et n'a "
                 f"pas accepté « {chemin} » pour la destination « {self.name} » "
-                f"après {TENTATIVES_MAX} tentatives : {resume}"
+                f"après {TENTATIVES_MAX} tentatives : {resume}",
+                code=CodeErreur.FOURNISSEUR_EN_PANNE,
             )
         return DestinationError(
             f"Dropbox a refusé le dépôt de « {chemin} » pour la destination "
@@ -1367,7 +1393,8 @@ class DropboxDestination(RemoteDestination):
         except TimeoutError as err:
             raise DestinationError(
                 f"le listage des sauvegardes de la destination « {self.name} » "
-                f"n'a pas abouti dans le temps imparti ({DELAI_LISTAGE} s)"
+                f"n'a pas abouti dans le temps imparti ({DELAI_LISTAGE} s)",
+                code=CodeErreur.DELAI_DEPASSE,
             ) from err
 
         _LOGGER.debug(
@@ -1548,13 +1575,15 @@ class DropboxDestination(RemoteDestination):
         if reponse.statut == 429:
             return DestinationError(
                 f"Dropbox limite les appels de la destination « {self.name} » et a "
-                f"refusé {action} après {TENTATIVES_MAX} tentatives : {resume}"
+                f"refusé {action} après {TENTATIVES_MAX} tentatives : {resume}",
+                code=CodeErreur.LIMITATION_DE_DEBIT,
             )
         if 500 <= reponse.statut < 600:
             return DestinationError(
                 f"Dropbox est en panne passagère (HTTP {reponse.statut}) et a "
                 f"refusé {action} pour la destination « {self.name} » après "
-                f"{TENTATIVES_MAX} tentatives : {resume}"
+                f"{TENTATIVES_MAX} tentatives : {resume}",
+                code=CodeErreur.FOURNISSEUR_EN_PANNE,
             )
         return DestinationError(
             f"Dropbox a refusé {action} pour la destination « {self.name} » "

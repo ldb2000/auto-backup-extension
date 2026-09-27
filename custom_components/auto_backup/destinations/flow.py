@@ -29,10 +29,11 @@ provisoire, construite par `create_destination()` : un fournisseur qui mémorise
 la réponse du service n'a donc qu'un aller-retour réseau à faire pour les deux.
 
 Leur échec **interrompt** l'ajout (abandon `echec_fournisseur`, le détail
-citant la cause : API non activée, portée manquante, compte injoignable). Une
-destination que le fournisseur refuse déjà d'identifier ne fonctionnerait pas
-davantage une fois créée : mieux vaut le dire tout de suite que laisser
-l'utilisateur découvrir la panne à la première sauvegarde.
+citant la cause traduite d'après son code, #46 : API non activée, portée
+manquante, accès révoqué). Une destination que le fournisseur refuse déjà
+d'identifier ne fonctionnerait pas davantage une fois créée : mieux vaut le
+dire tout de suite que laisser l'utilisateur découvrir la panne à la première
+sauvegarde.
 
 L'étape externe est celle de Home Assistant (`async_external_step`) ; c'est la
 vue du fork (`destinations/oauth.py`) qui reprend le flux, la vue standard ne
@@ -108,6 +109,7 @@ from .oauth import (
 from .reauth import async_effacer_la_reauthentification
 from .registry import create_destination, list_providers, provider_label
 from .schema import chemin_de_dossier
+from .traductions import async_message_d_erreur
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -621,9 +623,12 @@ class GestionDesDestinationsMixin:
             )
             return self.async_abort(
                 reason="echec_fournisseur",
-                # Le détail est affiché à l'utilisateur : texte de fournisseur,
-                # donc masqué comme toute cause d'échec affichée (#17, #35).
-                description_placeholders={"detail": masquer(str(err))},
+                # Le détail affiché est le message traduit du code de l'erreur
+                # (#46), dans la langue de l'instance : le texte du fournisseur,
+                # lui, ne va qu'au journal, masqué (#17, #35).
+                description_placeholders={
+                    "detail": await async_message_d_erreur(self.hass, err.code)
+                },
             )
 
         if self._destination_id is not None:
