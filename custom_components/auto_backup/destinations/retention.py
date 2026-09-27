@@ -90,6 +90,7 @@ from ..const import (
 )
 from .destination import RemoteDestination
 from .errors import DestinationError, DestinationNotFoundError
+from .masquage import journaliser_une_exception, masquer
 from .models import RemoteBackup
 
 _LOGGER = logging.getLogger(__name__)
@@ -531,10 +532,12 @@ class CoordinateurPurgeDistante:
             _LOGGER.error(
                 "Purge distante de « %s » abandonnée : listage impossible (%s)",
                 destination.name,
-                err,
+                masquer(str(err)),
             )
-        except Exception:  # l'échec d'une destination n'en bloque aucune autre
-            _LOGGER.exception(
+        except Exception as err:  # l'échec d'une destination n'en bloque aucune autre
+            journaliser_une_exception(
+                _LOGGER,
+                err,
                 "Purge distante de « %s » abandonnée : erreur inattendue au listage",
                 destination.name,
             )
@@ -650,10 +653,12 @@ class CoordinateurPurgeDistante:
                     "impossible : %s",
                     candidat.remote_id,
                     destination.name,
-                    err,
+                    masquer(str(err)),
                 )
-            except Exception:  # un échec isolé ne doit pas arrêter la purge
-                _LOGGER.exception(
+            except Exception as err:  # un échec isolé ne doit pas arrêter la purge
+                journaliser_une_exception(
+                    _LOGGER,
+                    err,
                     "Erreur inattendue à la suppression de la sauvegarde distante "
                     "« %s » sur « %s »",
                     candidat.remote_id,

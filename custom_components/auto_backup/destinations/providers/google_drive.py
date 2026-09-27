@@ -69,6 +69,7 @@ from ..errors import (
     DestinationNotFoundError,
     DestinationQuotaError,
 )
+from ..masquage import masquer
 from ..models import DestinationConfig, RemoteBackup
 from ..oauth import (
     DestinationOAuth2Session,
@@ -293,7 +294,7 @@ async def async_appel_drive(
             methode.upper(),
             url,
             statut,
-            ", ".join(sorted(raisons_de_l_erreur(charge))) or "sans motif",
+            masquer(", ".join(sorted(raisons_de_l_erreur(charge))) or "sans motif"),
         )
         raise erreur
     return charge
@@ -384,7 +385,7 @@ class GoogleDriveDestination(RemoteDestination):
                 "Identifiant du dossier cible non persisté pour la destination "
                 "« %s » : %s",
                 self.destination_id,
-                err,
+                masquer(str(err)),
             )
 
     ### Crochets du flux d'ajout ###

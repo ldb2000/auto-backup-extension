@@ -97,6 +97,7 @@ from ..handlers import BackupHandler, HandlerBase, SupervisorHandler
 from .config_entry import delai_de_televersement
 from .destination import RemoteDestination
 from .errors import DestinationError
+from .masquage import journaliser_une_exception, masquer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -164,7 +165,11 @@ def _taille_annoncee(reponse: aiohttp.ClientResponse) -> int | None:
     try:
         taille = int(brut)
     except (TypeError, ValueError) as err:
-        _LOGGER.debug("En-tête Content-Length inexploitable (%r) : %s", brut, err)
+        _LOGGER.debug(
+            "En-tête Content-Length inexploitable (%s) : %s",
+            masquer(repr(brut)),
+            masquer(str(err)),
+        )
         return None
     return taille if taille >= 0 else None
 
@@ -460,7 +465,7 @@ class CoordinateurTeleversement:
             "échoué (%s)",
             demande.identifiant,
             demande.nom,
-            event.data.get(ATTR_ERROR) or "cause inconnue",
+            masquer(str(event.data.get(ATTR_ERROR) or "cause inconnue")),
         )
 
     @callback
@@ -589,7 +594,11 @@ class CoordinateurTeleversement:
                 destination_id, destination.name, nom, slug, str(err) or repr(err)
             )
         except Exception as err:  # l'échec d'une destination n'en bloque aucune autre
-            _LOGGER.exception(
+            # Pas de `_LOGGER.exception()` : sa trace recopierait le message brut
+            # de l'erreur, qui peut porter l'URI de session Drive (cf. masquage).
+            journaliser_une_exception(
+                _LOGGER,
+                err,
                 "Erreur inattendue pendant le téléversement de « %s » vers « %s »",
                 nom,
                 destination.name,
@@ -669,13 +678,17 @@ class CoordinateurTeleversement:
         slug: str,
         message: str,
     ) -> None:
-        """Journalise l'échec d'un téléversement et émet l'événement dédié."""
+        """Journalise l'échec d'un téléversement et émet l'événement dédié.
+
+        `message` est la cause relayée d'un fournisseur ou d'une exception : le
+        journal n'en reçoit que la version masquée (#35).
+        """
         _LOGGER.error(
             "Échec du téléversement de la sauvegarde « %s » (%s) vers « %s » : %s",
             nom,
             slug,
             destination_nom,
-            message,
+            masquer(message),
         )
         self._hass.bus.async_fire(
             EVENT_UPLOAD_FAILED,

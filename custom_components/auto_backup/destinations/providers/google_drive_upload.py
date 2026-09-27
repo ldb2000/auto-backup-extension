@@ -75,6 +75,7 @@ from homeassistant.util import dt as dt_util
 from multidict import CIMultiDict
 
 from ..errors import DestinationError, DestinationNotFoundError
+from ..masquage import masquer
 from ..models import RemoteBackup
 from ..oauth import DestinationOAuth2Session
 from ..retention import marqueur_auto_backup
@@ -281,7 +282,11 @@ def _retry_after(entetes: Mapping[str, str] | None) -> float | None:
         # obligatoires pour rester chargeable en Python 3.12, et le `as err`
         # les maintient en place face à `ruff format` (cf. `docs/UPSTREAM.md`
         # et `tests/test_compatibilite_python.py`).
-        _LOGGER.debug("En-tête Retry-After inexploitable (%r) : %s", brut, err)
+        _LOGGER.debug(
+            "En-tête Retry-After inexploitable (%s) : %s",
+            masquer(repr(brut)),
+            masquer(str(err)),
+        )
         return None
     return secondes if secondes >= 0 else None
 
@@ -363,7 +368,9 @@ async def async_appel_drive_json(
             "Échec Drive pour %s : HTTP %s (%s)",
             etiquette,
             reponse.statut,
-            ", ".join(sorted(raisons_de_l_erreur(reponse.charge))) or "sans motif",
+            masquer(
+                ", ".join(sorted(raisons_de_l_erreur(reponse.charge))) or "sans motif"
+            ),
         )
         raise erreur_de_la_reponse(reponse.statut, reponse.charge)
 
@@ -860,7 +867,11 @@ class TeleversementDrive:
                 tentative += 1
                 if tentative >= TENTATIVES_MAX:
                     raise
-                _LOGGER.debug("Reprise de l'envoi après un échec réseau : %s", err)
+                # Le message d'une erreur réseau peut citer l'URI de session,
+                # qui porte l'`upload_id` : il n'est journalisé que masqué.
+                _LOGGER.debug(
+                    "Reprise de l'envoi après un échec réseau : %s", masquer(str(err))
+                )
                 await async_attendre_avant_reprise(delai_avant_reprise(tentative))
                 position = await self._async_reprise(url_session, total, debut, fin)
                 continue

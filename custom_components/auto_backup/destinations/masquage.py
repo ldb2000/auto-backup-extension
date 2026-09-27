@@ -33,6 +33,19 @@ Les passes vont de la plus précise à la plus générale :
 Vient enfin la **troncature** facultative (`longueur_max`), pour un affichage
 qui ne peut pas accueillir une trace de pile complète.
 
+**Le journal passe aussi par ici (#35).** Tout appel de journalisation du fork
+qui relaie un texte non maîtrisé — message d'une exception, motif d'erreur d'un
+fournisseur, valeur d'en-tête reçue — l'enveloppe dans `masquer()`. Une erreur
+**inattendue** ne se journalise pas par `_LOGGER.exception()` : la trace
+standard recopie le message brut de chaque exception de la chaîne, or celui
+d'une erreur `aiohttp` porte l'URL de la requête — pour un envoi reprenable
+Google Drive, l'URI de session et son `upload_id`, qui suffit à écrire dans le
+compte. `journaliser_une_exception()` journalise à la place le type et le
+message **masqués** en `error`, puis, en `debug` seulement, une trace dont les
+cadres sont intacts (fichier, ligne, fonction, ligne de code : rien d'autre que
+l'emplacement du code) et dont chaque message d'exception est masqué. Le
+diagnostic reste possible, le secret ne passe à aucun niveau.
+
 **Un nom de la configuration du fork n'est pas un texte de fournisseur.** Les
 passes 1 à 5 reconnaissent un secret à sa forme ; la passe 6 ne reconnaît qu'une
 suite longue sans espace, et dévore donc les noms parfaitement ordinaires que
@@ -84,7 +97,9 @@ messages en français. Restent trois angles morts connus et acceptés :
 
 from __future__ import annotations
 
+import logging
 import re
+import traceback
 
 from .models import VALEUR_MASQUEE
 
@@ -272,6 +287,84 @@ def masquer_un_nom(texte: str, *, longueur_max: int | None = None) -> str:
     ne pouvait plus dire quelle destination avait lâché quand il en a deux.
     """
     return masquer(texte, longueur_max=longueur_max, dernier_filet=False)
+
+
+def decrire_l_exception(erreur: BaseException) -> str:
+    """« Type: message » d'une exception, son message passé par `masquer()`.
+
+    Le nom de la classe est du code, pas un texte de fournisseur : il reste
+    lisible. Une exception sans message (`TimeoutError()`) se réduit à son type.
+    """
+    nom = type(erreur).__qualname__
+    try:
+        message = str(erreur)
+    except Exception:  # un `__str__` défaillant ne doit rien casser
+        return f"{nom}: <message illisible>"
+    return f"{nom}: {masquer(message)}" if message else nom
+
+
+# Liens entre deux exceptions d'une même chaîne, repris de la trace standard pour
+# qu'un développeur y retrouve ses repères.
+_LIEN_CAUSE = "The above exception was the direct cause of the following exception:"
+_LIEN_CONTEXTE = "During handling of the above exception, another exception occurred:"
+
+
+def trace_masquee(erreur: BaseException) -> str:
+    """Trace de pile d'une exception, chaque message d'exception masqué.
+
+    Même forme que la trace standard (`traceback.format_exception`), chaîne
+    `__cause__` / `__context__` comprise, du plus ancien au plus récent. Les
+    cadres sont repris tels quels : fichier, numéro de ligne, fonction et ligne
+    de code source ne sont que l'emplacement du code, jamais une donnée reçue —
+    les variables locales ne sont pas capturées. Seuls les messages des
+    exceptions, et leurs notes, portent un texte non maîtrisé : ils passent par
+    `masquer()`.
+    """
+    chaine: list[tuple[BaseException, str | None]] = []
+    vues: set[int] = set()
+    courante: BaseException | None = erreur
+    lien: str | None = None
+    while courante is not None and id(courante) not in vues:
+        vues.add(id(courante))
+        chaine.append((courante, lien))
+        if courante.__cause__ is not None:
+            courante, lien = courante.__cause__, _LIEN_CAUSE
+        elif courante.__context__ is not None and not courante.__suppress_context__:
+            courante, lien = courante.__context__, _LIEN_CONTEXTE
+        else:
+            courante = None
+
+    lignes: list[str] = []
+    for exception, lien_vers_la_suivante in reversed(chaine):
+        if exception.__traceback__ is not None:
+            lignes.append("Traceback (most recent call last):\n")
+            lignes.extend(traceback.format_tb(exception.__traceback__))
+        lignes.append(decrire_l_exception(exception) + "\n")
+        notes = getattr(exception, "__notes__", None)
+        if isinstance(notes, list | tuple):
+            lignes.extend(f"{masquer(str(note))}\n" for note in notes)
+        if lien_vers_la_suivante is not None:
+            lignes.append(f"\n{lien_vers_la_suivante}\n\n")
+    return "".join(lignes).rstrip("\n")
+
+
+def journaliser_une_exception(
+    journal: logging.Logger, erreur: BaseException, message: str, *arguments: object
+) -> None:
+    """Journalise une erreur inattendue sans jamais relayer son texte brut.
+
+    Remplace `journal.exception(message, *arguments)`, dont la trace recopie
+    le message brut de chaque exception de la chaîne. Le message du fork est
+    journalisé en `error`, suivi du type et du message **masqués** de l'erreur ;
+    la trace, masquée elle aussi, n'est produite qu'en `debug` : elle sert au
+    développeur, pas à l'utilisateur qui consulte son journal.
+    """
+    journal.error(f"{message} : %s", *arguments, decrire_l_exception(erreur))
+    if journal.isEnabledFor(logging.DEBUG):
+        journal.debug(
+            "Trace de l'erreur ci-dessus, messages masqués :\n%s",
+            trace_masquee(erreur),
+        )
 
 
 def _est_un_mot_ordinaire(valeur: str) -> bool:
