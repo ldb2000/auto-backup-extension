@@ -50,6 +50,7 @@ from custom_components.auto_backup.destinations import (
     async_enregistrer_la_vue_de_retour,
     async_entree_auto_backup,
     async_persist_token,
+    async_signaler_la_reauthentification,
     identifiant_du_probleme,
     jeton_persiste,
     jeton_valide,
@@ -458,9 +459,37 @@ async def test_un_acces_revoque_demande_une_reautorisation(
     )
     assert probleme is not None
     assert probleme.translation_key == "reauthentification_requise"
+    # Le fournisseur factice ne déclare pas de `LABEL` : son libellé est donc
+    # son identifiant (`provider_label`). Un vrai fournisseur affiche le sien.
     assert probleme.translation_placeholders == {
         "nom": "Destination OAuth",
         "fournisseur": PROVIDER_OAUTH_FACTICE,
+    }
+
+
+async def test_le_probleme_d_un_fournisseur_inconnu_affiche_son_identifiant(
+    hass: HomeAssistant,
+) -> None:
+    """Un fournisseur absent du registre n'empêche pas le signalement (#18).
+
+    Le placeholder `{fournisseur}` reçoit le libellé du fournisseur ; à défaut
+    de fournisseur enregistré, l'identifiant technique, sans lever d'exception.
+    """
+    config = DestinationConfig(
+        destination_id="destination_orpheline",
+        provider="fournisseur_retire",
+        name="Destination orpheline",
+    )
+
+    async_signaler_la_reauthentification(hass, config)
+
+    probleme = ir.async_get(hass).async_get_issue(
+        DOMAIN, identifiant_du_probleme("destination_orpheline")
+    )
+    assert probleme is not None
+    assert probleme.translation_placeholders == {
+        "nom": "Destination orpheline",
+        "fournisseur": "fournisseur_retire",
     }
 
 
