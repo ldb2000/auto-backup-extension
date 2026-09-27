@@ -143,7 +143,8 @@ destinations continuent de fonctionner. La façon de la remettre en service dép
 | Cause | Que faire |
 | --- | --- |
 | Vous avez révoqué l'accès depuis [les applications connectées de votre compte Dropbox](https://www.dropbox.com/account/connected_apps) | **Configurer → Ré-autoriser une destination** : l'application et son secret sont inchangés, seule l'autorisation est à renouveler. |
-| Vous avez **supprimé l'application** dans la console développeur, ou **régénéré son secret** | La ré-autorisation réutilise la clé et le secret enregistrés : elle échouerait. **Supprimez la destination, puis ajoutez-la de nouveau** avec la clé et le secret de l'application (nouvelle ou actuelle), en reprenant **le même dossier distant** : les sauvegardes déjà déposées restent reconnues à leur nom et soumises à la rétention. |
+| Vous avez **régénéré le secret** de l'application (même application) | La ré-autorisation réutilise la clé et le secret enregistrés : elle échouerait. **Supprimez la destination, puis ajoutez-la de nouveau** avec la même clé et le nouveau secret, en reprenant **le même dossier distant** : les sauvegardes déjà déposées restent reconnues à leur nom et soumises à la rétention. |
+| Vous avez **supprimé ou recréé l'application** dans la console développeur | **Supprimez la destination, puis ajoutez-la de nouveau** avec la clé et le secret de la nouvelle application. En « App folder », celle-ci travaille dans un **nouveau dossier** `Applications/<nom de la nouvelle app>` et ne voit pas celui de l'ancienne : les sauvegardes déposées par l'ancienne application ne sont plus ni listées ni purgées. Retirez-les à la main depuis Dropbox. |
 
 ## Téléverser une sauvegarde
 

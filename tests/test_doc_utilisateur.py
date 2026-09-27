@@ -624,3 +624,29 @@ def test_le_guide_google_drive_nomme_les_champs_du_formulaire() -> None:
     for libelle in ("Identifiant client", "Secret client"):
         assert f'"{libelle}"' in traductions
         assert f"**{libelle}**" in texte
+
+
+def test_dropbox_distingue_secret_regenere_et_application_recreee() -> None:
+    """En « App folder », une nouvelle application ne voit pas le dossier de l'ancienne.
+
+    Seul le secret régénéré (même application) garde les sauvegardes déposées
+    reconnues ; une application supprimée ou recréée doit être annoncée comme
+    perdant de vue les anciennes sauvegardes, à retirer à la main.
+    """
+    for page in (GUIDES[0], DOC_FAQ):
+        blocs = [b.casefold() for b in _blocs_de_texte(page)]
+        recreee = [b for b in blocs if "recréé" in b and "dropbox" in page.name + b]
+        assert recreee, f"{page.name} : cas de l'application recréée absent"
+        for bloc in recreee:
+            assert "restent reconnues" not in bloc, bloc
+            assert "ni listées ni purgées" in bloc, bloc
+            assert "applications/" in bloc, bloc
+
+    regenere = [
+        b.casefold()
+        for b in _blocs_de_texte(GUIDES[0])
+        if "régénéré le secret" in b.casefold()
+    ]
+    assert len(regenere) == 1
+    assert "restent reconnues" in regenere[0]
+    assert "recréé" not in regenere[0]

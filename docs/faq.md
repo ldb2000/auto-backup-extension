@@ -165,9 +165,17 @@ persistante disparaissent d'eux-mêmes.
 La ré-autorisation réutilise l'identifiant et le secret d'application déjà enregistrés. Si vous
 les avez changés chez le fournisseur (secret régénéré, application recréée), elle échouera :
 **supprimez la destination, puis ajoutez-la de nouveau** avec les nouveaux identifiants, en
-reprenant le même dossier distant. Chez Google Drive, une application créée dans un **autre
-projet** Google Cloud ne voit pas les fichiers déposés par l'ancienne (portée `drive.file`) :
-les anciennes sauvegardes ne seront plus purgées, retirez-les à la main.
+reprenant le même dossier distant. Ce qui arrive aux sauvegardes déjà déposées dépend du cas :
+
+- **secret régénéré, même application** : une fois la destination supprimée puis ajoutée de
+  nouveau, elles restent reconnues et soumises à la rétention ;
+- **Dropbox, application supprimée ou recréée** : en accès « App folder », la nouvelle
+  application travaille dans son propre dossier `Applications/<nom de la nouvelle app>` et ne
+  voit pas celui de l'ancienne ; les anciennes sauvegardes ne sont plus ni listées ni purgées,
+  retirez-les à la main depuis Dropbox ;
+- **Google Drive, application créée dans un autre projet** Google Cloud : elle ne voit pas les
+  fichiers déposés par l'ancienne (portée `drive.file`) ; les anciennes sauvegardes ne sont plus
+  ni listées ni purgées, retirez-les à la main.
 
 ### Pourquoi l'accès a-t-il été perdu ?
 
