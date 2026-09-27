@@ -1348,8 +1348,9 @@ class DropboxDestination(RemoteDestination):
                     if pages >= PAGES_MAX:
                         _LOGGER.warning(
                             "Listage Dropbox de « %s » tronqué après %d pages : le "
-                            "dossier contient plus de %d entrées, les sauvegardes "
-                            "non vues seront traitées à la prochaine purge",
+                            "dossier contient plus de %d entrées, certaines "
+                            "sauvegardes peuvent ne pas être traitées tant qu'il "
+                            "dépasse cette limite",
                             self.name,
                             pages,
                             pages * LIMITE_PAR_PAGE,

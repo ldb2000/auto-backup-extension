@@ -734,7 +734,7 @@ bornes y répondent :
 | --- | --- | --- |
 | Délai d'une requête | `DELAI_APPEL`, 30 s | Un appel JSON qui ne rend jamais la main. C'est le délai d'un appel d'API, **pas** le budget de téléversement : le listage n'échange que quelques kilo-octets, il n'a pas à hériter d'une demi-heure. |
 | Délai du listage entier | `DELAI_LISTAGE`, 240 s | Que la pagination, légitime page par page, dépasse à elle seule le filet du coordinateur — qui couperait alors à la place du fournisseur. La borne reste en deçà des 300 s, avec de la marge pour les nouvelles tentatives d'une page refusée. |
-| Nombre de pages | `PAGES_MAX` × `LIMITE_PAR_PAGE`, 20 × 1000 | Un curseur qui ne se termine pas. Le dépassement **tronque** le listage avec un avertissement : tronquer ne fait jamais supprimer autre chose, les sauvegardes non vues étant conservées une purge de plus. |
+| Nombre de pages | `PAGES_MAX` × `LIMITE_PAR_PAGE`, 20 × 1000 | Un curseur qui ne se termine pas. Le dépassement **tronque** le listage avec un avertissement : tronquer ne fait jamais supprimer autre chose. Cependant, Dropbox ne garantit pas l'ordre du listage d'un appel à l'autre, si bien que certaines sauvegardes au-delà de la limite peuvent rester hors d'atteinte tant que le dossier dépasse le seuil — recommandation : faire du ménage si le message revient. |
 
 Un curseur invalidé par Dropbox (`reset`) est traité comme une erreur de listage : la purge
 abandonne cette destination et la reprendra entière à la prochaine. Reprendre le parcours à

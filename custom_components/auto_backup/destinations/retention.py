@@ -16,15 +16,19 @@ Deux garanties structurent tout le module :
    fichier que l'utilisateur y a déposé lui-même, une sauvegarde d'un autre
    outil — est invisible pour la purge, quelles que soient sa date et sa taille.
 
-   Les deux voies se complètent : le registre survit à un dossier partagé par
-   plusieurs instances Home Assistant, le marqueur survit à la perte du
-   registre. Le marqueur n'est cependant une preuve **portée par le fichier**
-   que chez un fournisseur capable de la stocker : Google Drive l'attache en
-   `appProperties` (#14), alors que l'API Dropbox v2 n'offre aucune métadonnée
-   libre sur un fichier. Le fournisseur Dropbox reconstitue donc la provenance
-   au listage (#12), depuis ce registre puis depuis sa convention de nommage, et
-   ne pose le marqueur que sur ce qu'il a ainsi reconnu : `entrees_du_registre()`
-   est le point d'entrée prévu pour cela.
+   Les deux voies se complètent : le marqueur survit à la perte du registre
+   (réinstallation, `.storage` effacé), et le registre permet au fournisseur de
+   reconnaître sa propre provenance au listage. **Le registre est local à chaque
+   instance Home Assistant.** Si plusieurs instances partagent un dossier distant,
+   chacune ne connaît que ses propres téléversements au registre, si bien que
+   l'une peut **compter et purger les sauvegardes de l'autre** : la seconde
+   voie, reconnaissance par le nom chez Dropbox ou marqueur chez Google Drive,
+   ne distingue pas les instances. **Recommandation : un dossier distant par
+   instance** (le listage n'étant pas récursif, un sous-dossier distinct
+   suffit). Le fournisseur Dropbox reconstitue la provenance au listage (#12),
+   depuis ce registre puis depuis sa convention de nommage, et ne pose le
+   marqueur que sur ce qu'il a ainsi
+   reconnu : `entrees_du_registre()` est le point d'entrée prévu pour cela.
 
 2. **Un échec ne fait jamais dérailler le cycle.** Une destination en attente de
    ré-autorisation est sautée sans appel réseau (cf. `docs/adr/0001`), un listage

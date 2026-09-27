@@ -250,6 +250,13 @@ Assistant, un stockage interne effacé, ou un dépôt qui a abouti chez Dropbox 
 rapporté en échec (voir « Limites connues »). Sans elle, ces fichiers resteraient chez vous
 indéfiniment, sans que rien ne puisse plus les rattacher à Auto Backup.
 
+> **Important : un dossier par instance** — Le registre de purge est local à chaque instance Home
+> Assistant. Si plusieurs instances partagent le même dossier distant, le registre d'une instance
+> ne connaît pas les sauvegardes déposées par l'autre, et les **deux** instances peuvent compter et
+> purger les sauvegardes de l'autre : la reconnaissance par le nom ne distingue pas les instances.
+> **Utilisez un dossier distinct pour chaque instance Home Assistant** ; le listage n'étant pas
+> récursif, un sous-dossier par instance dans le même dossier Dropbox suffit.
+
 ### Ce qui n'est jamais touché
 
 Tout le reste du dossier : vos propres fichiers, les sauvegardes d'un autre outil, les
@@ -286,7 +293,7 @@ pas une erreur : elle est simplement rayée du registre.
 | « délai de téléversement dépassé » | La sauvegarde n'a pas fini de partir dans le temps imparti. Augmentez-le dans **Configurer → Réglages du téléversement**. |
 | « la sauvegarde distante … n'existe plus chez Dropbox » | Le fichier avait déjà disparu au moment de le supprimer. Ce n'est pas une erreur : la purge le compte comme supprimé et continue. |
 | « le listage des sauvegardes … n'a pas abouti dans le temps imparti » | Dropbox tarde à répondre, ou le dossier contient énormément de fichiers. La purge reprendra à la prochaine sauvegarde ; rien n'est supprimé entre-temps. |
-| « Listage Dropbox … tronqué après 20 pages » | Le dossier contient plus de 20 000 fichiers. Les sauvegardes non vues seront traitées aux purges suivantes ; faites du ménage si le message revient. |
+| « Listage Dropbox … tronqué après 20 pages » | Le dossier contient plus de 20 000 fichiers. Au-delà de cette limite, certaines sauvegardes peuvent ne pas être traitées tant que le dossier dépasse la limite (Dropbox ne garantit pas l'ordre des listes) — faites du ménage si le message revient. Aucune suppression à tort n'est possible : seules les sauvegardes reconnaissables au registre ou par la convention de nommage sont purgées. |
 
 Le journal détaillé s'active avec :
 
@@ -321,8 +328,11 @@ un clic — que diagnostiquer plus tard une destination muette.
   les autres. En revanche, si vous **renommez** un fichier déposé par Auto Backup, il cesse
   d'être reconnu et ne sera plus jamais supprimé automatiquement.
 - **Un très grand dossier n'est parcouru que partiellement à chaque purge** : le listage
-  s'arrête à 20 000 fichiers, en le disant dans le journal. Les sauvegardes non vues sont
-  traitées aux purges suivantes ; aucune n'est supprimée par erreur.
+  s'arrête à 20 000 fichiers, en le disant dans le journal. Au-delà de cette limite, certaines
+  sauvegardes peuvent ne pas être traitées tant que le dossier dépasse le seuil — Dropbox ne
+  garantit pas l'ordre du listage d'un appel à l'autre. Aucune sauvegarde n'est supprimée par
+  erreur : l'algorithme de purge ne supprime que ce qu'il a lui-même reconnu. Recommandation :
+  faites du ménage si le message revient.
 - **La corbeille Dropbox n'est pas vidée** : un fichier supprimé par la rétention y reste le
   temps que votre offre Dropbox prévoit, et continue d'y occuper de la place. C'est à vous de la
   vider si besoin.

@@ -1322,9 +1322,9 @@ async def test_une_troncature_de_pagination_ne_fait_pas_echouer_la_retention_par
     rétention par nombre (`retention_count`) ne voit donc que deux
     sauvegardes — elle doit calculer sur ce qui est **visible**, sans jamais
     lever d'exception ni supprimer plus que ce que le nombre de survivants
-    autorise. La sauvegarde de la page non vue reste simplement en place
-    jusqu'à la prochaine purge, comme le documente `docs/destinations/
-    dropbox.md`.
+    autorise. La sauvegarde de la page non vue reste simplement en place ;
+    Dropbox ne garantissant pas l'ordre du listage, rien ne dit qu'une purge
+    suivante la verra, comme le documente `docs/destinations/dropbox.md`.
     """
     await demarrer(**{CONF_RETENTION_COUNT: 1})
     await _inscrire(hass, IDS[0], NOMS[0], slug=SLUGS[0], age_en_jours=20)
