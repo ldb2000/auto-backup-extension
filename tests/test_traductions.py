@@ -10,6 +10,9 @@ refuse en CI un fichier de traduction mal structuré. Faute de pouvoir rejouer
   français et en anglais, et aucune clé traduite n'est **orpheline** ;
 - les placeholders (`{fournisseur}`) sont identiques d'une langue à l'autre et
   fournis par le code qui affiche le texte ;
+- les textes des notifications persistantes (section `exceptions`, #45) sont
+  tous référencés par `destinations/notifications.py`, avec les placeholders
+  que le code fournit ;
 - les actions de `services.yaml` sont intégralement traduites — `hassfest`
   exige un nom et une description pour chaque action et chaque champ déclarés
   dans la section `services` ;
@@ -34,7 +37,7 @@ import pytest
 import yaml
 
 from custom_components.auto_backup import config_flow, const
-from custom_components.auto_backup.destinations import flow, reauth
+from custom_components.auto_backup.destinations import flow, notifications, reauth
 
 RACINE_DEPOT = Path(__file__).resolve().parent.parent
 INTEGRATION = RACINE_DEPOT / "custom_components" / "auto_backup"
@@ -53,6 +56,7 @@ MODULE_FLUX = INTEGRATION / "destinations" / "flow.py"
 MODULE_CONFIG_FLOW = INTEGRATION / "config_flow.py"
 MODULE_ENTITES = INTEGRATION / "destinations" / "entities.py"
 MODULE_REAUTH = INTEGRATION / "destinations" / "reauth.py"
+MODULE_NOTIFICATIONS = INTEGRATION / "destinations" / "notifications.py"
 
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 CLE_DE_TRADUCTION = re.compile(r"^[a-z0-9_-]+$")
@@ -423,6 +427,82 @@ def test_le_probleme_de_reautorisation_est_traduit_sans_orphelin(
         assert _placeholders(texte) <= fournis
 
 
+### Notifications persistantes (section `exceptions`) ###
+
+
+def _placeholders_des_notifications() -> dict[str, set[str]]:
+    """Placeholders fournis par le code, par clé de notification.
+
+    Chaque texte est lu par `_texte(textes, CLE_…, placeholder=valeur, …)` :
+    l'analyse de ces appels donne, sans exécuter le module, la clé demandée et
+    les placeholders que le code lui passe.
+    """
+    fournis: dict[str, set[str]] = {}
+    for noeud in ast.walk(_arbre(MODULE_NOTIFICATIONS)):
+        if (
+            isinstance(noeud, ast.Call)
+            and isinstance(noeud.func, ast.Name)
+            and noeud.func.id == "_texte"
+            and len(noeud.args) >= 2
+            and isinstance(noeud.args[1], ast.Name)
+        ):
+            cle = getattr(notifications, noeud.args[1].id)
+            fournis.setdefault(cle, set()).update(
+                mot.arg for mot in noeud.keywords if mot.arg is not None
+            )
+    return fournis
+
+
+def test_chaque_cle_de_notification_est_lue_par_le_code() -> None:
+    """Les clés déclarées par le module sont exactement celles qu'il lit."""
+    assert set(_placeholders_des_notifications()) == set(
+        notifications.CLES_DE_TRADUCTION
+    )
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_les_notifications_sont_traduites_sans_orphelin(langue: str) -> None:
+    """Chaque texte de notification existe, sous la seule clé `message`.
+
+    `hassfest` n'accepte que `message` dans une entrée de la section
+    `exceptions` ; une clé que le code ne lit pas serait orpheline.
+    """
+    exceptions = _traduction(langue)["exceptions"]
+
+    assert set(exceptions) == set(notifications.CLES_DE_TRADUCTION)
+    for cle, entree in exceptions.items():
+        assert set(entree) == {"message"}, f"{langue} : exceptions.{cle}"
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_les_placeholders_des_notifications_sont_fournis_par_le_code(
+    langue: str,
+) -> None:
+    """Chaque placeholder d'une notification reçoit une valeur, et réciproquement.
+
+    Un placeholder sans valeur s'afficherait brut ; une valeur sans placeholder
+    trahirait une information perdue à la traduction (le compteur d'échecs,
+    par exemple).
+    """
+    exceptions = _traduction(langue)["exceptions"]
+    fournis = _placeholders_des_notifications()
+
+    ecarts = [
+        cle
+        for cle, placeholders in fournis.items()
+        if _placeholders(exceptions[cle]["message"]) != placeholders
+    ]
+    assert not ecarts, f"placeholders divergents en {langue} : {ecarts}"
+
+
+def test_les_notifications_different_entre_les_langues() -> None:
+    """Le français n'est pas une copie de l'anglais pour les notifications."""
+    francais = _traduction("fr")["exceptions"]
+    anglais = _traduction("en")["exceptions"]
+
+    assert all(francais[cle] != anglais[cle] for cle in francais)
+
+
 ### Actions (`services.yaml`) ###
 
 
@@ -482,6 +562,7 @@ def test_les_cles_de_traduction_sont_des_identifiants_valides(langue: str) -> No
         *traduction["options"]["abort"],
         *traduction["options"]["error"],
         *traduction["issues"],
+        *traduction["exceptions"],
         *traduction["services"],
         *(cle for plateforme in traduction["entity"].values() for cle in plateforme),
     ]

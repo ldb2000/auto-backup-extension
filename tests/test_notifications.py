@@ -70,6 +70,17 @@ SLUG = "abcd1234"
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
 
+@pytest.fixture(autouse=True)
+def instance_en_francais(hass: HomeAssistant) -> None:
+    """Instance Home Assistant réglée en français.
+
+    Les notifications sont traduites (#45) : ces tests, qui vérifient les textes
+    affichés, les lisent en français. La langue anglaise et le repli sont
+    couverts par `tests/test_notifications_traduites.py`.
+    """
+    hass.config.language = "fr"
+
+
 @pytest.fixture
 async def entree_notifiante(
     hass: HomeAssistant, integration_backup: None, fournisseur_factice: str

@@ -165,6 +165,26 @@
             "description": "Provider “{fournisseur}” refused to renew access for destination “{nom}”: the authorisation expired or was revoked. Other destinations keep working.\n\nTo restore it, open the Auto Backup integration options, choose “Re-authorise a destination” and select “{nom}”."
         }
     },
+    "exceptions": {
+        "notification_echec_titre": {
+            "message": "Auto Backup: upload to “{destination}” failed"
+        },
+        "notification_echec_message": {
+            "message": "Backup “{sauvegarde}” could not be uploaded to destination “{destination}”.\n\n**Cause**: {cause}\n\nConsecutive failures for this destination: {echecs}.\n\nThe local backup itself is intact. This notification will disappear on its own as soon as an upload to this destination succeeds."
+        },
+        "notification_reauth_titre": {
+            "message": "Auto Backup: destination “{destination}” must be re-authorised"
+        },
+        "notification_reauth_message": {
+            "message": "Provider “{fournisseur}” refused to renew access for destination “{destination}”: the authorisation expired or was revoked. No more backups will be sent to it; other destinations keep working.\n\nTo restore it, open the Auto Backup integration options, choose “Re-authorise a destination”, then “{destination}”.\n\nThis notification and the issue reported in the integrations dashboard will disappear together, when the destination is re-authorised or removed."
+        },
+        "notification_sauvegarde_sans_nom": {
+            "message": "unnamed"
+        },
+        "notification_cause_inconnue": {
+            "message": "unknown cause"
+        }
+    },
     "entity": {
         "sensor": {
             "destination_dernier_televersement": {
