@@ -374,7 +374,8 @@ def async_notifier_la_reauthentification(
 
     La notification **complète** le problème Home Assistant créé au même moment
     (`destinations/reauth.py`) : le problème signale la destination dans
-    l'interface des intégrations, la notification la porte à l'écran d'accueil.
+    Paramètres → Système → Réparations, la notification la porte au panneau
+    Notifications.
     Elle remplace du même coup une éventuelle notification d'échec de
     téléversement pour cette destination : la cause est connue, et la marche à
     suivre est unique.

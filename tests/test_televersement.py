@@ -87,6 +87,7 @@ from custom_components.auto_backup.destinations.providers.google_drive import (
 )
 from custom_components.auto_backup.destinations.upload import (
     DELAI_CONFIRMATION_DEMANDE,
+    LONGUEUR_MAX_DESTINATION_AFFICHEE,
     ErreurLectureSauvegarde,
     async_ouvrir_sauvegarde,
     async_prepare_upload,
@@ -539,6 +540,74 @@ async def test_sans_destination_configuree_le_message_le_dit(
     assert err.value.translation_placeholders == {"destination": "dropbox"}
 
     instance.creation.assert_not_awaited()
+
+
+async def test_une_destination_inconnue_tres_longue_est_tronquee_dans_le_refus(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """La valeur répétée dans le refus tient en 100 caractères (#55)."""
+    demandee = "x" * 5000
+
+    with pytest.raises(ServiceValidationError) as erreur:
+        await hass.services.async_call(
+            DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: [demandee]}, blocking=True
+        )
+
+    affichee = erreur.value.translation_placeholders["destination"]
+    assert len(affichee) == LONGUEUR_MAX_DESTINATION_AFFICHEE == 100
+    assert affichee == "x" * 99 + "…"
+    assert demandee not in str(erreur.value)
+    instance.creation.assert_not_awaited()
+
+
+async def test_sans_destination_une_valeur_tres_longue_est_tronquee(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Sans destination configurée, la valeur répétée est aussi tronquée."""
+    await _demarrer(hass, fichier_de_sauvegarde, destinations=[])
+
+    with pytest.raises(ServiceValidationError) as err:
+        async_resoudre_destinations(hass, ["y" * 101])
+
+    assert err.value.translation_placeholders == {"destination": "y" * 99 + "…"}
+
+
+async def test_un_nom_ambigu_tres_long_est_tronque_dans_le_refus(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Un nom ambigu trop long est tronqué ; à 100 caractères, il est intact."""
+    nom = "N" * 150
+    await _demarrer(
+        hass,
+        fichier_de_sauvegarde,
+        destinations=[
+            config_factice(name=nom),
+            config_factice(destination_id="destination_bis", name=nom),
+        ],
+    )
+
+    with pytest.raises(ServiceValidationError) as err:
+        async_resoudre_destinations(hass, [nom])
+
+    assert err.value.translation_placeholders["destination"] == "N" * 99 + "…"
+
+
+async def test_une_valeur_de_100_caracteres_n_est_pas_tronquee(
+    hass: HomeAssistant,
+) -> None:
+    """La limite est inclusive : 100 caractères passent tels quels."""
+    valeur = "z" * 100
+
+    with pytest.raises(ServiceValidationError) as err:
+        async_resoudre_destinations(hass, [valeur])
+
+    assert err.value.translation_placeholders == {"destination": valeur}
 
 
 async def test_sans_upload_to_le_comportement_reste_celui_de_l_upstream(

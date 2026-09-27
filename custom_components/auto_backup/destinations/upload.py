@@ -130,6 +130,11 @@ CLES_DE_TRADUCTION = (
     CLE_TELEVERSEMENT_INDISPONIBLE,
 )
 
+# Longueur maximale de la valeur d'`upload_to` répétée dans un refus (#55) : un
+# appel de service peut porter une chaîne arbitrairement longue, que le message
+# affiché à l'utilisateur n'a pas à recopier en entier.
+LONGUEUR_MAX_DESTINATION_AFFICHEE = 100
+
 
 class ErreurLectureSauvegarde(HomeAssistantError):
     """La sauvegarde locale n'a pas pu être lue pour être téléversée.
@@ -825,7 +830,7 @@ def _resoudre_une_destination(
             translation_domain=DOMAIN,
             translation_key=CLE_DESTINATION_AMBIGUE,
             translation_placeholders={
-                "destination": recherche,
+                "destination": _tronquer_pour_affichage(recherche),
                 "identifiants": identifiants,
             },
         )
@@ -834,16 +839,29 @@ def _resoudre_une_destination(
         raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key=CLE_DESTINATION_INCONNUE_SANS_DESTINATION,
-            translation_placeholders={"destination": demandee},
+            translation_placeholders={
+                "destination": _tronquer_pour_affichage(demandee)
+            },
         )
     raise ServiceValidationError(
         translation_domain=DOMAIN,
         translation_key=CLE_DESTINATION_INCONNUE,
         translation_placeholders={
-            "destination": demandee,
+            "destination": _tronquer_pour_affichage(demandee),
             "disponibles": _liste_des_disponibles(disponibles),
         },
     )
+
+
+def _tronquer_pour_affichage(valeur: str) -> str:
+    """Tronque une valeur d'`upload_to` avant de la répéter dans un refus.
+
+    Au-delà de `LONGUEUR_MAX_DESTINATION_AFFICHEE` caractères, la valeur est
+    coupée et terminée par « … », le tout tenant dans cette longueur.
+    """
+    if len(valeur) <= LONGUEUR_MAX_DESTINATION_AFFICHEE:
+        return valeur
+    return valeur[: LONGUEUR_MAX_DESTINATION_AFFICHEE - 1] + "…"
 
 
 def _liste_des_disponibles(disponibles: list[RemoteDestination]) -> str:

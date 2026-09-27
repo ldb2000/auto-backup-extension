@@ -445,22 +445,25 @@ async def test_un_chargement_en_echec_retombe_sur_l_anglais_en_cache(
 
 
 @pytest.mark.parametrize(
-    ("langue", "titre", "consigne"),
+    ("langue", "titre", "consigne", "ecran"),
     [
         (
             "en",
-            "Auto Backup: destination “Destination OAuth” must be re-authorised",
-            "choose “Re-authorise a destination”, then “Destination OAuth”",
+            "Auto Backup: destination “Destination OAuth” must be re-authorized",
+            "choose “Re-authorize a destination”, then “Destination OAuth”",
+            "Settings → System → Repairs",
         ),
         (
             "fr",
             "Auto Backup : la destination « Destination OAuth » doit être ré-autorisée",
             "choisissez « Ré-autoriser une destination », puis « Destination OAuth »",
+            "Paramètres → Système → Réparations",
         ),
         (
             "es",
-            "Auto Backup: destination “Destination OAuth” must be re-authorised",
-            "choose “Re-authorise a destination”, then “Destination OAuth”",
+            "Auto Backup: destination “Destination OAuth” must be re-authorized",
+            "choose “Re-authorize a destination”, then “Destination OAuth”",
+            "Settings → System → Repairs",
         ),
     ],
 )
@@ -471,8 +474,12 @@ async def test_la_notification_de_reautorisation_est_traduite(
     langue: str,
     titre: str,
     consigne: str,
+    ecran: str,
 ) -> None:
-    """Critères : anglais, français et repli anglais pour la ré-autorisation."""
+    """Critères : anglais, français et repli anglais pour la ré-autorisation.
+
+    Le message désigne l'écran où Home Assistant affiche le problème (#55).
+    """
     await _charger(hass, langue, config_oauth_factice())
 
     async_signaler_la_reauthentification(
@@ -485,6 +492,7 @@ async def test_la_notification_de_reautorisation_est_traduite(
     )
     assert notification["title"] == titre
     assert consigne in notification["message"]
+    assert ecran in notification["message"]
 
 
 ### Composition des textes ###

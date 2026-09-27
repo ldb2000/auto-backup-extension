@@ -99,8 +99,8 @@ pour que le fournisseur puisse vous y ramener. Cette URL doit être :
   URI locales ou privées.
 
 Si l'accès à une destination est révoqué, Home Assistant crée un **problème** nommant cette
-destination et invitant à la ré-autoriser, et une **notification persistante** le rappelle à
-l'écran d'accueil ; les autres destinations continuent de fonctionner. Les deux disparaissent
+destination et invitant à la ré-autoriser, et une **notification persistante** le rappelle dans le
+panneau **Notifications** de Home Assistant ; les autres destinations continuent de fonctionner. Les deux disparaissent
 ensemble une fois la destination ré-autorisée ou supprimée.
 
 Si la ré-autorisation porte sur un **autre compte** que celui enregistré, l'interface le dit
@@ -232,7 +232,7 @@ destination, la sauvegarde et la cause de l'échec.
 - **Retrait automatique** : dès qu'un envoi vers cette destination aboutit, la notification
   disparaît.
 - **Accès révoqué** : la notification invite à relancer « Ré-autoriser une destination » et
-  accompagne le problème affiché dans l'interface des intégrations, sans le doubler.
+  accompagne le problème affiché dans **Paramètres → Système → Réparations**, sans le doubler.
 - **Aucun secret affiché** : jetons, valeurs de `access_token` / `refresh_token` et chemins de
   fichiers absolus sont masqués (`***`) avant affichage.
 

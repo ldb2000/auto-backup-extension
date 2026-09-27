@@ -17,7 +17,8 @@ fonctionner.
    `docs/adr/0001-destinations-distantes.md`.
 3. Depuis l'issue #17, une **notification persistante** accompagne le problème
    (`destinations/notifications.py`) : le problème signale la destination dans
-   l'interface des intégrations, la notification la porte à l'écran d'accueil.
+   Paramètres → Système → Réparations, la notification la porte au panneau
+   Notifications.
    Les deux ne se doublent pas — même panne, même marche à suivre — et l'option
    `notify_on_failure` ne coupe que la seconde.
 
@@ -120,8 +121,8 @@ def async_signaler_la_reauthentification(
             config.provider,
         )
     _async_creer_le_probleme(hass, config)
-    # Le problème signale la destination dans l'interface des intégrations ; la
-    # notification (issue #17) la porte à l'écran d'accueil. Les deux décrivent
+    # Le problème signale la destination dans Paramètres → Système → Réparations ;
+    # la notification (issue #17) la porte au panneau Notifications. Les deux décrivent
     # la même panne et disparaissent ensemble (`async_effacer_la_reauthentification`).
     async_notifier_la_reauthentification(hass, config)
 

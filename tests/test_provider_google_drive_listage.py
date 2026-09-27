@@ -1146,7 +1146,7 @@ async def test_un_401_au_listage_d_une_purge_notifie_la_reautorisation(
     suivante : le signalement de ré-authentification — et la notification
     persistante de l'issue #17 qui l'accompagne — doit donc avoir eu lieu
     *avant* que cette exception ne soit rattrapée, sans quoi une destination
-    purgée en tâche de fond resterait invisible à l'écran d'accueil.
+    purgée en tâche de fond resterait invisible dans le panneau Notifications.
     """
     await _entree(hass, **{CONF_RETENTION_DAYS: 1})
     _FauxDrive(

@@ -1068,7 +1068,7 @@ async def test_un_acces_refuse_pendant_le_listage_d_une_purge_notifie_la_reautor
     `_erreur_d_acces()` qui doit avoir déjà signalé la ré-authentification —
     problème Home Assistant **et** notification persistante (#17) — avant de
     lever, sans quoi un échec survenu en pleine purge automatique ne serait
-    jamais porté à l'écran d'accueil de l'utilisateur.
+    jamais porté au panneau Notifications de l'utilisateur.
     """
     await demarrer(**{CONF_RETENTION_DAYS: 1})
     aioclient_mock.post(
