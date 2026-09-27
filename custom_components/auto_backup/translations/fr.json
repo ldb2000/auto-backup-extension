@@ -1,4 +1,164 @@
 {
+    "services": {
+        "backup": {
+            "name": "Sauvegarde",
+            "description": "Crée une sauvegarde complète ou partielle.",
+            "fields": {
+                "name": {
+                    "name": "Nom",
+                    "description": "Nom facultatif ; par défaut, la date et l'heure actuelles."
+                },
+                "include_addons": {
+                    "name": "Inclure : modules complémentaires",
+                    "description": "Liste des modules complémentaires à sauvegarder (nom ou slug)."
+                },
+                "include_folders": {
+                    "name": "Inclure : dossiers",
+                    "description": "Liste des dossiers à sauvegarder."
+                },
+                "exclude_addons": {
+                    "name": "Exclure : modules complémentaires",
+                    "description": "Liste des modules complémentaires à exclure de la sauvegarde (nom ou slug)."
+                },
+                "exclude_folders": {
+                    "name": "Exclure : dossiers",
+                    "description": "Liste des dossiers à exclure de la sauvegarde."
+                },
+                "exclude_database": {
+                    "name": "Exclure : base de données",
+                    "description": "Exclut de la sauvegarde la base de données intégrée de Home Assistant."
+                },
+                "encrypted": {
+                    "name": "Chiffrée",
+                    "description": "Chiffre la sauvegarde avec la clé de chiffrement par défaut des paramètres de sauvegarde. Sans chiffrement ni mot de passe, la sauvegarde n'est pas chiffrée."
+                },
+                "password": {
+                    "name": "Mot de passe",
+                    "description": "Mot de passe facultatif avec lequel chiffrer la sauvegarde."
+                },
+                "keep_days": {
+                    "name": "Jours de conservation",
+                    "description": "Nombre de jours pendant lesquels conserver la sauvegarde."
+                },
+                "location": {
+                    "name": "Emplacement",
+                    "description": "Nom d'un stockage réseau de sauvegarde où déposer la sauvegarde (ou /backup)."
+                },
+                "download_path": {
+                    "name": "Chemin de téléchargement",
+                    "description": "Emplacements où télécharger la sauvegarde après sa création."
+                },
+                "compressed": {
+                    "name": "Compressée",
+                    "description": "Utilise des archives compressées."
+                },
+                "upload_to": {
+                    "name": "Téléverser vers",
+                    "description": "Destinations distantes (nom ou identifiant) vers lesquelles téléverser la sauvegarde après sa création."
+                }
+            }
+        },
+        "backup_full": {
+            "name": "Sauvegarde complète",
+            "description": "Crée une sauvegarde complète, avec des exclusions facultatives.",
+            "fields": {
+                "name": {
+                    "name": "Nom",
+                    "description": "Nom facultatif ; par défaut, la date et l'heure actuelles."
+                },
+                "exclude": {
+                    "name": "Exclure",
+                    "description": "Modules complémentaires et dossiers à exclure de la sauvegarde."
+                },
+                "exclude_database": {
+                    "name": "Exclure : base de données",
+                    "description": "Exclut de la sauvegarde la base de données intégrée de Home Assistant."
+                },
+                "encrypted": {
+                    "name": "Chiffrée",
+                    "description": "Chiffre la sauvegarde avec la clé de chiffrement par défaut des paramètres de sauvegarde. Sans chiffrement ni mot de passe, la sauvegarde n'est pas chiffrée."
+                },
+                "password": {
+                    "name": "Mot de passe",
+                    "description": "Mot de passe facultatif avec lequel chiffrer la sauvegarde."
+                },
+                "keep_days": {
+                    "name": "Jours de conservation",
+                    "description": "Nombre de jours pendant lesquels conserver la sauvegarde."
+                },
+                "location": {
+                    "name": "Emplacement",
+                    "description": "Nom d'un stockage réseau de sauvegarde où déposer la sauvegarde (ou /backup)."
+                },
+                "download_path": {
+                    "name": "Chemin de téléchargement",
+                    "description": "Emplacements où télécharger la sauvegarde après sa création."
+                },
+                "compressed": {
+                    "name": "Compressée",
+                    "description": "Utilise des archives compressées."
+                },
+                "upload_to": {
+                    "name": "Téléverser vers",
+                    "description": "Destinations distantes (nom ou identifiant) vers lesquelles téléverser la sauvegarde après sa création."
+                }
+            }
+        },
+        "backup_partial": {
+            "name": "Sauvegarde partielle",
+            "description": "Crée une sauvegarde partielle.",
+            "fields": {
+                "name": {
+                    "name": "Nom",
+                    "description": "Nom facultatif ; par défaut, la date et l'heure actuelles."
+                },
+                "addons": {
+                    "name": "Modules complémentaires",
+                    "description": "Liste des modules complémentaires à sauvegarder (nom ou slug)."
+                },
+                "folders": {
+                    "name": "Dossiers",
+                    "description": "Liste des dossiers à sauvegarder."
+                },
+                "exclude_database": {
+                    "name": "Exclure : base de données",
+                    "description": "Exclut de la sauvegarde la base de données intégrée de Home Assistant."
+                },
+                "encrypted": {
+                    "name": "Chiffrée",
+                    "description": "Chiffre la sauvegarde avec la clé de chiffrement par défaut des paramètres de sauvegarde. Sans chiffrement ni mot de passe, la sauvegarde n'est pas chiffrée."
+                },
+                "password": {
+                    "name": "Mot de passe",
+                    "description": "Mot de passe facultatif avec lequel chiffrer la sauvegarde."
+                },
+                "keep_days": {
+                    "name": "Jours de conservation",
+                    "description": "Nombre de jours pendant lesquels conserver la sauvegarde."
+                },
+                "location": {
+                    "name": "Emplacement",
+                    "description": "Nom d'un stockage réseau de sauvegarde où déposer la sauvegarde (ou /backup)."
+                },
+                "download_path": {
+                    "name": "Chemin de téléchargement",
+                    "description": "Emplacements où télécharger la sauvegarde après sa création."
+                },
+                "compressed": {
+                    "name": "Compressée",
+                    "description": "Utilise des archives compressées."
+                },
+                "upload_to": {
+                    "name": "Téléverser vers",
+                    "description": "Destinations distantes (nom ou identifiant) vers lesquelles téléverser la sauvegarde après sa création."
+                }
+            }
+        },
+        "purge": {
+            "name": "Purge",
+            "description": "Supprime les sauvegardes expirées, localement et sur les destinations distantes."
+        }
+    },
     "issues": {
         "reauthentification_requise": {
             "title": "Auto Backup : la destination « {nom} » doit être ré-autorisée",
@@ -16,7 +176,18 @@
         },
         "binary_sensor": {
             "destination_probleme": {
-                "name": "{destination} : problème de téléversement"
+                "name": "{destination} : problème de téléversement",
+                "state_attributes": {
+                    "last_error": {
+                        "name": "Dernière erreur"
+                    },
+                    "last_failed_slug": {
+                        "name": "Dernière sauvegarde en échec"
+                    },
+                    "last_failed_at": {
+                        "name": "Dernier échec"
+                    }
+                }
             }
         }
     },
@@ -51,7 +222,9 @@
             "configuration_invalide": "La configuration des destinations n'a pas pu être enregistrée.",
             "autorisation_annulee": "L'autorisation a été refusée ou annulée chez le fournisseur : aucune destination n'a été créée, et rien n'a été modifié. Vous pouvez relancer « Ajouter une destination » quand vous le souhaitez.",
             "echec_fournisseur": "Le fournisseur a refusé la première requête : {detail}.",
-            "changement_de_compte_annule": "Changement de compte non confirmé : rien n'a été enregistré. La destination reste rattachée à son compte d'origine, avec son autorisation précédente."
+            "changement_de_compte_annule": "Changement de compte non confirmé : rien n'a été enregistré. La destination reste rattachée à son compte d'origine, avec son autorisation précédente.",
+            "autorisation_refusee_sans_motif": "Autorisation refusée par le fournisseur, sans motif précisé. Relancez « Ajouter une destination » ; si le refus persiste, vérifiez les réglages de votre application chez le fournisseur.",
+            "fournisseur_injoignable": "Le fournisseur « {fournisseur} » n'a pas répondu pendant l'identification du compte autorisé : aucune destination n'a été créée. Vérifiez votre connexion, puis recommencez."
         },
         "error": {
             "identifiants_invalides": "Renseignez l'identifiant et le secret de votre application.",
@@ -80,6 +253,9 @@
                 "description": "Choisissez le service vers lequel envoyer une copie de vos sauvegardes.",
                 "data": {
                     "provider": "Fournisseur"
+                },
+                "data_description": {
+                    "provider": "Service cloud qui recevra une copie de chaque sauvegarde."
                 }
             },
             "identifiants": {
@@ -88,6 +264,10 @@
                 "data": {
                     "client_id": "Identifiant client",
                     "client_secret": "Secret client"
+                },
+                "data_description": {
+                    "client_id": "Identifiant de l'application que vous avez créée auprès du fournisseur.",
+                    "client_secret": "Secret de cette même application. Il est conservé dans Home Assistant et n'est jamais journalisé."
                 }
             },
             "autorisation": {
@@ -102,6 +282,12 @@
                     "folder": "Dossier distant",
                     "retention_days": "Conserver pendant (jours)",
                     "retention_count": "Nombre maximum de sauvegardes conservées"
+                },
+                "data_description": {
+                    "name": "Affiché dans les entités de la destination et accepté par le champ « upload_to » des actions de sauvegarde.",
+                    "folder": "Chemin relatif, chez le fournisseur, où sont déposées les sauvegardes. Prévoyez un dossier par instance Home Assistant.",
+                    "retention_days": "Les sauvegardes distantes plus anciennes que ce nombre de jours sont supprimées. Laissez vide pour ne fixer aucune limite d'âge.",
+                    "retention_count": "Au-delà de ce nombre, les sauvegardes distantes les plus anciennes sont supprimées. Laissez vide pour ne fixer aucune limite. Sans aucune rétention, la destination n'est jamais purgée."
                 }
             },
             "reautoriser_destination": {
@@ -109,6 +295,9 @@
                 "description": "Choisissez la destination dont l'accès doit être renouvelé. Les autres destinations ne sont pas touchées.",
                 "data": {
                     "destination_id": "Destination"
+                },
+                "data_description": {
+                    "destination_id": "Seules les destinations qui utilisent une autorisation sont proposées."
                 }
             },
             "confirmer_changement_de_compte": {
@@ -116,6 +305,9 @@
                 "description": "L'autorisation que vous venez d'accorder porte sur un autre compte que celui de la destination « {destination} ».\n\nCompte précédent : {ancien_compte}\nNouveau compte : {nouveau_compte}\n\nSi vous confirmez, la destination enverra désormais les sauvegardes vers le nouveau compte. Les sauvegardes déjà déposées sur l'ancien compte ne seront plus ni listées, ni purgées par Auto Backup : elles resteront chez le fournisseur, à vous de les gérer.\n\nSans confirmation, rien n'est enregistré : la destination garde son compte et son autorisation précédente.",
                 "data": {
                     "confirmer": "Je confirme le changement de compte"
+                },
+                "data_description": {
+                    "confirmer": "Laissez décoché pour garder la destination telle qu'elle était."
                 }
             },
             "supprimer_destination": {
@@ -123,6 +315,9 @@
                 "description": "La configuration et l'autorisation des destinations choisies seront effacées. Les sauvegardes déjà déposées chez le fournisseur ne sont pas supprimées.",
                 "data": {
                     "destinations": "Destinations à supprimer"
+                },
+                "data_description": {
+                    "destinations": "Les sauvegardes déjà déposées chez le fournisseur sont conservées."
                 }
             },
             "reglages_notifications": {
@@ -130,6 +325,9 @@
                 "description": "Quand l'envoi d'une sauvegarde vers une destination distante échoue définitivement, Auto Backup peut afficher une notification persistante nommant la destination, la sauvegarde et la cause. Une même destination n'a jamais qu'une seule notification, mise à jour à chaque nouvel échec, et elle disparaît dès qu'un envoi aboutit.\n\nDésactivées, les notifications ne sont plus créées : l'événement « auto_backup.upload_failed », le journal d'erreur et le problème signalant une destination à ré-autoriser, eux, sont maintenus.",
                 "data": {
                     "notify_on_failure": "Notifier les échecs d'envoi et les accès à renouveler"
+                },
+                "data_description": {
+                    "notify_on_failure": "Désactivées, l'événement, le journal d'erreur et le problème signalé restent émis."
                 }
             },
             "reglages_televersement": {
@@ -137,6 +335,9 @@
                 "description": "Délai maximum accordé à l'envoi d'une sauvegarde vers une destination distante. Au-delà, l'envoi est interrompu et signalé par l'événement « auto_backup.upload_failed » ; la sauvegarde locale, elle, reste intacte. Comptez large pour une sauvegarde volumineuse ou une connexion lente.",
                 "data": {
                     "upload_timeout": "Délai maximum d'un téléversement (secondes)"
+                },
+                "data_description": {
+                    "upload_timeout": "Nombre entier de secondes, strictement positif."
                 }
             },
             "init": {
