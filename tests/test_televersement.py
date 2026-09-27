@@ -66,6 +66,7 @@ from custom_components.auto_backup.destinations import (
     DestinationError,
 )
 from custom_components.auto_backup.destinations.flow import _delai_de_televersement
+from custom_components.auto_backup.destinations.masquage import masquer
 from custom_components.auto_backup.destinations.upload import (
     DELAI_CONFIRMATION_DEMANDE,
     ErreurLectureSauvegarde,
@@ -1560,3 +1561,136 @@ async def test_la_cause_d_une_creation_echouee_est_masquee_en_debug(
 
     assert "abandonnée" in caplog.text
     assert not _fuites(caplog)
+
+
+### AUCUN SECRET DANS L'ÉVÉNEMENT `auto_backup.upload_failed` (#44) ###
+
+# Schéma public de l'événement (ADR 0001) : ni ajout, ni retrait, ni renommage.
+CHAMPS_DE_L_EVENEMENT_D_ECHEC = frozenset(
+    {ATTR_NAME, ATTR_SLUG, ATTR_DESTINATION, ATTR_DESTINATION_NAME, ATTR_ERROR}
+)
+
+
+async def _declencher_un_echec(
+    hass: HomeAssistant, instance: _Instance, erreur: Exception
+) -> list[Any]:
+    """Fait échouer un téléversement et renvoie les événements d'échec émis."""
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    instance.destination("destination_test").erreur_a_lever = erreur
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_BACKUP,
+        {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
+        blocking=True,
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+    return echecs
+
+
+@pytest.mark.parametrize(
+    "erreur",
+    [
+        pytest.param(DestinationError(MESSAGE_AVEC_SECRETS), id="erreur-typee"),
+        pytest.param(RuntimeError(MESSAGE_AVEC_SECRETS), id="erreur-inattendue"),
+        pytest.param(
+            aiohttp.ClientConnectionError(
+                f"Connection reset while PUT {URI_DE_SESSION_FACTICE}"
+            ),
+            id="erreur-reseau-inattendue",
+        ),
+    ],
+)
+async def test_l_evenement_d_echec_ne_transporte_aucun_secret(
+    hass: HomeAssistant, instance: _Instance, erreur: Exception
+) -> None:
+    """Critère 1 : `error` ne porte que la cause masquée par `masquer()`.
+
+    L'événement est visible des outils de développement, de toute automatisation
+    qui l'écoute, et stocké par l'enregistreur : l'URI de session Google Drive
+    et son `upload_id` n'y ont pas leur place.
+    """
+    echecs = await _declencher_un_echec(hass, instance, erreur)
+
+    assert len(echecs) == 1
+    cause = echecs[0].data[ATTR_ERROR]
+    assert not [secret for secret in SECRETS_FACTICES if secret in cause]
+    assert cause == masquer(str(erreur))
+    assert "***" in cause
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param("quota dépassé", id="quota-court"),
+        pytest.param(
+            "l'espace de stockage du compte Google est épuisé : libérez de la "
+            "place dans Google Drive, puis réessayez",
+            id="quota-google",
+        ),
+        pytest.param(
+            "l'espace de stockage Dropbox de la destination « Dropbox perso » est "
+            "saturé : libérez de la place ou réduisez la rétention "
+            "(path/insufficient_space/..)",
+            id="quota-dropbox",
+        ),
+        pytest.param(
+            "Google Drive a renvoyé une réponse inattendue (HTTP 500) : backendError",
+            id="panne-google",
+        ),
+        pytest.param("délai de téléversement dépassé (1800 s)", id="delai"),
+    ],
+)
+async def test_une_cause_sans_secret_reste_identique_dans_l_evenement(
+    hass: HomeAssistant, instance: _Instance, message: str
+) -> None:
+    """Critère 2 : une automatisation qui filtre sur ce texte fonctionne encore."""
+    echecs = await _declencher_un_echec(hass, instance, DestinationError(message))
+
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_ERROR] == message
+
+
+async def test_le_delai_depasse_reste_identique_dans_l_evenement(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    fichier_de_sauvegarde: Path,
+) -> None:
+    """Critère 2, par le vrai chemin du délai : le message du fork est intact."""
+    instance = await _demarrer(
+        hass, fichier_de_sauvegarde, options={CONF_UPLOAD_TIMEOUT: 0.01}
+    )
+    instance.destination("destination_test").attente_secondes = 30
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_ERROR] == "délai de téléversement dépassé (0.01 s)"
+
+
+@pytest.mark.parametrize(
+    "erreur",
+    [
+        pytest.param(DestinationError("quota dépassé"), id="sans-secret"),
+        pytest.param(DestinationError(MESSAGE_AVEC_SECRETS), id="avec-secrets"),
+    ],
+)
+async def test_le_schema_de_l_evenement_d_echec_est_inchange(
+    hass: HomeAssistant, instance: _Instance, erreur: Exception
+) -> None:
+    """Critère 4 : les cinq champs d'avant, avec les mêmes noms, et eux seuls."""
+    echecs = await _declencher_un_echec(hass, instance, erreur)
+
+    assert len(echecs) == 1
+    donnees = echecs[0].data
+    assert set(donnees) == CHAMPS_DE_L_EVENEMENT_D_ECHEC
+    assert donnees[ATTR_NAME] == "Sauvegarde du 22"
+    assert donnees[ATTR_SLUG] == SLUG
+    assert donnees[ATTR_DESTINATION] == "destination_test"
+    assert (
+        donnees[ATTR_DESTINATION_NAME] == instance.destination("destination_test").name
+    )

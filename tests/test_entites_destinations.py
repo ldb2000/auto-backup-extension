@@ -1462,3 +1462,48 @@ async def test_un_evenement_recu_pendant_l_ajout_n_est_pas_ecrase(
         ).state
         != STATE_UNKNOWN
     )
+
+
+### CAUSE DÉJÀ MASQUÉE À L'ÉMISSION (#44) ###
+
+# Cause telle qu'un fournisseur la renverrait : un jeton Google, et l'URI de
+# session d'un envoi reprenable. Valeurs inventées (marqueur `FaCtIcE`).
+CAUSE_AVEC_SECRETS = (
+    "envoi refusé : Authorization: Bearer ya29.a0AfH6FaCtIcE-0123456789abcdef, "
+    "session https://www.googleapis.invalid/upload/drive/v3/files"
+    "?uploadType=resumable&upload_id=AAAAFaCtIcE0123456789abcdefghijkl"
+)
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        pytest.param(CAUSE_AVEC_SECRETS, id="avec-secrets"),
+        pytest.param(CAUSE_AVEC_SECRETS * 5, id="avec-secrets-tronquee"),
+        pytest.param("quota dépassé", id="sans-secret"),
+    ],
+)
+async def test_une_cause_deja_masquee_s_affiche_a_l_identique(
+    hass: HomeAssistant, entree_avec_destination: MockConfigEntry, cause: str
+) -> None:
+    """Critère 3 de #44 : l'attribut `last_error` ne change pas.
+
+    `upload.py` émet désormais `masquer(cause)` ; le capteur de problème la
+    masque de nouveau, bornée à `LONGUEUR_MAX_ERREUR`. Le résultat doit être
+    celui qu'il produisait à partir de la cause brute, troncature comprise.
+    """
+    _emettre_echec(hass, erreur=cause)
+    await hass.async_block_till_done()
+    depuis_la_cause_brute = _etat(
+        hass, entree_avec_destination, Platform.BINARY_SENSOR, SUFFIXE_PROBLEME
+    ).attributes[ATTR_LAST_ERROR]
+
+    _emettre_echec(hass, erreur=masquer(cause))
+    await hass.async_block_till_done()
+    depuis_la_cause_masquee = _etat(
+        hass, entree_avec_destination, Platform.BINARY_SENSOR, SUFFIXE_PROBLEME
+    ).attributes[ATTR_LAST_ERROR]
+
+    assert depuis_la_cause_masquee == depuis_la_cause_brute
+    assert "FaCtIcE" not in depuis_la_cause_masquee
+    assert len(depuis_la_cause_masquee) <= LONGUEUR_MAX_ERREUR

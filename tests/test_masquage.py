@@ -602,3 +602,52 @@ def test_journaliser_une_exception_ne_donne_la_trace_qu_en_debug(
     for secret in (IDENTIFIANT_DE_SESSION, JETON_GOOGLE):
         assert secret not in caplog.text
     assert all(enregistrement.exc_info is None for enregistrement in caplog.records)
+
+
+### Idempotence (#44) ###
+
+# L'événement `auto_backup.upload_failed` porte désormais une cause déjà masquée
+# (#44), que les notifications (#17) et les entités (#16) masquent de nouveau à
+# la lecture. Leur affichage ne reste inchangé que si masquer un texte déjà
+# masqué ne le modifie plus. Placée en fin de module, cette section rassemble
+# **toutes** les entrées des vecteurs paramétrés ci-dessus : un vecteur ajouté
+# plus tard est éprouvé ici sans qu'on ait à le recopier.
+
+
+def _entrees_des_vecteurs() -> list[str]:
+    """Premier argument texte de chaque cas paramétré de ce module."""
+    entrees: dict[str, None] = {}
+    for objet in list(globals().values()):
+        for marque in getattr(objet, "pytestmark", ()):
+            if marque.name != "parametrize":
+                continue
+            for cas in marque.args[1]:
+                valeurs = getattr(cas, "values", cas)
+                premier = valeurs[0] if isinstance(valeurs, tuple) else valeurs
+                if isinstance(premier, str):
+                    entrees[premier] = None
+    return list(entrees)
+
+
+ENTREES_DES_VECTEURS = _entrees_des_vecteurs()
+
+
+def test_les_vecteurs_sont_bien_rassembles() -> None:
+    """Garde-fou : une collecte vide rendrait le test suivant trivialement vert."""
+    assert len(ENTREES_DES_VECTEURS) >= 40
+    assert f"invalid access token {JETON_DROPBOX}" in ENTREES_DES_VECTEURS
+
+
+@pytest.mark.parametrize("brut", ENTREES_DES_VECTEURS)
+def test_masquer_un_texte_deja_masque_ne_le_change_plus(brut: str) -> None:
+    """`masquer(masquer(x)) == masquer(x)`, avec ou sans troncature.
+
+    La composition éprouvée est aussi celle des entités : l'événement porte
+    `masquer(x)`, l'attribut d'entité applique `masquer(…, longueur_max=255)`.
+    """
+    masque = masquer(brut)
+
+    assert masquer(masque) == masque
+    for borne in (255, 32):
+        assert masquer(masque, longueur_max=borne) == masquer(brut, longueur_max=borne)
+    assert masquer_un_nom(masquer_un_nom(brut)) == masquer_un_nom(brut)
