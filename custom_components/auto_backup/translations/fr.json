@@ -224,7 +224,7 @@
             "echec_fournisseur": "Le fournisseur a refusé la première requête : {detail}.",
             "changement_de_compte_annule": "Changement de compte non confirmé : rien n'a été enregistré. La destination reste rattachée à son compte d'origine, avec son autorisation précédente.",
             "autorisation_refusee_sans_motif": "Autorisation refusée par le fournisseur, sans motif précisé. Relancez « Ajouter une destination » ; si le refus persiste, vérifiez les réglages de votre application chez le fournisseur.",
-            "fournisseur_injoignable": "Le fournisseur « {fournisseur} » n'a pas répondu pendant l'identification du compte autorisé : aucune destination n'a été créée. Vérifiez votre connexion, puis recommencez."
+            "fournisseur_injoignable": "Le fournisseur « {fournisseur} » n'a pas répondu pendant l'identification du compte autorisé : rien n'a été enregistré. Vérifiez votre connexion, puis recommencez."
         },
         "error": {
             "identifiants_invalides": "Renseignez l'identifiant et le secret de votre application.",
@@ -327,7 +327,7 @@
                     "notify_on_failure": "Notifier les échecs d'envoi et les accès à renouveler"
                 },
                 "data_description": {
-                    "notify_on_failure": "Désactivées, l'événement, le journal d'erreur et le problème signalé restent émis."
+                    "notify_on_failure": "Si l'option est désactivée, l'événement, le journal d'erreur et le problème signalé restent émis."
                 }
             },
             "reglages_televersement": {

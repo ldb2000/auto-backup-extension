@@ -224,7 +224,7 @@
             "echec_fournisseur": "The provider rejected the first request: {detail}.",
             "changement_de_compte_annule": "Account change not confirmed: nothing was saved. The destination keeps its original account and its previous authorisation.",
             "autorisation_refusee_sans_motif": "Authorisation refused by the provider, without any reason given. Start “Add a destination” again; if it keeps failing, check your application's settings with the provider.",
-            "fournisseur_injoignable": "Provider “{fournisseur}” did not respond while identifying the authorised account: no destination was created. Check your connection, then try again."
+            "fournisseur_injoignable": "Provider “{fournisseur}” did not respond while identifying the authorised account: nothing was saved. Check your connection, then try again."
         },
         "error": {
             "identifiants_invalides": "Enter your application's client ID and secret.",
@@ -327,7 +327,7 @@
                     "notify_on_failure": "Notify upload failures and access to renew"
                 },
                 "data_description": {
-                    "notify_on_failure": "Turned off, the event, the error log and the repair issue are still emitted."
+                    "notify_on_failure": "When turned off, the event, the error log and the repair issue are still emitted."
                 }
             },
             "reglages_televersement": {
