@@ -52,9 +52,10 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
 | `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés, frontière avec la purge distante. |
 | `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, noms du fork exemptés du dernier filet (`masquer_un_nom()`), réserves assumées, troncature. |
-| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès, et refus typé des crochets encore à écrire (#12). |
+| `tests/test_provider_dropbox.py` | Fournisseur Dropbox : enregistrement, portées et accès hors-ligne de l'URL d'autorisation, identification du compte, rafraîchissement, révocation, vérification d'accès. |
 | `tests/test_provider_dropbox_upload.py` | Dépôt d'une sauvegarde chez Dropbox : envoi simple, session fragmentée, dossier cible, refus traduits en erreurs typées, nouvelles tentatives, garde-fou par requête, sauvegarde distante renvoyée. |
 | `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
+| `tests/test_provider_dropbox_listage.py` | Listage paginé, provenance (registre, convention de nommage, fichier étranger), suppression idempotente, erreurs d'authentification (typées `DestinationAuthError` au listage et à la suppression, avec signalement de ré-authentification), notifications de ré-authentification lors d'un refus d'accès pendant une purge (#17), purge Dropbox de bout en bout par le service `purge`. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/test_provider_google_drive_upload.py` | Téléversement Google Drive : dossier cible, envoi resumable par fragments, reprises, erreurs typées, journaux et parcours complet depuis le service. |
 | `tests/test_provider_google_drive_listage.py` | Listage et suppression Google Drive : requête filtrée, pagination et sa borne, fichiers écartés, suppression idempotente, erreurs d'authentification, purge de bout en bout par le service `purge`. |
@@ -523,12 +524,14 @@ joignable, options upstream complétées — et trois s'y ajoutent :
   données persistées, et qu'un échec de ce crochet **interrompt** l'ajout (abandon
   `echec_fournisseur`) sans laisser de problème de ré-authentification orphelin.
 - **Un crochet encore à écrire qui est appelé en fonctionnement échoue par une erreur typée**, et
-  un test l'exige. Le listage Dropbox (#12) est appelé par la purge distante après **chaque**
-  sauvegarde dès qu'une rétention est configurée : une `NotImplementedError` tombait dans la
-  clause de dernier recours du coordinateur, qui journalisait une trace d'appel complète à chaque
-  fois. Le test déroule donc le service `auto_backup.purge` sur une destination Dropbox porteuse
-  d'une rétention et vérifie le **journal** : aucun enregistrement porteur d'une trace, et une
-  seule ligne d'erreur, qui nomme la destination et renvoie à l'issue.
+  un test l'exige. Le listage est appelé par la purge distante après **chaque** sauvegarde dès
+  qu'une rétention est configurée : une `NotImplementedError` tombait dans la clause de dernier
+  recours du coordinateur, qui journalisait une trace d'appel complète à chaque fois. Le test
+  déroule donc le service `auto_backup.purge` sur une destination porteuse d'une rétention et
+  vérifie le **journal** : aucun enregistrement porteur d'une trace, et une seule ligne d'erreur,
+  qui nomme la destination et renvoie à l'issue. La règle vaut aujourd'hui pour Google Drive
+  (#15) ; côté Dropbox, où le listage est écrit depuis #12, le pendant du test vérifie l'inverse
+  — une purge qui aboutit ne journalise **aucune** erreur.
 
   ```python
   with caplog.at_level(logging.DEBUG):
@@ -785,10 +788,10 @@ téléversement après création (lecture en flux, événements, échecs, délai
 d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
 la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant), le
 dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14), le
-**listage et la suppression sur Google Drive** (issue #15), jusqu'à la purge de bout en bout par
-le service `auto_backup.purge`, les notifications d'échec et de ré-authentification, le
-masquage des secrets et la confirmation d'un changement de compte (issue #17), enfin les entités
-d'état exposées par chaque destination (succès, problème, compteur, restauration, issue #16). Le
-listage et la suppression chez Dropbox restent à couvrir par #12.
+**cycle de vie complet** chez les deux — listage, reconnaissance de la provenance, suppression et
+purge de bout en bout par le service `auto_backup.purge`, Dropbox (issue #12) comme Google Drive
+(issue #15) —, les notifications d'échec et de ré-authentification, le masquage des secrets et la
+confirmation d'un changement de compte (issue #17), enfin les entités d'état exposées par chaque
+destination (succès, problème, compteur, restauration, issue #16).
 
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

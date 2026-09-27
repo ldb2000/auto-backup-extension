@@ -1,11 +1,20 @@
-"""Destination Dropbox : compte connecté en OAuth2 (#10) et dépôt (#11).
+"""Destination Dropbox : compte connecté (#10), dépôt (#11), rétention (#12).
 
 Ce module apporte **l'accès au compte** — déclarer ce que Dropbox attend pour
 autoriser l'application, obtenir un jeton durable, vérifier que l'accès
-fonctionne en identifiant le compte connecté — et le **dépôt d'une sauvegarde**
-dans le dossier de la destination (issue #11). Le listage et la suppression
-(#12) restent hors périmètre : les deux crochets échouent par une
-`DestinationError` qui renvoie à cette issue.
+fonctionne en identifiant le compte connecté —, le **dépôt d'une sauvegarde**
+dans le dossier de la destination (issue #11), et le **cycle de vie des
+sauvegardes déposées** : les lister page par page et supprimer celles que la
+rétention distante condamne (issue #12).
+
+La provenance d'un fichier ne se **lit** pas chez Dropbox : l'API v2 n'offre
+aucune métadonnée libre sur un fichier (cf. `docs/adr/0001`), de sorte que le
+marqueur `auto_backup` posé au dépôt ne survit pas au transfert. Le listage la
+reconstitue donc, dans cet ordre : le **registre persistant** du fork
+(`entrees_du_registre()`, alimenté à chaque dépôt réussi), puis, à défaut, la
+**convention de nommage** « <nom> [<slug>].tar » que le dépôt applique. Ce qui
+n'est reconnu ni par l'un ni par l'autre n'est jamais renvoyé, donc jamais
+supprimé : un fichier étranger au fork est invisible pour la rétention.
 
 Le dépôt suit les deux modes imposés par l'API : une requête unique
 (`files/upload`) en deçà de 150 Mo, une **session fragmentée**
@@ -34,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import unicodedata
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
@@ -50,11 +60,16 @@ from homeassistant.util import dt as dt_util
 from ...const import DEFAULT_UPLOAD_TIMEOUT
 from ..config_entry import async_entree_auto_backup, delai_de_televersement
 from ..destination import RemoteDestination
-from ..errors import DestinationAuthError, DestinationError, DestinationQuotaError
+from ..errors import (
+    DestinationAuthError,
+    DestinationError,
+    DestinationNotFoundError,
+    DestinationQuotaError,
+)
 from ..models import DestinationConfig, RemoteBackup
 from ..oauth import OAuth2ProviderSpec, async_session_de_la_destination
 from ..reauth import async_signaler_la_reauthentification
-from ..retention import marqueur_auto_backup
+from ..retention import EntreeRegistre, entrees_du_registre, marqueur_auto_backup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +83,13 @@ URL_AUTORISATION = "https://www.dropbox.com/oauth2/authorize"
 URL_JETON = "https://api.dropboxapi.com/oauth2/token"
 URL_COMPTE = "https://api.dropboxapi.com/2/users/get_current_account"
 URL_CREATION_DOSSIER = "https://api.dropboxapi.com/2/files/create_folder_v2"
+
+# Cycle de vie des sauvegardes déposées (issue #12). Le listage est paginé : la
+# première page vient de `list_folder`, les suivantes de `list_folder/continue`,
+# qui ne prend que le curseur rendu par la précédente.
+URL_LISTAGE = "https://api.dropboxapi.com/2/files/list_folder"
+URL_LISTAGE_SUITE = "https://api.dropboxapi.com/2/files/list_folder/continue"
+URL_SUPPRESSION = "https://api.dropboxapi.com/2/files/delete_v2"
 
 # Les transferts vivent sur un domaine distinct (`content.dropboxapi.com`) : le
 # corps de la requête y est le fichier lui-même, et les arguments voyagent dans
@@ -185,9 +207,10 @@ CARACTERES_REFUSES_PAR_DROPBOX = '/\\:?*<>"|'
 #
 # Aucun n'est exploitable en l'état — le nom de fichier forme un segment unique,
 # et le fournisseur ne le découpe pas — mais les laisser passer ferait mentir la
-# garantie que ce module annonce, et un découpage introduit plus tard (listage
-# #12, purge #9) hériterait d'un nom déjà trompeur. Ils sont écrits en séquences
-# d'échappement : `ruff` refuse un confusable écrit littéralement (RUF001).
+# garantie que ce module annonce, et le listage (#12) reconnaît désormais ses
+# propres dépôts **par leur nom** : un nom déjà trompeur y deviendrait une
+# provenance trompeuse. Ils sont écrits en séquences d'échappement : `ruff`
+# refuse un confusable écrit littéralement (RUF001).
 SOLIDUS_CONFUSABLES = (
     "\N{FRACTION SLASH}"
     "\N{DIVISION SLASH}"
@@ -222,20 +245,60 @@ CLE_EMPREINTE = "content_hash"
 # de voir écrit littéralement dans le code (RUF001).
 SEPARATEUR_NOM = "\N{EN DASH}"
 
-# Le listage et la suppression chez Dropbox arrivent avec l'issue #12. D'ici là,
-# les deux crochets échouent par une `DestinationError` — l'erreur typée du socle
-# — et non par `NotImplementedError` : depuis #9, la purge distante appelle
-# `async_list_backups()` à chaque sauvegarde dès qu'une rétention est configurée
-# sur la destination, et elle ne journalise proprement, sans trace d'appel, que
-# les erreurs typées. Le message dit à l'utilisateur ce qui ne se fera pas.
-MESSAGE_LISTAGE = (
-    "le listage des sauvegardes déposées chez Dropbox n'est pas encore implémenté "
-    "(issue #12) : la rétention distante de cette destination reste sans effet "
-    "jusque-là"
-)
-MESSAGE_SUPPRESSION = (
-    "la suppression d'une sauvegarde chez Dropbox n'est pas encore implémentée "
-    "(issue #12) : le fichier doit être retiré à la main depuis Dropbox"
+### Cycle de vie des sauvegardes déposées (issue #12) ###
+
+# Une entrée de `list_folder` porte sa nature dans `.tag` : un fichier, un
+# dossier, ou une suppression (`include_deleted`). Seuls les fichiers sont
+# regardés, et une entrée dont la nature n'est pas explicitement « file » est
+# écartée : on ne supprime pas ce qu'on n'a pas su identifier.
+CLE_TAG = ".tag"
+TAG_FICHIER = "file"
+
+# Nombre d'entrées demandées par page, et nombre maximum de pages parcourues.
+# Dropbox plafonne `limit` à 2000 et ne le garantit qu'approximatif ; 1000 est le
+# compromis retenu : peu de requêtes sur un dossier bien rempli, sans réponse
+# démesurée. Vingt pages bornent le parcours à 20 000 entrées, très au-delà de ce
+# qu'une rétention laisse vivre. Le dépassement **tronque** le listage avec un
+# avertissement, plutôt que de suivre indéfiniment un curseur qui ne se termine
+# pas : tronquer ne fait jamais supprimer autre chose, les sauvegardes non vues
+# étant simplement conservées une purge de plus.
+LIMITE_PAR_PAGE = 1000
+PAGES_MAX = 20
+
+# Garde-fou du listage **entier**, toutes pages confondues. Le délai par requête
+# (`DELAI_APPEL`) ne dit rien du nombre de requêtes : sur un dossier très rempli,
+# la pagination pourrait à elle seule dépasser le filet du coordinateur de purge
+# (`DEFAULT_PURGE_TIMEOUT`, 300 s), et c'est alors lui qui couperait — exactement
+# ce que le contrat de `RemoteDestination` demande d'éviter en bornant chaque
+# fournisseur. Cette borne reste donc en deçà, avec de la marge pour les
+# nouvelles tentatives d'une page refusée.
+DELAI_LISTAGE = 240
+
+# Fragment d'`error_summary` d'une cible absente : `path/not_found` au listage
+# (le dossier n'existe pas encore), `path_lookup/not_found` à la suppression (le
+# fichier a déjà disparu). Les deux sont des situations normales, pas des échecs.
+MOTIF_NON_TROUVE = "not_found"
+
+# Clé de métadonnée disant **comment** la provenance a été établie. Elle ne sert
+# ni au socle ni à la purge — le marqueur suffit à celle-ci — mais un journal de
+# diagnostic ou un futur capteur (#16) y lit d'un coup d'œil si une sauvegarde
+# est connue du registre ou seulement reconnue à son nom.
+CLE_PROVENANCE = "provenance"
+PROVENANCE_REGISTRE = "registre"
+PROVENANCE_NOM = "nom"
+
+# Convention de nommage posée par le dépôt (#11), et seul indice de provenance
+# qui reste quand le registre a été perdu : « <nom> [<slug>].tar ». Le motif est
+# **construit depuis les constantes du nommage** plutôt que recopié : un
+# changement de suffixe ou de borne ne peut donc pas désaccorder en silence le
+# listage du dépôt (un test tient le contrat de bout en bout). Le slug ne peut
+# pas contenir de crochet ouvrant, qui délimite le groupe, mais tolère le reste :
+# `_assaini()` ne filtre pas les crochets, et un slug qui en porterait doit
+# rester reconnaissable.
+# Le motif est confronté au nom entier (`fullmatch`) : un `$` accepterait un nom
+# terminé par un retour à la ligne, qui n'est pas celui que le dépôt a écrit.
+MOTIF_NOM_DEPOSE = re.compile(
+    rf".+ \[(?P<slug>[^\[]{{1,{LONGUEUR_MAX_SLUG}}})\]{re.escape(SUFFIXE_ARCHIVE)}"
 )
 
 
@@ -440,6 +503,32 @@ def nom_de_fichier_dropbox(
     disponible = LONGUEUR_MAX_NOM_FICHIER - len(suffixe)
     base = base[:disponible].strip(" .") or NOM_DE_REPLI[:disponible]
     return f"{base}{suffixe}"
+
+
+def slug_de_la_convention(nom: str) -> str | None:
+    """Slug lu dans un nom de fichier qui suit la convention du dépôt, ou `None`.
+
+    C'est le **dernier** indice de provenance côté Dropbox, où aucune métadonnée
+    ne survit au dépôt : un fichier absent du registre n'est reconnu que par la
+    forme de son nom, « <nom> [<slug>].tar » (cf. `nom_de_fichier_dropbox()`).
+
+    Un nom n'est pas une preuve, et cette reconnaissance est un **arbitrage**
+    assumé : sans elle, un dépôt qui a abouti chez Dropbox mais que le fork a
+    rapporté en échec — rejeu d'un `finish` répondant `path/conflict/file`, écart
+    de taille, délai dépassé après le commit — n'entre au registre d'aucune façon
+    et resterait chez l'utilisateur pour toujours, sans que rien ne puisse plus
+    le rattacher à l'intégration. Le risque inverse, prendre un fichier étranger
+    pour une sauvegarde, est borné : seul le dossier de la destination est
+    parcouru, jamais récursivement, c'est Auto Backup qui l'a créé, la
+    documentation demande de n'y rien déposer à la main, et le nom doit porter à
+    la fois le suffixe `.tar` et un slug entre crochets.
+    """
+    if not nom or len(nom) > LONGUEUR_MAX_NOM_FICHIER:
+        return None
+    correspondance = MOTIF_NOM_DEPOSE.fullmatch(nom)
+    if correspondance is None:
+        return None
+    return correspondance["slug"].strip() or None
 
 
 def _taille_annoncee(size: int | None) -> int | None:
@@ -710,26 +799,37 @@ class DropboxDestination(RemoteDestination):
             )
         return charge
 
-    def _verifier_le_statut(self, statut: int, corps: str) -> None:
-        """Traduit un statut HTTP Dropbox en erreur typée du socle.
+    def _erreur_d_acces(self, statut: int, resume: str) -> DestinationAuthError:
+        """Signale la destination à ré-autoriser et renvoie l'erreur typée.
 
         - `401` : jeton refusé (expiré côté Dropbox, ou accès révoqué) ;
         - `403` : portée manquante ou compte désactivé.
 
         Dans les deux cas une nouvelle autorisation est la seule issue : la
-        destination est donc signalée à ré-autoriser, ce qui crée le problème
-        Home Assistant correspondant — pour elle seule.
+        destination est signalée à ré-autoriser, ce qui crée le problème Home
+        Assistant correspondant — pour elle seule.
+
+        Le signalement et le message vivent **ici et nulle part ailleurs** :
+        l'accès peut être refusé à n'importe quel appel — identification du
+        compte, dépôt, listage, suppression —, et un seul de ces chemins qui
+        oublierait de créer le problème laisserait la destination échouer en
+        silence à chaque sauvegarde, sans jamais demander à l'utilisateur de
+        ré-autoriser.
         """
+        async_signaler_la_reauthentification(self._hass, self._config)
+        return DestinationAuthError(
+            f"Dropbox refuse l'accès de la destination « {self.name} » "
+            f"(HTTP {statut}) : {resume}"
+        )
+
+    def _verifier_le_statut(self, statut: int, corps: str) -> None:
+        """Traduit un statut HTTP Dropbox en erreur typée du socle."""
         if statut < 400:
             return
 
         resume = _resume_d_erreur(corps)
         if statut in (401, 403):
-            async_signaler_la_reauthentification(self._hass, self._config)
-            raise DestinationAuthError(
-                f"Dropbox refuse l'accès de la destination « {self.name} » "
-                f"(HTTP {statut}) : {resume}"
-            )
+            raise self._erreur_d_acces(statut, resume)
         if statut == 429:
             raise DestinationError(
                 f"Dropbox limite temporairement les appels de la destination "
@@ -1062,6 +1162,7 @@ class DropboxDestination(RemoteDestination):
         corps: Any = None,
         taille: int | None = None,
         rejouable: bool,
+        delai: float | None = None,
     ) -> _ReponseDropbox:
         """Poste une requête Dropbox, en la rejouant si l'échec est passager.
 
@@ -1072,6 +1173,12 @@ class DropboxDestination(RemoteDestination):
         `rejouable` dit si le corps de la requête peut être renvoyé : c'est vrai
         d'un fragment, qui est encore en mémoire, et faux d'un flux, qui ne se
         lit qu'une fois.
+
+        `delai` borne une requête. Laissé à `None`, il suit le réglage de
+        téléversement de l'utilisateur, qui est ce qu'il faut à une requête
+        transportant une sauvegarde. Les appels du cycle de vie (#12) le
+        précisent : ils n'échangent que du JSON, et n'ont aucune raison
+        d'attendre une demi-heure une réponse de quelques kilo-octets.
         """
         argument_json = (
             json.dumps(argument, ensure_ascii=True) if argument is not None else None
@@ -1084,7 +1191,7 @@ class DropboxDestination(RemoteDestination):
         # Le garde-fou est lu une fois pour toutes les tentatives de cette
         # requête : le relire entre deux tentatives ferait cohabiter deux bornes
         # différentes dans un même dépôt si l'utilisateur change le réglage.
-        delai = self._delai_de_requete
+        delai_effectif = self._delai_de_requete if delai is None else delai
         tentative = 1
         while True:
             jeton = await self._session.async_get_access_token()
@@ -1111,7 +1218,7 @@ class DropboxDestination(RemoteDestination):
                 url,
                 entetes=entetes,
                 corps=corps_json if corps_json is not None else corps,
-                delai=delai,
+                delai=delai_effectif,
                 timeout_client=TIMEOUT_TRANSFERT,
             )
             if (
@@ -1163,11 +1270,7 @@ class DropboxDestination(RemoteDestination):
                 f"fichier existant ({resume})"
             )
         if reponse.statut in (401, 403):
-            async_signaler_la_reauthentification(self._hass, self._config)
-            return DestinationAuthError(
-                f"Dropbox refuse l'accès de la destination « {self.name} » "
-                f"(HTTP {reponse.statut}) : {resume}"
-            )
+            return self._erreur_d_acces(reponse.statut, resume)
         if reponse.statut == 429:
             return DestinationError(
                 f"Dropbox limite les appels de la destination « {self.name} » et "
@@ -1188,29 +1291,277 @@ class DropboxDestination(RemoteDestination):
     ### Cycle de vie des sauvegardes : issue #12 ###
 
     async def async_list_backups(self) -> list[RemoteBackup]:
-        """Listage à venir avec l'issue #12 : échoue par une erreur typée.
+        """Liste les sauvegardes qu'Auto Backup a déposées dans le dossier.
 
-        La purge distante (#9) appelle cette méthode dès qu'une rétention est
-        configurée sur la destination, donc à chaque sauvegarde : `DestinationError`
-        lui suffit pour sauter la destination en une ligne de journal lisible, là
-        où `NotImplementedError` tombait dans sa clause de dernier recours et
-        journalisait une trace d'appel complète.
+        Le listage est **paginé** : `files/list_folder` rend une première page et
+        un curseur, `files/list_folder/continue` rend les suivantes tant que
+        `has_more` est vrai. Tout est parcouru — une rétention qui ne verrait que
+        la première page conserverait indéfiniment les sauvegardes des suivantes.
+
+        Ne sont renvoyées que les **sauvegardes du fork**, reconnues dans cet
+        ordre : inscrites au registre persistant de #9, ou, à défaut, portant un
+        nom qui suit la convention du dépôt (cf. `slug_de_la_convention()`). Tout
+        le reste — un fichier déposé par l'utilisateur, un sous-dossier, une
+        sauvegarde d'un autre outil — est écarté ici, donc invisible pour la
+        purge.
+
+        Chaque sauvegarde renvoyée porte le marqueur `auto_backup` dans ses
+        métadonnées. Il n'a pas été **relu** chez Dropbox, qui ne sait pas le
+        stocker : il atteste la provenance que ce listage vient d'établir, et
+        c'est lui que `retention.porte_le_marqueur()` reconnaît. Sans cela, un
+        fichier reconnu à son seul nom — l'orphelin d'un dépôt rapporté en échec
+        — serait listé pour rien, la purge n'acceptant que ce qui est inscrit au
+        registre ou marqué.
+
+        Un dossier encore absent (`path/not_found`) n'est pas une erreur : c'est
+        l'état normal d'une destination dont aucune sauvegarde n'est partie, et le
+        listage est alors vide.
         """
-        raise DestinationError(MESSAGE_LISTAGE)
+        inscrites = {
+            entree.remote_id: entree
+            for entree in entrees_du_registre(self._hass, self.destination_id)
+        }
+        sauvegardes: list[RemoteBackup] = []
+        pages = 0
+        try:
+            async with asyncio.timeout(DELAI_LISTAGE):
+                charge = await self._async_page_de_listage(
+                    URL_LISTAGE,
+                    {
+                        "path": _chemin_du_dossier(self.folder),
+                        # Le dossier de la destination, et lui seul : une
+                        # descente récursive ferait entrer dans le périmètre de
+                        # la purge tout ce que l'utilisateur range en dessous.
+                        "recursive": False,
+                        "limit": LIMITE_PAR_PAGE,
+                        "include_deleted": False,
+                        "include_media_info": False,
+                        "include_mounted_folders": False,
+                    },
+                )
+                while charge is not None:
+                    pages += 1
+                    sauvegardes.extend(self._sauvegardes_de_la_page(charge, inscrites))
+                    curseur = _texte(charge.get("cursor"))
+                    if not charge.get("has_more") or not curseur:
+                        break
+                    if pages >= PAGES_MAX:
+                        _LOGGER.warning(
+                            "Listage Dropbox de « %s » tronqué après %d pages : le "
+                            "dossier contient plus de %d entrées, certaines "
+                            "sauvegardes peuvent ne pas être traitées tant qu'il "
+                            "dépasse cette limite",
+                            self.name,
+                            pages,
+                            pages * LIMITE_PAR_PAGE,
+                        )
+                        break
+                    charge = await self._async_page_de_listage(
+                        URL_LISTAGE_SUITE, {"cursor": curseur}
+                    )
+        except TimeoutError as err:
+            raise DestinationError(
+                f"le listage des sauvegardes de la destination « {self.name} » "
+                f"n'a pas abouti dans le temps imparti ({DELAI_LISTAGE} s)"
+            ) from err
+
+        _LOGGER.debug(
+            "Listage Dropbox de « %s » : %d sauvegarde(s) reconnue(s) en %d page(s)",
+            self.name,
+            len(sauvegardes),
+            pages,
+        )
+        return sauvegardes
+
+    async def _async_page_de_listage(
+        self, url: str, charge: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        """Renvoie une page de listage, ou `None` si le dossier n'existe pas."""
+        reponse = await self._async_appel_json(url, charge)
+        if reponse.statut >= 400:
+            if MOTIF_NON_TROUVE in _motif_d_erreur(reponse.corps):
+                _LOGGER.debug(
+                    "Dossier Dropbox de la destination « %s » encore absent : "
+                    "aucune sauvegarde à lister",
+                    self.name,
+                )
+                return None
+            raise self._erreur_de_cycle_de_vie(
+                reponse, "le listage des sauvegardes déposées"
+            )
+        return self._charge_de_la_reponse(reponse.corps)
+
+    def _sauvegardes_de_la_page(
+        self, charge: Mapping[str, Any], inscrites: Mapping[str, EntreeRegistre]
+    ) -> list[RemoteBackup]:
+        """Sauvegardes reconnues parmi les entrées d'une page de listage."""
+        entrees = charge.get("entries")
+        if not isinstance(entrees, list):
+            raise DestinationError(
+                f"réponse Dropbox inexploitable pour la destination "
+                f"« {self.name} » : le listage ne contient aucune liste d'entrées"
+            )
+        reconnues: list[RemoteBackup] = []
+        for entree in entrees:
+            if not isinstance(entree, Mapping):
+                continue
+            sauvegarde = self._sauvegarde_listee(entree, inscrites)
+            if sauvegarde is not None:
+                reconnues.append(sauvegarde)
+        return reconnues
+
+    def _sauvegarde_listee(
+        self, entree: Mapping[str, Any], inscrites: Mapping[str, EntreeRegistre]
+    ) -> RemoteBackup | None:
+        """Sauvegarde distante décrite par cette entrée, `None` si elle est étrangère.
+
+        Une entrée est écartée si elle n'est pas un fichier, si elle n'a pas
+        d'identifiant ou de nom exploitables, ou si rien ne la rattache au fork.
+        Écarter au lieu d'échouer est délibéré : une entrée inattendue dans un
+        dossier ne doit pas empêcher la rétention de faire son travail sur les
+        autres, et une entrée qu'on n'a pas su identifier ne doit surtout pas
+        devenir supprimable.
+        """
+        nom = _texte(entree.get("name"))
+        if _texte(entree.get(CLE_TAG)) != TAG_FICHIER:
+            _LOGGER.debug(
+                "Entrée Dropbox « %s » ignorée : ce n'est pas un fichier", nom
+            )
+            return None
+        identifiant = _texte(entree.get("id"))
+        if not identifiant or not nom:
+            _LOGGER.debug(
+                "Entrée Dropbox ignorée : identifiant ou nom inexploitable (%r)",
+                entree.get("id"),
+            )
+            return None
+
+        inscrite = inscrites.get(identifiant)
+        slug_du_nom = slug_de_la_convention(nom)
+        if inscrite is None and slug_du_nom is None:
+            _LOGGER.debug(
+                "Fichier Dropbox « %s » ignoré : rien ne le rattache à Auto Backup",
+                nom,
+            )
+            return None
+
+        slug = inscrite.slug if inscrite is not None and inscrite.slug else slug_du_nom
+        metadonnees: dict[str, Any] = {
+            CLE_SLUG: slug,
+            CLE_PROVENANCE: (
+                PROVENANCE_REGISTRE if inscrite is not None else PROVENANCE_NOM
+            ),
+        }
+        # Le marqueur est posé en dernier : c'est la rétention qui en détient la
+        # clé, et elle doit primer sur tout ce qui précède.
+        metadonnees.update(marqueur_auto_backup())
+        empreinte = _texte(entree.get(CLE_EMPREINTE))
+        if empreinte:
+            metadonnees[CLE_EMPREINTE] = empreinte
+        return RemoteBackup(
+            remote_id=identifiant,
+            name=nom,
+            slug=slug,
+            size=_entier(entree.get("size")),
+            created_at=_horodatage(entree.get("server_modified")),
+            path=_texte(entree.get("path_display")) or None,
+            metadata=metadonnees,
+        )
 
     async def async_delete_backup(self, remote_id: str) -> None:
-        """Suppression à venir avec l'issue #12 : échoue par une erreur typée.
+        """Supprime la sauvegarde distante `remote_id` du compte Dropbox.
 
-        Jamais atteinte en fonctionnement — le listage échoue avant — mais elle
-        répond de la même façon : l'appelant n'a pas à connaître l'état
-        d'avancement du fournisseur pour traiter son refus.
+        `files/delete_v2` accepte l'identifiant opaque (`id:...`) là où il attend
+        un chemin : c'est ce que le listage et le dépôt rapportent tous les deux,
+        et il reste valide si le fichier a été déplacé ou renommé entre-temps.
+
+        L'opération est **idempotente** du point de vue de l'appelant : un fichier
+        déjà absent (`path_lookup/not_found`) lève `DestinationNotFoundError`, que
+        la purge distante traite comme « déjà purgé » — elle retire alors l'entrée
+        du registre et poursuit. C'est aussi ce qui rend la nouvelle tentative
+        inoffensive : une suppression rejouée après une réponse perdue retombe
+        exactement sur ce cas.
         """
-        raise DestinationError(MESSAGE_SUPPRESSION)
+        identifiant = _texte(remote_id)
+        if not identifiant:
+            raise DestinationError(
+                f"suppression impossible pour la destination « {self.name} » : "
+                f"aucun identifiant de sauvegarde distante n'a été fourni"
+            )
+
+        reponse = await self._async_appel_json(URL_SUPPRESSION, {"path": identifiant})
+        if reponse.statut >= 400:
+            if MOTIF_NON_TROUVE in _motif_d_erreur(reponse.corps):
+                raise DestinationNotFoundError(
+                    f"la sauvegarde distante « {identifiant} » n'existe plus chez "
+                    f"Dropbox pour la destination « {self.name} »"
+                )
+            raise self._erreur_de_cycle_de_vie(
+                reponse, f"la suppression de la sauvegarde « {identifiant} »"
+            )
+        _LOGGER.debug(
+            "Sauvegarde distante « %s » supprimée chez Dropbox pour « %s »",
+            identifiant,
+            self.name,
+        )
+
+    async def _async_appel_json(
+        self, url: str, charge: Mapping[str, Any]
+    ) -> _ReponseDropbox:
+        """Poste un appel RPC JSON du cycle de vie et renvoie sa réponse brute.
+
+        Le délai est celui d'un appel d'API (`DELAI_APPEL`), et non le budget de
+        téléversement : ces appels n'échangent que du JSON.
+
+        La requête est **rejouable** : ni le listage ni la suppression ne
+        transportent de flux, et les deux sont idempotents — rejouer un listage
+        refusé par une limitation de débit ne coûte qu'une requête, et rejouer une
+        suppression dont la réponse s'est perdue retombe sur « déjà absente ».
+
+        Le statut n'est pas interprété ici : l'appelant seul sait si une cible
+        absente est une erreur ou la situation normale qu'il attendait.
+        """
+        return await self._async_poster(
+            url, charge_json=charge, rejouable=True, delai=DELAI_APPEL
+        )
+
+    def _erreur_de_cycle_de_vie(
+        self, reponse: _ReponseDropbox, action: str
+    ) -> DestinationError:
+        """Traduit un refus de Dropbox sur le listage ou la suppression.
+
+        Le dépôt garde son propre traducteur (`_erreur_de_televersement`) : ses
+        refus métier — espace saturé, nom déjà pris — n'ont pas d'équivalent ici,
+        et ses messages parlent d'un transfert en cours. Ce qui compte pour la
+        rétention est commun aux deux : un accès refusé reste **typé**, donc
+        déclenche la ré-autorisation au lieu de se perdre dans une erreur
+        générique que la purge journaliserait comme un incident quelconque.
+        """
+        resume = _resume_d_erreur(reponse.corps)
+        if reponse.statut in (401, 403):
+            return self._erreur_d_acces(reponse.statut, resume)
+        if reponse.statut == 429:
+            return DestinationError(
+                f"Dropbox limite les appels de la destination « {self.name} » et a "
+                f"refusé {action} après {TENTATIVES_MAX} tentatives : {resume}"
+            )
+        if 500 <= reponse.statut < 600:
+            return DestinationError(
+                f"Dropbox est en panne passagère (HTTP {reponse.statut}) et a "
+                f"refusé {action} pour la destination « {self.name} » après "
+                f"{TENTATIVES_MAX} tentatives : {resume}"
+            )
+        return DestinationError(
+            f"Dropbox a refusé {action} pour la destination « {self.name} » "
+            f"(HTTP {reponse.statut}) : {resume}"
+        )
 
 
 __all__ = [
     "CLE_ACCOUNT_ID",
     "LIBELLE_DROPBOX",
+    "LIMITE_PAR_PAGE",
+    "PAGES_MAX",
     "PORTEES",
     "PROVIDER_DROPBOX",
     "SEUIL_ENVOI_SIMPLE",
@@ -1221,10 +1572,14 @@ __all__ = [
     "URL_CREATION_DOSSIER",
     "URL_ENVOI",
     "URL_JETON",
+    "URL_LISTAGE",
+    "URL_LISTAGE_SUITE",
     "URL_SESSION_AJOUT",
     "URL_SESSION_DEBUT",
     "URL_SESSION_FIN",
+    "URL_SUPPRESSION",
     "CompteDropbox",
     "DropboxDestination",
     "nom_de_fichier_dropbox",
+    "slug_de_la_convention",
 ]
