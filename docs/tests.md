@@ -58,6 +58,8 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_provider_dropbox_listage.py` | Listage paginé, provenance (registre, convention de nommage, fichier étranger), suppression idempotente, erreurs d'authentification (typées `DestinationAuthError` au listage et à la suppression, avec signalement de ré-authentification), notifications de ré-authentification lors d'un refus d'accès pendant une purge (#17), purge Dropbox de bout en bout par le service `purge`. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/test_provider_google_drive_upload.py` | Téléversement Google Drive : dossier cible, envoi resumable par fragments, reprises, erreurs typées, journaux et parcours complet depuis le service. |
+| `tests/test_provider_google_drive_listage.py` | Listage et suppression Google Drive : requête filtrée, pagination et sa borne, fichiers écartés, suppression idempotente, erreurs d'authentification, purge de bout en bout par le service `purge`. |
+| `tests/test_entites_destinations.py` | Entités d'état d'une destination : création, succès, échec, masquage des secrets, compteur, restauration après redémarrage, ajout et suppression à chaud. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
@@ -103,8 +105,17 @@ Le fichier `tests/test_entities.py` valide que la liste complète des entités c
 l'intégration correspond à celle attendue. Celle-ci est définie en constante `ENTITES_ATTENDUES`
 au début du fichier, organisée par domaine de plateforme (`sensor`, `binary_sensor`, `button`).
 
-Quand des entités sont ajoutées ou supprimées à l'intégration, cette liste doit être mise à jour
-en conséquence, sinon les tests échoueront. Il en est de même pour l'ordre ou l'identifiant
+Depuis l'issue #16, cette liste est **déclinée en deux états**, car le fork ajoute des entités
+pour chaque destination distante configurée :
+
+- **sans destination**, seules les entités upstream d'`ENTITES_ATTENDUES` existent — c'est ce
+  que vérifie `test_les_entites_upstream_sont_creees` ;
+- **avec une destination**, trois entités s'y ajoutent, dont les suffixes d'identifiant unique
+  sont listés dans `SUFFIXES_PAR_DESTINATION` et l'identifiant complet reconstruit par
+  `entites_attendues_avec_destination()` (`<entry_id>_<destination_id>_<suffixe>`).
+
+Quand des entités sont ajoutées ou supprimées à l'intégration, ces listes doivent être mises à
+jour en conséquence, sinon les tests échoueront. Il en est de même pour l'ordre ou l'identifiant
 unique (`unique_id`) de chaque entité.
 
 ## Tester une destination distante
@@ -378,6 +389,87 @@ relisant `entry.options` à ce moment précis. La réponse se donne par `{"confi
 `{"confirmer": False}` — le refus doit produire l'abandon `changement_de_compte_annule` et
 laisser les options à l'identique.
 
+## Tester les entités d'une destination
+
+`tests/test_entites_destinations.py` couvre l'issue #16 : les deux capteurs et le capteur
+binaire créés pour chaque destination configurée. Deux fixtures **locales au fichier** montent
+l'intégration avec une puis deux destinations factices
+(`entree_avec_destination`, `entree_avec_deux_destinations`) ; elles ne sont pas dans
+`conftest.py`, car elles n'ont d'intérêt que pour ces entités.
+
+Aucun téléversement réel n'est joué : les événements sont émis **directement sur le bus**,
+exactement comme le font le coordinateur de téléversement (#8) et la rétention distante (#9).
+
+```python
+_emettre_echec(hass, "destination_test", erreur=f"401 Bearer {FAUX_JETON}")
+await hass.async_block_till_done()
+
+probleme = _etat(hass, entree, Platform.BINARY_SENSOR, SUFFIXE_PROBLEME)
+assert probleme.state == STATE_ON
+assert FAUX_JETON not in probleme.attributes[ATTR_LAST_ERROR]
+```
+
+Sept points méritent l'attention en écrivant un nouveau test :
+
+1. **`await hass.async_block_till_done()` après chaque émission.** Le coordinateur prévient les
+   entités par un signal de dispatcher ; sans cette attente, l'état lu est celui d'avant
+   l'événement.
+2. **Une entité se retrouve par son identifiant unique**, jamais par un `entity_id` deviné :
+   `identifiant_unique(entry_id, destination_id, suffixe)` puis
+   `er.async_get(hass).async_get_entity_id(...)`, ce qu'enveloppent les aides `_entity_id()` et
+   `_etat()` du fichier.
+3. **L'ajout et la suppression à chaud passent par `async_persist_destinations()`**, qui réécrit
+   les options de l'entrée : c'est l'écouteur d'options qui crée ou retire les entités, sans
+   rechargement de l'intégration. Une destination supprimée doit disparaître du **registre**,
+   pas seulement de la machine à états.
+4. **Le redémarrage se simule par `hass.config_entries.async_reload()`** : `RestoreSensor` et
+   `RestoreEntity` retrouvent le dernier état publié, l'horodatage du dernier succès, le
+   compteur et les attributs d'erreur compris.
+5. **Aucune valeur réelle dans les tests de masquage.** Les jetons employés sont les constantes
+   inventées `FAUX_JETON`, `FAUX_JETON_GOOGLE`, `FAUX_RAFRAICHISSEMENT_GOOGLE`,
+   `FAUX_UPLOAD_ID` et `FAUX_JETON_BASE64` ; un test
+   (`test_le_message_d_erreur_ne_laisse_pas_fuir_de_jeton`) vérifie qu'aucun ne ressort dans
+   l'état ni dans ses attributs. `assainir_le_message()` délègue au module commun
+   `destinations/masquage.py` et reste éprouvée sur chaque forme (`test_assainir_le_message_*`) :
+   clé et valeur, en-tête `Bearer`, jeton nu, URL de session reprenable, adresse électronique.
+   `test_last_error_suit_le_masquage_commun` vérifie, par l'événement d'échec, que `last_error`
+   égale `masquer()` sur les formes que l'ancienne copie locale laissait fuir (`accessToken: …`,
+   chemins `/backup/…` et `/config/…`, `tokens=[…]`) ;
+   `test_l_erreur_restauree_avec_un_chemin_ou_une_cle_sensible_est_reassainie` fait de même à la
+   restauration. Un test symétrique vérifie que le français ordinaire n'est **pas** masqué
+   (« token expiré ») et qu'une URL reste lisible :
+   un attribut affiché à l'utilisateur doit rester diagnosticable.
+6. **Un ordre de montage déterministe se force en montant l'entité à la main.** Home Assistant
+   ajoute les entités d'une destination *après* que le coordinateur a commencé à traiter ses
+   événements ; un test de bout en bout laisse la boucle d'événements décider lequel passe en
+   premier, et ne prouverait donc rien. `_preparer_une_entite_montee_apres_coup()` construit
+   l'entité, lui donne un `entity_id`, inscrit son état à restaurer, puis le test émet ses
+   événements avant d'appeler lui-même `async_added_to_hass()`. C'est ainsi que sont éprouvés
+   les deux marqueurs d'état (une erreur effacée par un succès, un compteur vidé par une purge)
+   qui ne doivent pas être écrasés par la valeur restaurée.
+7. **Le cache de restauration ne se remplace pas en cours de test.**
+   `mock_restore_cache()` substitue tout le cache, et les entités déjà montées ne s'y
+   retrouvent plus au démontage (`KeyError` bruyant). `_inscrire_au_cache_de_restauration()`
+   ajoute au contraire un état au cache en place ; son argument `donnees` porte le
+   `native_value` que `RestoreSensor` relit, que l'état seul ne contient pas.
+
+Le nombre de sauvegardes distantes vient du **registre persistant** de la rétention distante
+(#9), lu dans `hass.data[DATA_REMOTE_BACKUPS]` par `entrees(destination_id)`. Depuis la fusion
+de #9, ce registre est monté par l'entrée elle-même : il fait donc autorité **par défaut** dans
+tous les tests, et le compteur interne n'est plus qu'un repli. D'où deux précautions :
+
+- `test_le_registre_reel_de_la_retention_alimente_le_compteur` monte le
+  `RegistreSauvegardesDistantes` réel et y inscrit ses entrées : c'est lui qui prouve le contrat
+  (`entrees(destination_id)`), là où `RegistreFactice` ne sert plus qu'au cas du registre
+  défaillant, que le registre réel ne sait pas produire.
+- Les tests du **repli** passent par la fixture `entree_sans_registre_distant`, qui retire la clé
+  de `hass.data` : sans elle, ils mesureraient le registre et non le compteur.
+
+Conséquence de sémantique, à garder en tête en écrivant un test : le capteur compte des
+**fichiers présents chez le fournisseur**, pas des téléversements réussis. Deux succès portant
+le même `remote_id` désignent la même sauvegarde et ne font qu'une entrée ; `_emettre_succes()`
+prend donc un argument `remote_id` pour les distinguer quand un test veut voir le compte monter.
+
 ## Tester un fournisseur réel
 
 Deux fournisseurs sont livrés : Dropbox
@@ -563,12 +655,57 @@ Le fichier se termine par deux **parcours complets**, qui suivent les règles de
 - appel de `auto_backup.backup` avec `upload_to`, création de sauvegarde simulée, puis vérification
   que l'événement `auto_backup.upload_successful` porte l'identifiant distant renvoyé par Drive ;
 - le même parcours avec une **rétention configurée** sur la destination, qui déclenche la purge
-  distante (#9) après le téléversement. Le listage Google Drive n'existant pas avant #15, cette
-  purge échoue nécessairement : le test vérifie que l'échec est journalisé **sans trace d'appel**
-  (`"Traceback" not in caplog.text`, et aucun enregistrement porteur d'`exc_info`) et que le
-  message renvoie à l'issue. C'est un test de **bruit de journal** : sans lui, remplacer la
-  `DestinationError` des deux méthodes différées par une `NotImplementedError` repasserait
-  inaperçu, alors qu'il en résulterait une trace d'appel à chaque sauvegarde.
+  distante (#9) après le téléversement. Depuis #15, cette purge aboutit : elle liste le dossier, n'y
+  trouve que la sauvegarde qui vient d'être déposée et ne supprime rien. Le test vérifie qu'elle y
+  arrive **sans un mot** au niveau `ERROR`. C'est un test de **bruit de journal** : ce chemin est
+  parcouru après chaque sauvegarde, une ligne d'erreur ou une trace d'appel qui s'y glisserait
+  reviendrait indéfiniment. Le simulateur de #14 sait pour cela répondre au listage — la requête `q`
+  distingue les deux usages de `files.list` — sans reprendre ce que le fichier de #15 éprouve en
+  détail.
+
+## Tester le listage et la suppression sur Google Drive
+
+`tests/test_provider_google_drive_listage.py` (issue #15) éprouve l'autre moitié du cycle de vie :
+lister ce qui a été déposé, et le supprimer. Son simulateur `_FauxDrive` répond aux trois points
+d'accès utilisés — recherche de dossier, `files.list`, `files.delete` — et pagine ses réponses comme
+Google le fait, avec un `nextPageToken` tant qu'il reste des fichiers.
+
+Le point à comprendre avant d'y ajouter un test : **le simulateur n'applique pas la requête `q`
+qu'il reçoit**. Il renvoie tout ce qu'on lui a donné, fichiers étrangers, fichiers à la corbeille et
+dossiers compris. Ce n'est pas un raccourci, c'est la façon d'éprouver la bonne chose : le filtre
+envoyé à Google est une optimisation, et c'est la vérification que le fournisseur **refait sur
+chaque fichier reçu** qui garantit qu'un document de l'utilisateur ne sera jamais purgé. Un test
+séparé, lui, vérifie que la requête envoyée porte bien ses quatre conditions.
+
+Trois aides rendent ces tests courts :
+
+1. **`fichier_drive()`** construit un fichier tel que `files.list` le renvoie. Ses paramètres sont
+   autant d'anomalies à déclarer : `marqueur=None` pour un fichier déposé par l'utilisateur,
+   `corbeille=True`, `mime=MIME_DOSSIER` pour le dossier d'une autre destination, `taille=None` ou
+   `cree_le=None` pour un Drive avare en métadonnées. `jours=30` date le fichier relativement à
+   maintenant : aucun test ne dépend de l'horloge du jour.
+2. **Les anomalies du réseau se déclarent à la construction du simulateur** : `pannes_listage` est
+   une liste de `(statut, corps)` consommée avant les réponses normales, `pannes_suppression` un
+   dictionnaire `identifiant -> (statut, corps)`, et `jeton_sans_fin=True` fait renvoyer un
+   `nextPageToken` indéfiniment, ce qui éprouve la borne `PAGES_MAX`.
+3. **`par_page`** découpe les réponses indépendamment du `pageSize` demandé : trois pages se testent
+   avec cinq fichiers et `par_page=2`, sans en fabriquer cent.
+
+Deux points d'attention :
+
+- **la purge automatique suit un dépôt.** `auto_purge` est actif par défaut dans `_entree()` : un
+  test qui garnit le registre par un événement `auto_backup.upload_successful` déclenche aussitôt
+  une purge. Le désactiver (`options={CONF_AUTO_PURGE: False}`) est ce qui permet d'observer ensuite
+  le seul appel du service `auto_backup.purge` ;
+- **les fixtures viennent du fichier de #14.** Configuration de la destination (`config_google`),
+  jetons, corps d'erreur Google et la fixture `delais` sont importés de
+  `test_provider_google_drive_upload` plutôt que recopiés, comme
+  `test_provider_dropbox_upload_cas_limites` le fait pour Dropbox.
+
+La purge de bout en bout passe par le **service** `auto_backup.purge`, et la provenance des
+sauvegardes y vient du **marqueur relu chez Drive**, sans aucune entrée au registre : c'est
+l'exigence ajoutée par la validation métier de #9, et la seule façon de prouver qu'une sauvegarde
+déposée par une instance ayant perdu son registre reste purgeable.
 
 ## Compatibilité Python
 
@@ -650,11 +787,11 @@ autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression
 téléversement après création (lecture en flux, événements, échecs, délai maximum), la connexion
 d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
 la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant), le
-dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14),
-enfin les notifications d'échec et de ré-authentification, le masquage des secrets et la
-confirmation d'un changement de compte (issue #17). Ils couvrent aussi le **cycle de vie
-complet** d'une sauvegarde chez Dropbox : listage paginé, reconnaissance de sa provenance,
-suppression et purge de bout en bout (issue #12). Le listage et la suppression chez Google Drive
-restent à l'issue #15.
+dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14), le
+**cycle de vie complet** chez les deux — listage, reconnaissance de la provenance, suppression et
+purge de bout en bout par le service `auto_backup.purge`, Dropbox (issue #12) comme Google Drive
+(issue #15) —, les notifications d'échec et de ré-authentification, le masquage des secrets et la
+confirmation d'un changement de compte (issue #17), enfin les entités d'état exposées par chaque
+destination (succès, problème, compteur, restauration, issue #16).
 
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

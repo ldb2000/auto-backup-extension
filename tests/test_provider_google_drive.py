@@ -61,6 +61,7 @@ from custom_components.auto_backup.destinations import (
     provider_label,
     spec_oauth_du_fournisseur,
 )
+from custom_components.auto_backup.destinations.destination import RemoteDestination
 from custom_components.auto_backup.destinations.oauth import (
     implementation_de_la_destination,
 )
@@ -887,41 +888,26 @@ async def test_le_compte_est_lu_meme_quand_drive_repond_partiellement(
     assert compte == CompteGoogle(nom=None, email=None)
 
 
-### Opérations différées ###
+### Contrat du socle ###
 
 
 @pytest.mark.parametrize(
-    ("operation", "arguments", "issue"),
-    [
-        ("async_list_backups", (), "#15"),
-        ("async_delete_backup", ("identifiant-distant",), "#15"),
-    ],
+    "operation",
+    ["async_upload", "async_list_backups", "async_delete_backup"],
 )
-async def test_les_operations_de_sauvegarde_viennent_ensuite(
-    hass: HomeAssistant,
-    entree_google: MockConfigEntry,
-    operation: str,
-    arguments: tuple,
-    issue: str,
-) -> None:
-    """Hors périmètre des issues #13 et #14 : le contrat est déclaré, pas tenu.
+def test_aucune_operation_du_contrat_n_est_plus_differee(operation: str) -> None:
+    """Depuis #15, le fournisseur tient tout le contrat de `RemoteDestination`.
 
-    L'erreur levée est une `DestinationError` et **non** une
-    `NotImplementedError` : la rétention distante (#9) appelle
-    `async_list_backups()` après chaque téléversement réussi dès qu'une rétention
-    est configurée, et une erreur non typée y serait journalisée en `ERROR` avec
-    une trace d'appel à chaque sauvegarde. Le message renvoie à l'issue qui
-    livrera l'implémentation.
+    #13 déclarait les trois opérations sans les tenir, #14 a écrit le
+    téléversement, #15 le listage et la suppression. Le test l'affirme
+    structurellement — la méthode est bien redéfinie par le fournisseur, et sa
+    documentation ne renvoie plus une opération à une issue suivante — plutôt que
+    de rejouer ici ce que les fichiers de tests dédiés éprouvent en détail.
     """
-    destination = _destination(hass)
-    appel = getattr(destination, operation)
+    methode = getattr(GoogleDriveDestination, operation)
 
-    with pytest.raises(DestinationError) as erreur:
-        await appel(*arguments)
-
-    assert not isinstance(erreur.value, NotImplementedError)
-    assert issue in str(erreur.value)
-    assert "pas encore" in str(erreur.value)
+    assert methode is not getattr(RemoteDestination, operation)
+    assert "pas encore" not in (methode.__doc__ or "")
 
 
 async def test_le_televersement_accepte_la_forme_du_coordinateur(

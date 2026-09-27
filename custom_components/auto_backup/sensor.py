@@ -25,6 +25,9 @@ from .const import (
 )
 from .helpers import get_device_info
 from .manager import AutoBackup
+from .destinations.entities import (  # entités des destinations distantes (fork)
+    async_setup_destination_sensors,
+)
 
 
 async def async_setup_entry(
@@ -42,6 +45,8 @@ async def async_setup_entry(
             AutoBackupNextExpirySensor(entry, auto_backup),
         ]
     )
+    # Fork (#16) : une entité d'état par destination distante configurée.
+    await async_setup_destination_sensors(hass, entry, async_add_entities)
 
 
 class AutoBackupBaseSensor(SensorEntity):

@@ -61,6 +61,7 @@ from custom_components.auto_backup.const import (
     DATA_AUTO_BACKUP,
     DATA_DESTINATIONS,
     DOMAIN,
+    EVENT_REMOTE_PURGE,
     EVENT_UPLOAD_FAILED,
     EVENT_UPLOAD_SUCCESSFUL,
     SERVICE_BACKUP,
@@ -83,6 +84,7 @@ from custom_components.auto_backup.destinations.providers.google_drive import (
 from custom_components.auto_backup.destinations.providers.google_drive_upload import (
     MARQUEUR_AUTO_BACKUP,
     MIME_DOSSIER,
+    MIME_SAUVEGARDE,
     OCTETS_MAX_PROPRIETE,
     PROPRIETE_NOM,
     PROPRIETE_SLUG,
@@ -295,10 +297,28 @@ class _FauxDrive:
     async def _rechercher(
         self, methode: str, url: URL, donnees: Any
     ) -> AiohttpClientMockResponse:
-        """`files.list` : ne renvoie que les dossiers créés par l'intégration."""
+        """`files.list` : dossiers créés par l'intégration, ou fichier déposé.
+
+        Le même point d'accès sert deux usages : la recherche d'un sous-dossier
+        (téléversement, #14) et le listage des sauvegardes du dossier cible
+        (#15). La requête `q` les distingue — seule celle du listage filtre sur
+        `appProperties`. Le détail du listage est éprouvé par
+        `tests/test_provider_google_drive_listage.py` ; ici, il ne sert qu'à
+        laisser la purge distante aller jusqu'au bout après un téléversement.
+        """
         if self.pannes_recherche:
             return self._panne(self.pannes_recherche.pop(0))
         requete = url.query["q"]
+        if "appProperties has" in requete:
+            deposes = (
+                [
+                    self.metadonnees_du_fichier()
+                    | {"mimeType": MIME_SAUVEGARDE, "trashed": False}
+                ]
+                if self.sessions
+                else []
+            )
+            return self._reponse(200, corps={"files": deposes})
         nom = _NOM_RECHERCHE.search(requete).group(1)
         parent = _PARENT_RECHERCHE.search(requete).group(1)
         self.recherches.append((parent, nom))
@@ -1447,27 +1467,29 @@ async def test_le_service_de_sauvegarde_televerse_vers_google_drive(
     assert faux.sessions[0]["appProperties"]["slug"] == SLUG
 
 
-async def test_la_purge_d_une_destination_drive_ne_journalise_aucune_trace(
+async def test_la_purge_qui_suit_un_televersement_se_fait_en_silence(
     hass: HomeAssistant,
     integration_backup: None,
     sauvegarde_locale: Path,
     aioclient_mock: AiohttpClientMocker,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Le listage manquant (#15) est une erreur attendue, pas un défaut à tracer.
+    """Dès qu'une rétention existe, chaque dépôt réussi est suivi d'une purge (#9).
 
-    Dès qu'une rétention est configurée sur la destination, la purge distante
-    (#9) appelle `async_list_backups()` après **chaque** téléversement réussi.
-    Tant que #15 ne l'a pas implémenté, cet appel échoue nécessairement : il doit
-    le faire par une `DestinationError`, que le coordinateur de purge attend et
-    journalise en une ligne lisible. Une `NotImplementedError` y serait rattrapée
-    comme erreur inattendue et journalisée avec une trace d'appel à chaque
-    sauvegarde — un bruit de journal permanent pour une limite connue.
+    Depuis #15, cette purge aboutit : elle liste le dossier, n'y trouve que la
+    sauvegarde qui vient d'être déposée — la rétention en garde une — et ne
+    supprime rien. Le test vérifie qu'elle y arrive **sans un mot** dans le
+    journal au niveau `ERROR` et sans trace d'appel : c'est un test de bruit de
+    journal, le chemin étant parcouru après chaque sauvegarde. Le détail du
+    listage et de la suppression est éprouvé par
+    `tests/test_provider_google_drive_listage.py`.
     """
     await _entree(hass, **{CONF_RETENTION_COUNT: 1})
     _simuler_la_creation(hass, sauvegarde_locale)
     faux = _FauxDrive(aioclient_mock)
     succes = async_capture_events(hass, EVENT_UPLOAD_SUCCESSFUL)
+    purges = async_capture_events(hass, EVENT_REMOTE_PURGE)
+    caplog.clear()
 
     with caplog.at_level(logging.ERROR):
         await hass.services.async_call(
@@ -1478,19 +1500,18 @@ async def test_la_purge_d_une_destination_drive_ne_journalise_aucune_trace(
         )
         await hass.async_block_till_done(wait_background_tasks=True)
 
-    # Le téléversement aboutit : seule la purge qui le suit ne peut rien faire.
     assert len(succes) == 1
     assert bytes(faux.recu) == CONTENU
 
-    # L'échec du listage est expliqué en une ligne, et renvoie à l'issue.
-    assert "listage impossible" in caplog.text
-    assert "n'est pas encore implémenté" in caplog.text
-    assert "#15" in caplog.text
+    # Le dossier a bien été listé, et la seule sauvegarde trouvée est conservée.
+    listages = [
+        url
+        for methode, url, _, _ in aioclient_mock.mock_calls
+        if methode.lower() == "get"
+        and "appProperties has" in (url.query.get("q") or "")
+    ]
+    assert len(listages) == 1
+    assert purges == []
 
-    # Aucune trace d'appel : c'est ce que le journal ne doit plus contenir.
-    assert "Traceback" not in caplog.text
-    assert [
-        enregistrement.message
-        for enregistrement in caplog.records
-        if enregistrement.exc_info is not None
-    ] == []
+    # Ni erreur ni trace d'appel : le journal reste muet sur ce chemin.
+    assert [enregistrement.message for enregistrement in caplog.records] == []

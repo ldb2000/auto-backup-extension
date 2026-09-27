@@ -1,4 +1,4 @@
-"""Documentation de connexion à Google Drive (critère 6 de l'issue #13).
+"""Documentation de Google Drive (critère 6 de #13, critère 6 de #15).
 
 Critère : « GIVEN `docs/destinations/google-drive.md` WHEN je le lis THEN la
 création du projet Google Cloud, l'activation de l'API Drive, l'écran de
@@ -10,6 +10,13 @@ chaque étape exigée par le critère y figure, en français, et que la portée
 OAuth2 et l'URI de redirection qu'il documente restent cohérentes avec ce que
 le fournisseur `google_drive` déclare réellement dans le code (aucune valeur
 divergente ou réelle n'est employée).
+
+L'issue #15 y ajoute son critère 6 : le comportement de la suppression —
+définitive ou mise à la corbeille — doit être **explicitement** documenté. Un
+utilisateur qui règle une rétention doit savoir, avant de valider, que les
+sauvegardes purgées ne sont pas récupérables. Le test ne vérifie pas seulement
+la présence du mot : il vérifie que le guide dit lequel des deux comportements
+s'applique, et que ce comportement est bien celui du code.
 """
 
 from __future__ import annotations
@@ -123,3 +130,58 @@ def test_le_guide_est_redige_en_francais() -> None:
         "vous créez votre propre application Google",
     ):
         assert tournure in texte
+
+
+### Critère 6 de l'issue #15 : le comportement de la suppression ###
+
+
+def test_le_guide_dit_explicitement_que_la_suppression_est_definitive() -> None:
+    """Critère 6 de #15 : la purge ne passe pas par la corbeille, et le dit.
+
+    C'est l'information la plus lourde de conséquence de toute la page : une
+    sauvegarde purgée est irrécupérable. Elle doit être trouvable sans lire
+    l'ADR, et sans ambiguïté sur le comportement retenu.
+    """
+    texte = _doc()
+
+    assert "la suppression est définitive" in texte.lower()
+    assert "ne passe pas par la corbeille" in texte
+    assert "aucune récupération n'est possible" in texte.lower()
+    # Le pourquoi est donné, pas seulement le quoi : un fichier à la corbeille
+    # continue de consommer le quota du compte pendant trente jours.
+    assert "consommer l'espace de votre" in texte
+    assert "trente jours" in texte
+
+
+def test_le_guide_conseille_de_regler_la_retention_large_avant_de_resserrer() -> None:
+    """La contrepartie d'une suppression définitive : un conseil de prudence."""
+    texte = _doc()
+
+    assert "réglez large" in texte.lower()
+
+
+def test_le_guide_enumere_ce_que_la_purge_ne_touche_jamais() -> None:
+    """Critère 2 de #15, côté utilisateur : les quatre exclusions sont nommées."""
+    texte = _doc()
+
+    for exclusion in (
+        "que vous avez déposé vous-même",
+        "ne porte pas le marqueur",
+        "déjà à la corbeille",
+        "sous-dossiers",
+    ):
+        assert exclusion in texte
+
+
+def test_le_guide_ne_renvoie_plus_le_listage_a_une_issue_a_venir() -> None:
+    """La rétention distante s'applique : plus aucune limite à annoncer ici.
+
+    Le guide a longtemps porté une section « Ce qui n'est pas encore
+    disponible » ; la laisser après #15 ferait croire à l'utilisateur que sa
+    rétention reste sans effet, et qu'aucune sauvegarde n'est supprimée.
+    """
+    texte = _doc()
+
+    assert "Ce qui n'est pas encore disponible" not in texte
+    assert "n'est pas encore implémenté" not in texte
+    assert "issues/15" not in texte

@@ -865,14 +865,14 @@ async def test_un_listage_de_purge_en_echec_ne_notifie_aucun_echec_d_envoi(
 ) -> None:
     """Un échec de purge n'est pas un échec de téléversement.
 
-    Les deux fournisseurs livrés lèvent une `DestinationError` explicite au
-    listage, encore différé (#12 pour Dropbox, #15 pour Google Drive). La purge
-    distante (#9), déclenchée ici par le succès du téléversement, la journalise
-    et passe à la destination suivante : elle n'émet jamais
-    `auto_backup.upload_failed`, et ce module n'écoute que cet événement. Une
-    sauvegarde **réussie** ne doit donc rien afficher, et surtout pas faire
-    grimper un compteur d'échecs consécutifs qu'aucun succès ne remettrait à
-    zéro.
+    Le fournisseur factice lève une `DestinationError` au listage, comme le
+    ferait un fournisseur réel en échec. La purge distante (#9), déclenchée ici
+    par le succès du téléversement, la journalise et passe à la destination
+    suivante : elle
+    n'émet jamais `auto_backup.upload_failed`, et ce module n'écoute que cet
+    événement. Une sauvegarde **réussie** ne doit donc rien afficher, et surtout
+    pas faire grimper un compteur d'échecs consécutifs qu'aucun succès ne
+    remettrait à zéro.
     """
     destination = hass.data[DATA_DESTINATIONS].async_get(DESTINATION)
     destination.erreur_a_lever = DestinationError(

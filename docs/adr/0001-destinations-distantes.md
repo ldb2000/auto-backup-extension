@@ -12,6 +12,8 @@
   [#14](https://github.com/ldb2000/auto-backup-extension/issues/14) (téléversement vers Google
   Drive), [#11](https://github.com/ldb2000/auto-backup-extension/issues/11) (dépôt d'une
   sauvegarde chez Dropbox) et
+  [#15](https://github.com/ldb2000/auto-backup-extension/issues/15) (listage et suppression sur
+  Google Drive) et
   [#17](https://github.com/ldb2000/auto-backup-extension/issues/17) (notifications et changement
   de compte) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
@@ -1053,8 +1055,9 @@ purger que les siennes.
 propriétés privées à un fichier (`appProperties`) : le fournisseur les pose au téléversement, la
 purge les relit au listage, et la preuve voyage alors **avec le fichier** — elle survit à la
 perte du registre. Mais elle dépend de ce que chaque API sait stocker, et elle n'est exploitable
-qu'une fois le fournisseur capable de **lister** : Google Drive pose le marqueur depuis #14 mais
-ne lit rien avant #15. **Dropbox, lui, ne sait rien stocker ici** : son seul emplacement
+qu'une fois le fournisseur capable de **lister** : Google Drive pose le marqueur depuis #14 et le
+relit depuis #15, ce qui fait de cette voie la première réellement praticable.
+**Dropbox, lui, ne sait rien stocker ici** : son seul emplacement
 (`property_groups`) réclame un modèle de propriétés et une portée que le fork ne demande pas, de
 sorte que le marqueur posé au dépôt par #11 ne vit qu'en mémoire (voir « Chez Dropbox, ce
 marqueur ne survit pas au dépôt »). #12 s'en passe : son listage établit la provenance par le
@@ -1157,7 +1160,8 @@ n'atteindrait jamais le `except` : la purge de cette destination ne se terminera
 verrou `asyncio.Lock` qui sérialise les purges resterait pris. L'écouteur d'`upload_successful`
 comme le service `auto_backup.purge` s'arrêteraient alors sans erreur ni fin. Tant qu'aucun
 fournisseur réel n'existait, le fournisseur factice répondait toujours et le risque restait
-théorique ; il devient réel avec Dropbox (#12) et Google Drive (#15).
+théorique ; il est devenu réel avec Google Drive (#14 pour le dépôt, #15 pour le listage et la
+suppression), et le sera avec Dropbox (#12).
 
 **Décision : chaque appel réseau du coordinateur est enveloppé dans `asyncio.timeout()`**, comme
 l'est déjà le téléversement (`upload.py`) : le listage d'une destination, et **chaque**
@@ -1271,13 +1275,13 @@ recouvriraient.
 Chaque fichier porte `appProperties = {auto_backup: "true", slug: <slug>, name: <nom>}`. Ces
 propriétés privées sont invisibles dans l'interface de Drive mais **requêtables** : c'est le
 marqueur que la purge distante (#9) exige avant toute suppression, de sorte qu'un document de
-l'utilisateur ne puisse jamais être touché. Le poser est tout ce que #14 peut faire : le relire
-demande de **lister**, ce que #15 apporte. Jusque-là, `async_list_backups()` et
-`async_delete_backup()` lèvent une `DestinationError` explicite — et non une
-`NotImplementedError` : la purge appelle le listage après **chaque** téléversement réussi dès
-qu'une rétention est configurée, et une erreur non typée y serait journalisée en `ERROR` avec une
-trace d'appel à chaque sauvegarde, alors qu'il s'agit d'une limite connue. Le message renvoie à
-l'issue #15 et la purge passe à la destination suivante.
+l'utilisateur ne puisse jamais être touché. Le poser était tout ce que #14 pouvait faire : le
+relire demande de **lister**, ce que #15 a apporté (voir « Lister et supprimer sur Google
+Drive »). D'ici là, `async_list_backups()` et `async_delete_backup()` levaient une
+`DestinationError` explicite — et non une `NotImplementedError` : la purge appelle le listage
+après **chaque** téléversement réussi dès qu'une rétention est configurée, et une erreur non
+typée y aurait été journalisée en `ERROR` avec une trace d'appel à chaque sauvegarde, alors qu'il
+s'agissait d'une limite connue.
 
 Leurs valeurs sont tronquées à **124 octets UTF-8 par propriété, clé comprise** : cette borne est
 celle de l'API Drive et non un choix de ce fork, et la dépasser ferait échouer tout l'appel. La
@@ -1291,6 +1295,179 @@ journaux, y compris en `debug`. L'URL de session mérite la même protection que
 porte un identifiant d'envoi qui autorise, à lui seul, à écrire dans le fichier en cours de dépôt.
 Les messages de journal et d'erreur citent donc une étiquette d'opération en français
 (« ouverture de la session d'envoi de "..." », « envoi des octets 0 à 8388607 »), jamais l'URL.
+
+## Lister et supprimer sur Google Drive (issue #15)
+
+#14 savait déposer ; #15 donne au fournisseur les deux opérations qui manquaient à la rétention
+distante de #9 pour agir réellement. Le code vit dans
+`destinations/providers/google_drive_listage.py`, importé **dans** les deux méthodes de
+`GoogleDriveDestination` : la chaîne d'imports reste acyclique,
+`google_drive` <- `google_drive_upload` <- `google_drive_listage`.
+
+### Rien n'est cherché par un second chemin
+
+Le module de #14 est aussi la **couche `drive/v3/files`** du fournisseur, et #15 la réutilise
+entièrement : point d'accès (`URL_FICHIERS`), projections (`CHAMPS_FICHIER`), appel avec nouvelles
+tentatives (`async_appel_drive_json()`), échappement d'une requête `q` (`echapper()`, rendue
+publique pour l'occasion), dossier cible (`async_dossier_cible()`, extrait du téléversement) et
+construction d'une sauvegarde distante (`sauvegarde_distante_du_fichier()`, extraite elle aussi).
+
+Trois duplications ont ainsi été évitées, et ce n'est pas une question de lignes :
+
+- **le dossier cible.** Le chercher par un second chemin exposerait à lister un dossier *autre*
+  que celui où les sauvegardes sont déposées : la portée `drive.file` ne montre que les fichiers
+  créés par l'application, deux dossiers homonymes créés à quelques secondes d'intervalle
+  suffiraient, et la purge conclurait qu'il n'y a rien à supprimer alors que le dossier réel se
+  remplit.
+- **la lecture d'un fichier Drive.** Le téléversement et le listage demandent les mêmes champs et
+  doivent en tirer la même `RemoteBackup` ; deux constructions parallèles auraient fini par
+  différer sur le repli du nom ou sur la clé du marqueur, et la purge aurait cessé en silence de
+  reconnaître ce que le téléversement dépose.
+- **la clé du marqueur.** Elle vient désormais de `marqueur_auto_backup()` (`retention.py`), dont
+  elle n'a qu'une définition, comme chez Dropbox depuis #11. La propriété *chez Google*
+  (`MARQUEUR_AUTO_BACKUP`) reste distincte : c'est un choix d'API figé par les fichiers déjà
+  déposés, pas une convention interne au fork.
+
+Plutôt que de déplacer ces primitives dans un quatrième module « partagé », elles restent où #14
+les a écrites et y deviennent publiques : le déplacement aurait touché le code et les tests de
+#14 sans rien apporter à la sûreté de l'import, déjà à sens unique.
+
+### Ce que la requête `q` filtre, et pourquoi chaque condition compte
+
+```text
+'<dossier>' in parents and trashed = false
+and appProperties has { key='auto_backup' and value='true' }
+and mimeType != 'application/vnd.google-apps.folder'
+```
+
+| Condition | Ce qu'elle écarte |
+| --- | --- |
+| `'<dossier>' in parents` | tout ce qui n'est pas dans le dossier de cette destination |
+| `trashed = false` | un fichier déjà à la corbeille : le remonter le ferait « purger » une seconde fois et fausserait le compte de la rétention |
+| `appProperties has { key='auto_backup' … }` | **tout fichier qu'Auto Backup n'a pas déposé** : c'est la preuve de provenance que #9 exige |
+| `mimeType != '<dossier>'` | les **sous-dossiers**, qui portent le même marqueur que les fichiers |
+
+La dernière condition est celle qu'il aurait été le plus facile d'oublier, et la plus coûteuse :
+`_async_creer_le_dossier()` pose `appProperties.auto_backup` sur chaque dossier qu'il crée, de
+sorte que deux destinations réglées l'une sur `Sauvegardes` et l'autre sur
+`Sauvegardes/Home Assistant` font du dossier de la seconde un **enfant marqué** du dossier de la
+première. Sans exclusion du type MIME, le listage de la première l'aurait remonté comme une
+sauvegarde, et la purge aurait pu le supprimer avec tout son contenu.
+
+**Le filtre envoyé à Google n'est pas la barrière de sûreté.** Marqueur, corbeille et type MIME
+sont revérifiés sur **chaque fichier reçu**. La requête est une optimisation — elle évite de
+rapatrier tout le dossier ; une évolution de l'API, une syntaxe mal composée ou une réponse
+inattendue ne doivent pas pouvoir rendre purgeable un fichier étranger. Les tests s'appuient sur
+cette redondance : leur simulateur ignore volontairement le `q` qu'il reçoit.
+
+### Jamais d'appariement sur le nom
+
+Le nom d'un fichier déposé est borné à 120 caractères par le fork, et la propriété privée `name`
+à 124 octets **par Google**. Les deux peuvent donc être tronqués, et deux sauvegardes peuvent
+porter le même nom tronqué. Le nom ne sert qu'à l'affichage : `RemoteBackup.name` et le message
+de journal. La provenance vient du marqueur, le lien avec la sauvegarde locale du `slug`, et la
+suppression de l'identifiant opaque de Drive.
+
+Le marqueur relu chez Google est remonté dans `RemoteBackup.metadata`, ce que le commentaire de
+l'issue réclamait au titre de la validation métier de #9 : c'est la seule chose qui rende
+purgeable une sauvegarde déposée par une instance ayant perdu son registre (réinstallation,
+`.storage` effacé). Sans cela, la voie B (le registre) aurait été la seule à fonctionner, et la
+voie C aurait continué de n'exister que sur le papier.
+
+### La suppression est définitive, pas une mise à la corbeille
+
+Le métier n'avait pas tranché. Deux comportements étaient possibles avec la portée `drive.file` :
+`files.delete`, définitif et irréversible, ou un `files.update` posant `trashed: true`, qui laisse
+à l'utilisateur les trente jours de la corbeille de Drive pour revenir en arrière.
+
+| Argument | Corbeille | Suppression définitive |
+| --- | --- | --- |
+| Quota du compte Google | un fichier à la corbeille **continue de le consommer** pendant trente jours | libéré immédiatement |
+| Récupération d'une erreur de réglage | possible depuis l'interface de Drive, trente jours | impossible |
+| Cohérence avec la rétention locale de l'upstream | non : `keep_days` supprime, il ne met rien de côté | oui |
+| Effet après trente jours | identique | identique |
+
+**Décision : suppression définitive (`files.delete`).** L'argument qui tranche est le quota. La
+rétention distante n'a qu'une raison d'être : borner ce que les sauvegardes occupent chez le
+fournisseur. Mettre à la corbeille l'aurait privée d'effet pendant trente jours — exactement pour
+l'utilisateur qui l'a réglée *parce que* son Drive se remplit, et dont le prochain téléversement
+échouerait sur le `DestinationQuotaError` que #14 documente déjà. Une rétention qui ne libère
+d'espace que si l'on vide la corbeille à la main chaque mois n'est pas une rétention.
+
+Le filet de sécurité est ailleurs, et il est plus solide que trente jours de corbeille : la
+portée `drive.file` rend tout fichier étranger structurellement invisible, la provenance est
+doublement vérifiée (registre **ou** marqueur), les dossiers sont exclus du listage, et rien
+n'est jamais supprimé sans qu'une rétention ait été configurée pour cette destination. Le seul
+risque qui subsiste est une rétention mal réglée par l'utilisateur lui-même, que la corbeille
+n'aurait fait que masquer un mois. Le prix de la décision est qu'elle doit être **visible** :
+elle est écrite en clair dans [`docs/destinations/google-drive.md`](../destinations/google-drive.md),
+à côté du conseil de régler large avant de resserrer.
+
+Une option « mettre à la corbeille au lieu de supprimer » n'est pas exclue à terme, mais la purge
+n'a aujourd'hui aucune étape de réglages dans l'interface (cf. « Le filet de sécurité » ci-dessus)
+et rien ne justifie d'en ouvrir une pour un besoin que personne n'a exprimé.
+
+### Idempotence, et pourquoi elle rend les reprises sûres
+
+Un fichier déjà absent fait répondre `404`, que `erreur_de_la_reponse()` traduit en
+`DestinationNotFoundError` : la purge y voit une sauvegarde déjà purgée, retire son entrée du
+registre et continue (cf. « Ce que la purge ne fait jamais échouer »). C'est aussi ce qui rend
+sûre une **nouvelle tentative** après une réponse perdue : la première a pu aboutir chez Google,
+la seconde répond `404`, et le résultat observé est le même. Sans cette traduction, un
+`DELETE` réessayé aurait laissé une erreur bloquante derrière une suppression réussie.
+
+L'identifiant est encodé avant d'être placé dans le chemin de l'URL. Google n'en produit jamais
+qui l'exigerait, mais celui-ci peut venir du registre persistant, donc d'un fichier de stockage
+éditable à la main : sans encodage, une barre oblique remonterait d'un segment et désignerait une
+autre ressource de l'API.
+
+**La suppression ne revérifie pas le marqueur et fait confiance à l'appelant.** Seule la purge
+distante (#9), qui ne transmet que des identifiants du registre ou d'un listage marqué, doit
+appeler le crochet de suppression. Ce faisant, le fournisseur n'a pas à refaire la vérification
+de provenance qu'il a déjà imposée au listage.
+
+### Les bornes sont celles du fournisseur, pas celles du coordinateur
+
+Le contrat de `RemoteDestination` demande depuis #9 à chaque fournisseur de borner lui-même ses
+appels, le coordinateur de purge ne posant qu'un filet de sécurité grossier
+(`DEFAULT_PURGE_TIMEOUT`, 300 s). Trois bornes s'appliquent donc ici : le délai par requête
+(`DELAI_REQUETE`, 30 s), le nombre de tentatives (`TENTATIVES_MAX`, 3, héritées de
+`async_appel_drive_json()`) et le **nombre de pages** parcourues (`PAGES_MAX`, 50 pages de 100
+fichiers).
+
+Cette dernière est propre au listage : un `nextPageToken` que Google renverrait indéfiniment —
+incident, jeu de résultats instable — ferait autrement tourner la boucle sans fin, sous le seul
+garde-fou du coordinateur. Le dépassement est signalé par un avertissement et la purge travaille
+sur ce qui a été lu : elle ne supprime que ce qu'elle a **vu**, jamais sur une présomption, et un
+listage tronqué ne conduit donc jamais à supprimer de trop.
+
+### Une sauvegarde vue deux fois n'est comptée qu'une fois
+
+La pagination de `files.list` n'est pas un instantané : un téléversement concurrent — le cas
+normal, la purge suivant justement un dépôt — ou un simple réordonnancement côté Google peut faire
+apparaître un fichier sur deux pages. Le listage dédoublonne donc sur `remote_id`.
+
+Ce n'est pas une coquetterie : `retention_count` compte ce que le listage renvoie. Un doublon
+aurait fait conclure qu'il y a une sauvegarde **de trop**, et fait supprimer une sauvegarde qui
+devait rester — un effet de bord d'autant plus vicieux qu'il ne se produit que sous concurrence,
+donc jamais dans un test qui ne l'a pas cherché.
+
+### Un listage peut créer le dossier
+
+`async_dossier_cible()` retrouve **ou crée** la hiérarchie du dossier quand aucun identifiant
+n'est mémorisé. Lister peut donc créer un dossier vide, ce qui surprend pour une opération de
+lecture. C'est assumé : c'est le prix d'un chemin unique vers le dossier cible, le dossier créé
+est exactement celui où le prochain téléversement déposera, et le cas ne se produit que sur une
+destination qui n'a encore rien déposé — le listage renvoie alors une liste vide, ce qui est la
+vérité. Son identifiant est persisté au passage, ce qui épargne les allers-retours par segment de
+chemin à l'opération suivante.
+
+### Journaux
+
+Ni le jeton ni l'en-tête `Authorization` n'apparaissent, à aucun niveau. La requête `q` et les
+noms de fichiers ne sont écrits qu'en `debug` : ce sont les noms des sauvegardes de
+l'utilisateur. Les niveaux supérieurs ne citent que des compteurs, un statut HTTP et
+l'identifiant opaque d'un fichier.
 
 ## Notifications des échecs et des accès révoqués (issue #17)
 
@@ -1318,15 +1495,16 @@ coordinateur de téléversement n'appelle rien : il émet, comme avant. Trois co
 **La purge distante n'est pas un émetteur, et ne doit pas l'être.** `destinations/retention.py`
 (#9) *consomme* `auto_backup.upload_successful` pour alimenter son registre et *émet*
 `auto_backup.remote_purge` ; elle n'émet jamais `auto_backup.upload_failed`. Un échec de purge
-n'atteint donc pas ce module, et c'est voulu : les deux `DestinationError` du listage encore
-différé — Dropbox (#12) et Google Drive (#15) — sont journalisées en une ligne par le
-coordinateur de purge, qui passe à la destination suivante. Les confondre avec un échec d'envoi
+n'atteint donc pas ce module, et c'est voulu : un échec de listage ou de suppression (une
+`DestinationError` levée par le fournisseur) est journalisé en une ligne par
+le coordinateur de purge, qui passe à la destination suivante. Les confondre avec un échec d'envoi
 afficherait une notification « échec d'envoi » à chaque sauvegarde **réussie** d'une destination
 porteuse d'une rétention, et ferait grimper un compteur d'échecs consécutifs qu'aucun succès ne
 remettrait à zéro. Le cas est d'ailleurs distinct de celui d'une destination en attente de
 ré-authentification, que la purge saute **avant** tout appel réseau, sur un avertissement : là,
-c'est la notification de ré-authentification qui parle, et elle seule. Quand #12 et #15 auront
-écrit le listage, un échec de purge qui mérite d'être affiché demandera son propre signalement —
+c'est la notification de ré-authentification qui parle, et elle seule. Maintenant que #15 a écrit
+le listage Google Drive, et quand #12 aura écrit celui de Dropbox, un échec de purge qui mérite
+d'être affiché demandera son propre signalement —
 un événement à lui, pas un détournement de `upload_failed`.
 
 ### Un identifiant de notification par destination, pas par sauvegarde
@@ -1444,13 +1622,10 @@ subsistent, chacun avec son test :
   chez Dropbox —, si bien que la cause reste diagnosticable une fois le code masqué. La réserve
   ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
 
-**Ce que l'issue #16 doit faire à sa fusion.** La branche `issue-16-entites-destinations` n'est
-pas fusionnée au moment où ce module est créé, et y garde son propre `assainir_le_message()`. Elle
-doit y **déléguer** : `assainir_le_message(message)` devient l'enveloppe qui ramène `None` et une
-chaîne vide à `cause inconnue`, puis appelle `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`.
-Aucun motif ne doit rester dans `entities.py` — c'est précisément la divergence que ce module
-supprime. L'ordre de fusion retenu est #17 puis #16, pour que #16 adopte ce module au moment de sa
-propre fusion.
+**Adoption par l'issue #16.** `assainir_le_message()` d'`entities.py` est l'enveloppe qui ramène
+`None` et une chaîne vide à `cause inconnue`, puis appelle
+`masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`. Aucun motif ne reste dans `entities.py` —
+c'est précisément la divergence que ce module supprime.
 
 **Textes en français dans le code.** Une notification persistante n'a pas de clé de traduction
 côté Home Assistant, contrairement aux problèmes et aux étapes du flux d'options : ses libellés
@@ -1483,6 +1658,142 @@ Le comportement voulu est écrit tel quel — fournisseur muet, on conserve ; fo
 répond, on remplace — sans dépendre du fait qu'un dictionnaire vide soit déjà ramené à `None` en
 amont.
 
+## Entités d'état des destinations (issue #16)
+
+L'upstream expose des capteurs sur les sauvegardes **locales**. Sans équivalent distant, un
+téléversement qui échoue depuis des semaines passe inaperçu. Chaque destination configurée
+reçoit donc trois entités, définies dans `destinations/entities.py` :
+
+| Entité | Domaine | État | Attributs |
+| --- | --- | --- | --- |
+| `dernier_televersement` | `sensor` (`device_class` TIMESTAMP) | date du dernier téléversement réussi | — |
+| `sauvegardes_distantes` | `sensor` (`state_class` MEASUREMENT) | nombre de sauvegardes chez le fournisseur | — |
+| `probleme` | `binary_sensor` (`device_class` PROBLEM) | le dernier téléversement a échoué | `last_error`, `last_failed_slug`, `last_failed_at` |
+
+### Brancher les entités sans récrire les plateformes upstream
+
+`sensor.py` et `binary_sensor.py` sont des modules **importés de l'upstream** : le fork ne
+supprime ni ne modifie aucune de leurs lignes (cf. `docs/UPSTREAM.md`). Trois lignes leur sont
+ajoutées dans chacun — un import et un appel **à la fin** de leur `async_setup_entry()` :
+
+```python
+    # Fork (#16) : une entité d'état par destination distante configurée.
+    await async_setup_destination_sensors(hass, entry, async_add_entities)
+```
+
+Les options écartées :
+
+- **une plateforme dédiée** (`Platform.SENSOR` déclarée une seconde fois) : Home Assistant
+  n'accepte qu'une plateforme par domaine et par intégration ;
+- **un `sensor.py` du fork qui réexporterait l'upstream** : cela aurait fait sortir
+  `sensor.py` de la comparaison ligne à ligne avec l'upstream, alors que l'écart réel se
+  résume à deux appels.
+
+### Un état par destination, partagé par ses trois entités
+
+`CoordinateurEntitesDestinations` écoute **une seule fois** `auto_backup.upload_successful`,
+`auto_backup.upload_failed` et `auto_backup.remote_purge`, met à jour l'`EtatDestination`
+correspondant, puis prévient les entités concernées par un signal de dispatcher
+(`auto_backup_destination_maj_<entry_id>_<destination_id>`).
+
+Pourquoi ne pas laisser chaque entité écouter le bus, comme le font les capteurs upstream :
+avec trois entités par destination et autant de destinations que l'utilisateur en configure,
+le nombre d'abonnements croît vite, et surtout l'état deviendrait *dupliqué* — le capteur
+binaire et le capteur d'horodatage doivent réagir de façon **cohérente** au même événement
+(un succès efface l'erreur active *et* horodate le succès). Un état commun garantit cette
+cohérence ; le dispatcher ne transporte aucune donnée, il ne fait que dire « relis ton état ».
+
+`last_error` porte l'erreur **active** : elle est effacée au premier téléversement réussi, ce
+qui fait retomber le capteur « problème ». `last_failed_slug` et `last_failed_at` gardent en
+revanche la trace du dernier échec connu, même après un succès : ils répondent à « qu'est-ce
+qui avait échoué, et quand », pas à « y a-t-il un problème maintenant ».
+
+### Aucun secret dans un attribut d'entité
+
+Un attribut d'entité est lisible par toute personne ayant accès à l'instance, et l'enregistreur
+le conserve dans son historique. Or le message d'erreur d'un fournisseur recopie parfois la
+requête refusée, en-tête `Authorization` compris — et il n'écrit pas toujours le jeton derrière
+une clé reconnaissable.
+
+`assainir_le_message()` ne tient **aucun motif propre** : c'est une enveloppe qui ramène `None`
+et la chaîne vide à `cause inconnue`, puis délègue à
+`masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` du module commun `destinations/masquage.py`
+(voir la section « `destinations/masquage.py` : un seul masquage pour tout le fork »). Les
+passes, la valeur de remplacement `***` et les réserves assumées — mot ordinaire épargné derrière
+un mot-clé, coupure aux `/`, `=` et `.` qui garde les URL lisibles — sont celles de ce module, et
+décrites en tête de celui-ci. Un attribut d'entité masque donc exactement ce qu'une notification
+masque : une copie locale, plus étroite, laissait passer `accessToken: …`, les chemins
+`/backup/…` et `/config/…` ou `tokens=[…]`. Le message est enfin borné à 255 caractères.
+
+### Le registre de la rétention distante fait autorité sur le compte
+
+Le nombre de sauvegardes distantes pourrait être obtenu en appelant `async_list_backups()` sur
+la destination. Ce serait un appel réseau à chaque rafraîchissement, sur un chemin que rien ne
+rend indispensable — et impossible pour une destination en attente de ré-autorisation.
+
+La rétention distante (issue #9) tient, elle, un **registre persistant** des sauvegardes
+réellement déposées chez chaque fournisseur, exposé dans `hass.data[DATA_REMOTE_BACKUPS]` et
+interrogeable par `entrees(destination_id)`. Le capteur en compte les entrées : c'est la seule
+source qui ne dérive pas, et les événements ne sont plus que des **déclencheurs de relecture**.
+
+Un compteur incrémental a été écarté pour une raison de fond : `auto_backup.remote_purge` n'est
+émis que **lorsqu'une suppression a réellement eu lieu**. Sans rétention configurée, avec une
+ré-authentification en attente, sur un listage en échec, ou quand la rétention est déjà
+respectée, aucun événement ne part. Un compteur piloté par ces seuls événements — et *a
+fortiori* par un champ `remaining` — resterait figé sur une valeur fausse.
+
+Le registre étant persistant, il est aussi la source de la **restauration** du compte après un
+redémarrage (critère 5 de l'issue) : il n'a besoin de personne pour survivre.
+
+L'issue #9 n'étant pas encore fusionnée, la lecture est **défensive** : clé absente, ou registre
+qui lève, et le capteur retombe sur un compteur interne, alimenté par les événements
+(`remote_ids`, `deleted`, `remaining`) et restauré par `RestoreSensor`. `RestoreSensor` est donc
+conservé pour ce repli, et les deux chemins sont testés.
+
+### Restauration après redémarrage
+
+`RestoreSensor` et `RestoreEntity` suffisent : le dernier succès, le compteur de repli et l'état
+du capteur binaire — avec ses trois attributs — sont restitués sans magasin de données propre.
+Un `Store` dédié aurait ajouté un fichier de stockage, sa migration et son nettoyage pour une
+information que Home Assistant sait déjà conserver.
+
+La valeur restaurée ne s'impose pas : un événement traité entre le démarrage du coordinateur et
+l'ajout des entités l'emporte. L'écouteur d'options s'exécute en effet sans attente, donc le
+coordinateur connaît une destination — et traite ses événements — avant que Home Assistant
+n'ait fini de monter ses entités.
+
+Encore faut-il pouvoir dire si l'état a *déjà été renseigné*. `EtatDestination` porte pour cela
+deux marqueurs, `erreur_initialisee` et `compteur_initialise`, posés par les seuls chemins
+d'écriture (`definir_l_erreur()`, `definir_le_compte()`). Ils ne sont pas cosmétiques :
+`derniere_erreur is None` signifie à la fois « aucun événement depuis le démarrage » et « un
+téléversement vient de réussir et a effacé l'erreur » ; `0` sauvegardes signifie à la fois
+« jamais compté » et « une purge vient de tout supprimer ». S'appuyer sur ces valeurs
+réinstallerait un état périmé — capteur repassé en « problème » alors que la destination va
+bien, compte ressuscité après une purge légitime.
+
+`dernier_slug_echec` et `dernier_echec` n'ont pas besoin de marqueur : rien ne les efface
+jamais, `None` y veut donc bien dire « inconnu ».
+
+Le message restauré est repassé par `assainir_le_message()` au chargement : un historique écrit
+par une version au masquage plus étroit est nettoyé au lieu d'être republié tel quel.
+
+### Suivre l'ajout et la suppression d'une destination
+
+Le coordinateur écoute les options de l'entrée, comme le gestionnaire de destinations :
+
+- **destination ajoutée** : ses entités sont créées par les `async_add_entities` mémorisés à
+  la déclaration de chaque plateforme, sans rechargement de l'intégration ;
+- **destination supprimée** : ses entités sont retirées du **registre d'entités**, dont Home
+  Assistant déduit la suppression de l'entité elle-même — y compris pour une entité
+  désactivée, qui n'avait jamais été instanciée. Sans ce retrait, elles resteraient
+  indisponibles dans les tableaux de bord de l'utilisateur.
+
+La liste des destinations est relue dans `hass.data[DATA_DESTINATIONS]`, et non dans les
+options brutes : le gestionnaire est la seule source de vérité de ce qui est réellement
+utilisable, et son écouteur de mise à jour est enregistré par `async_setup_destinations()`,
+donc **avant** celui d'une plateforme — il s'est déjà rechargé quand le coordinateur est
+prévenu.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -1512,7 +1823,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   ci-dessus) ; `auto_backup.remote_purge` l'est **depuis #9** (voir « Rétention distante »),
   avec les champs `destination`, `destination_name` et `remote_ids`. Ils étaient définis dès #6
   pour laisser le schéma de constantes stable et lisible, et pour que les issues suivantes
-  n'aient qu'à les émettre sans les déclarer.
+  n'aient qu'à les émettre sans les déclarer. **#16 les consomme** : les entités d'état d'une
+  destination se mettent à jour sur `upload_successful`, `upload_failed` et `remote_purge`.
+  L'événement de purge **n'émet ni `deleted` ni `remaining`** — il n'est émis que lorsqu'une
+  suppression a réellement eu lieu, si bien qu'un nombre restant serait structurellement faux.
+  Le compte de sauvegardes distantes ne vient donc pas de cet événement, mais du registre
+  persistant de #9 (`hass.data[DATA_REMOTE_BACKUPS]`, méthode `entrees(destination_id)`), que
+  #9 expose bien sous cette clé ; l'événement n'est qu'un déclencheur de relecture. Le compteur
+  interne de #16 n'est plus qu'un repli, pour le cas où ce registre manque ou refuse de répondre.
 
 - **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
   doit être déclarée chez le fournisseur. **Traité en #10 pour Dropbox et en #13 pour Google
@@ -1559,6 +1877,13 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   crochet : l'ajout **s'interrompt** (abandon `echec_fournisseur`), voir la section « Échec d'un
   crochet » ci-dessus.
 
+- **Renommage d'une destination (issue #16)** : le nom d'une destination est figé dans le nom
+  d'origine de ses entités au moment où le registre les enregistre. Le flux d'options ne sait
+  pas renommer une destination aujourd'hui ; le jour où il le saura, il devra mettre à jour
+  l'`original_name` des entités concernées dans le registre, faute de quoi elles continueront
+  d'afficher l'ancien nom. Le contournement actuel — supprimer puis recréer la destination —
+  fonctionne mais fait repartir ses compteurs de zéro.
+
 - **Plancher d'Home Assistant** : **traité en #28**. Le fork annonçait **2025.1.0** comme version
   minimale alors que le code OAuth2 livré en #7 importe `OAuth2TokenRequestError` et
   `OAuth2TokenRequestReauthError`, apparues en 2026.3 : l'intégration n'aurait pas pu se charger
@@ -1604,13 +1929,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 
 - **Marqueur de provenance chez les fournisseurs réels (issues #12 et #15)** : `#9` reconnaît le
   marqueur `auto_backup` dans `RemoteBackup.metadata` et fournit `marqueur_auto_backup()`.
-  **Traité en #12 pour Dropbox** : l'API v2 n'ayant aucun champ libre pour l'emporter (voir
-  « Chez Dropbox, ce marqueur ne survit pas au dépôt »), le listage établit la provenance par le
-  registre puis par la convention de nommage, et repose le marqueur sur ce qu'il a reconnu.
-  **Reste ouvert pour `#15`** : Google Drive pose `appProperties.auto_backup` depuis `#14` et
-  peut, lui, le **relire** au listage — c'est la voie qui survit à la perte du registre, et il
-  faudra la suivre là-bas plutôt que d'imiter le repli par le nom. D'ici là, une purge de
-  destination Google Drive s'arrête au listage sur une `DestinationError` explicite.
+  **Traité en #14 et #15 pour Google Drive** : le fournisseur pose `appProperties.auto_backup` sur
+  chaque fichier déposé (#14) et le **relit** au listage, où il filtre dessus puis le remonte dans
+  `RemoteBackup.metadata` (#15). La voie C de la section « Reconnaître ses propres sauvegardes »
+  est donc réellement praticable : une sauvegarde déposée par une instance ayant perdu son
+  registre reste purgeable. **Traité en #12 pour Dropbox** : l'API v2 n'ayant aucun champ libre
+  pour l'emporter (voir « Chez Dropbox, ce marqueur ne survit pas au dépôt »), le listage établit
+  la provenance par le registre puis par la convention de nommage, et repose le marqueur sur ce
+  qu'il a reconnu.
 
 - **Fichier déposé chez Dropbox mais rapporté en échec (issue #12)** : **tranché en #12 —
   reconnaissance par la convention de nommage.** Un dépôt commité que le fork déclare en échec
@@ -1630,13 +1956,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   l'événement n'apporterait donc rien, et le chemin distant ne sert à aucune opération : la
   suppression passe par `remote_id`.
 
-- **Délégation du masquage par les entités d'état (issue #16)** : `destinations/masquage.py` est le
-  point unique de masquage du fork depuis #17 (voir la section « Un seul masquage pour tout le
-  fork » ci-dessus), mais la branche `issue-16-entites-destinations` n'est pas fusionnée et garde
-  son propre `assainir_le_message()`. **À faire à la fusion de #16** : en faire une enveloppe qui
-  ramène `None` et la chaîne vide à `cause inconnue`, puis appelle
-  `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` ; aucun motif ne doit rester dans
-  `entities.py`. L'ordre de fusion retenu est #17 puis #16.
+- **Délégation du masquage par les entités d'état (issue #16)** : résolu. `assainir_le_message()`
+  délègue à `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` de `destinations/masquage.py` ;
+  aucun motif ne reste dans `entities.py`.
 
 ## Conséquences
 
@@ -1661,6 +1983,24 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 - L'affichage des échecs est isolé dans `destinations/notifications.py` (#17), branché sur les
   seuls événements publics : ni `upload.py` ni les fournisseurs n'en savent rien, et une option
   du fork de plus (`notify_on_failure`) est protégée par `CLES_DU_FORK`.
+
+Ajouts de l'issue #16 :
+
+- Chaque destination configurée expose deux capteurs et un capteur binaire, rattachés au device
+  de service upstream et nommés avec le nom de la destination par un `translation_key` à
+  marqueur (`{destination}`).
+- `sensor.py` et `binary_sensor.py` ne gagnent qu'un import et un appel chacun : toute la
+  logique vit dans `destinations/entities.py`.
+- Le nombre de sauvegardes distantes est lu dans le registre persistant de la rétention
+  distante (#9), `hass.data[DATA_REMOTE_BACKUPS]` ; en son absence, un compteur interne
+  alimenté par les événements et restauré au redémarrage sert de repli.
+- Les messages d'erreur exposés en attribut sont masqués et bornés par
+  `assainir_le_message()`, qui délègue au module commun `destinations/masquage.py` : ni jeton —
+  même nu, sans clé adjacente —, ni adresse électronique, ni chemin absolu ne peut atteindre
+  l'historique d'états.
+- L'état d'une destination distingue « jamais renseigné » de « remis à sa valeur neutre » par
+  des marqueurs explicites : une restauration ne peut pas réinstaller une erreur résolue ni un
+  compte purgé.
 
 Ajouts de l'issue #7 :
 
@@ -1689,8 +2029,8 @@ Ajouts de l'issue #13 :
 - `DestinationConfig` porte `provider_data`, facultatif, borné et masqué dans les journaux.
 - Le flux d'ajout interroge le fournisseur juste après l'obtention du jeton, ce qui nomme la
   destination d'après le compte autorisé et fait échouer tôt une configuration inexploitable.
-- `#14` (téléversement Google Drive) et `#15` (listage et suppression) n'auront que trois
-  méthodes à écrire : le reste du fournisseur est en place.
+- `#14` (téléversement Google Drive) et `#15` (listage et suppression) n'ont eu que trois
+  méthodes à écrire : le reste du fournisseur était en place, et aucune ligne du socle n'a bougé.
 
 Ajouts de l'issue #9 :
 
@@ -1728,3 +2068,24 @@ Ajouts de l'issue #11 :
   pas du même code : les deux API n'ont ni le même protocole d'envoi par morceaux, ni les mêmes
   codes d'erreur. Le jour où une troisième s'ajouterait, une fabrique commune de tentatives
   vaudrait d'être extraite ; à deux fournisseurs, elle coûterait plus qu'elle ne rapporte.
+
+Ajouts de l'issue #15 :
+
+- **Une destination Google Drive est purgée pour de bon.** Le cycle de vie complet du contrat
+  `RemoteDestination` est tenu par un fournisseur réel, et la rétention distante de `#9` — jusque-là
+  éprouvée contre un fournisseur factice — s'applique à un service en ligne sans qu'une ligne du
+  coordinateur ait changé.
+- La **voie C** de « Reconnaître ses propres sauvegardes » (le marqueur porté par le fichier) est
+  réellement praticable : le listage filtre sur `appProperties.auto_backup` et remonte le marqueur
+  dans `RemoteBackup.metadata`, de sorte qu'un `.storage` perdu ne rend plus une sauvegarde
+  impurgeable.
+- La **suppression est définitive**, décision argumentée par le quota du compte Google (voir
+  « Lister et supprimer sur Google Drive ») et annoncée en clair dans la documentation
+  utilisateur.
+- Les primitives de l'API `drive/v3/files` sont **partagées** entre le dépôt et le listage
+  (`echapper()`, `async_dossier_cible()`, `sauvegarde_distante_du_fichier()`) : un seul chemin
+  vers le dossier cible, une seule lecture d'un fichier Drive, une seule définition de la clé du
+  marqueur.
+- Le nombre de **pages parcourues** est borné par le fournisseur (`PAGES_MAX`), ce que le contrat
+  de `RemoteDestination` réclamait depuis `#9` sans qu'aucun fournisseur ne l'ait encore appliqué
+  à un listage.

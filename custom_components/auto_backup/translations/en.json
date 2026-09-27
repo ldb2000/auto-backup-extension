@@ -5,6 +5,21 @@
             "description": "Provider “{fournisseur}” refused to renew access for destination “{nom}”: the authorisation expired or was revoked. Other destinations keep working.\n\nTo restore it, open the Auto Backup integration options, choose “Re-authorise a destination” and select “{nom}”."
         }
     },
+    "entity": {
+        "sensor": {
+            "destination_dernier_televersement": {
+                "name": "{destination}: last successful upload"
+            },
+            "destination_sauvegardes_distantes": {
+                "name": "{destination}: remote backups"
+            }
+        },
+        "binary_sensor": {
+            "destination_probleme": {
+                "name": "{destination}: upload problem"
+            }
+        }
+    },
     "title": "Auto Backup",
     "config": {
         "step": {
