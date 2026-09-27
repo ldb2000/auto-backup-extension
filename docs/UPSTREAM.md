@@ -308,9 +308,11 @@ par toute personne ayant accès à l'instance et historisé par l'enregistreur. 
 corrige pas : masquer ce message demanderait de **modifier** une ligne upstream, ce que la
 règle « que des ajouts » ci-dessus exclut. Le risque reste borné : l'événement ne relaie que
 l'échec d'une sauvegarde **locale** (message du Supervisor ou de Home Assistant), jamais une
-réponse de Dropbox ou de Google Drive, dont les échecs passent par `auto_backup.upload_failed`
-et par les entités du fork, elles masquées. À reconsidérer si l'upstream ajoute un jour son
-propre masquage, ou si le fork décide de remplacer ce capteur.
+réponse de Dropbox ou de Google Drive. Les échecs de ces fournisseurs passent par l'événement
+`auto_backup.upload_failed`, qui transporte la cause brute, et par les entités du fork —
+celles-ci masquent cette cause dans les états historisés et les attributs affichés. À
+reconsidérer si l'upstream ajoute un jour son propre masquage, ou si le fork décide de
+remplacer ce capteur.
 
 ### Comment ces écarts sont contrôlés
 

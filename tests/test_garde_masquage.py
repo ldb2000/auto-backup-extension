@@ -24,6 +24,15 @@ aussi : les tests portent des vecteurs de secrets, pas du masquage.
 Chaque détecteur est d'abord éprouvé sur un code synthétique qui doit le
 déclencher, puis sur `masquage.py` lui-même : une garde qui ne voit rien nulle
 part ne prouverait rien.
+
+**Limites assumées.** Le suivi des dérivés d'une exception se fait au sein d'une
+fonction : une exception passée en paramètre à une autre fonction qui la
+journalise, ou transmise via une valeur de retour, n'est pas suivie. Les
+receveurs indirects (`getattr(obj, "error")(...)`) ne le sont pas non plus. La
+limitation reflète la structure des appels du fork — les exceptions échappent
+rarement les scopes de fonction — et l'équilibre entre la couverture et le coût
+de l'analyse statique. Les appels de journalisation qui risquent d'y contrevenir
+doivent donc être vérifiés à la main au moment de l'implémentation.
 """
 
 from __future__ import annotations

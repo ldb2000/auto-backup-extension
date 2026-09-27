@@ -1632,6 +1632,19 @@ côté Home Assistant, contrairement aux problèmes et aux étapes du flux d'opt
 sont écrits dans `notifications.py`. C'est une limite de la plateforme, pas un choix ; si Home
 Assistant ouvre la traduction des notifications, elles rejoindront `translations/`.
 
+**Extension au journal (issue #35).** Le masquage s'étend aux appels de journalisation : les
+exceptions inattendues ne passent plus par `_LOGGER.exception()`, qui recopie le message brut de
+chaque exception de la chaîne. Le module propose trois fonctions publiques :
+`decrire_l_exception()` (« Type: message » masqué), `trace_masquee()` (trace à l'allure standard,
+messages masqués, cadres intacts), et `journaliser_une_exception()` (remplaçant de
+`journal.exception()`, qui enregistre type et message masqués en `error`, puis la trace complète
+en `debug` seulement). Quatre passages du code du fork (`upload.py`, `retention.py` à deux reprises, `entities.py`) l'appellent plutôt que la trace
+brute de la plateforme : aucun secret ne peut atteindre l'utilisateur quel que soit le niveau du
+journal. Une garde statique, `tests/test_garde_masquage.py`, échoue si la structure s'y écarte
+(motif d'exception ailleurs que dans `masquage.py`, trace brute relayée, exception non masquée en
+journal). Limites assumées : le suivi des dérivés d'une exception est local à sa fonction, les
+receveurs indirects ne sont pas suivis.
+
 ## Changement de compte à la ré-autorisation (issue #17)
 
 Ré-autoriser une destination sur un **autre** compte est légitime (compte professionnel devenu
