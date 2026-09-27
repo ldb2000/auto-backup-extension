@@ -13,6 +13,10 @@ refuse en CI un fichier de traduction mal structuré. Faute de pouvoir rejouer
 - les textes des notifications persistantes (section `exceptions`, #45) sont
   tous référencés par `destinations/notifications.py`, avec les placeholders
   que le code fournit ;
+- chaque code d'erreur stable (`CodeErreur`, #46) a son message dans la même
+  section, sans placeholder et sans rien que le masquage altérerait, et les
+  refus de l'option `upload_to` (`ServiceValidationError` traduisibles de
+  `destinations/upload.py`) y ont les leurs, avec leurs placeholders ;
 - les actions de `services.yaml` sont intégralement traduites — `hassfest`
   exige un nom et une description pour chaque action et chaque champ déclarés
   dans la section `services` ;
@@ -37,7 +41,18 @@ import pytest
 import yaml
 
 from custom_components.auto_backup import config_flow, const
-from custom_components.auto_backup.destinations import flow, notifications, reauth
+from custom_components.auto_backup.destinations import (
+    flow,
+    notifications,
+    reauth,
+    upload,
+)
+from custom_components.auto_backup.destinations.errors import (
+    CLES_DES_ERREURS,
+    CodeErreur,
+    cle_de_traduction_de_l_erreur,
+)
+from custom_components.auto_backup.destinations.masquage import masquer
 
 RACINE_DEPOT = Path(__file__).resolve().parent.parent
 INTEGRATION = RACINE_DEPOT / "custom_components" / "auto_backup"
@@ -57,6 +72,7 @@ MODULE_CONFIG_FLOW = INTEGRATION / "config_flow.py"
 MODULE_ENTITES = INTEGRATION / "destinations" / "entities.py"
 MODULE_REAUTH = INTEGRATION / "destinations" / "reauth.py"
 MODULE_NOTIFICATIONS = INTEGRATION / "destinations" / "notifications.py"
+MODULE_UPLOAD = INTEGRATION / "destinations" / "upload.py"
 
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 CLE_DE_TRADUCTION = re.compile(r"^[a-z0-9_-]+$")
@@ -461,17 +477,35 @@ def test_chaque_cle_de_notification_est_lue_par_le_code() -> None:
 
 
 @pytest.mark.parametrize("langue", LANGUES_ETENDUES)
-def test_les_notifications_sont_traduites_sans_orphelin(langue: str) -> None:
-    """Chaque texte de notification existe, sous la seule clé `message`.
+def test_la_section_exceptions_est_traduite_sans_orphelin(langue: str) -> None:
+    """Chaque texte de la section `exceptions` existe, sous la seule clé `message`.
 
     `hassfest` n'accepte que `message` dans une entrée de la section
-    `exceptions` ; une clé que le code ne lit pas serait orpheline.
+    `exceptions` ; une clé que le code ne lit pas serait orpheline. La section
+    réunit trois familles : notifications (#45), messages des codes d'erreur
+    et refus de l'option `upload_to` (#46).
     """
     exceptions = _traduction(langue)["exceptions"]
 
-    assert set(exceptions) == set(notifications.CLES_DE_TRADUCTION)
+    attendues = (
+        set(notifications.CLES_DE_TRADUCTION)
+        | set(CLES_DES_ERREURS)
+        | set(upload.CLES_DE_TRADUCTION)
+    )
+    assert set(exceptions) == attendues
     for cle, entree in exceptions.items():
         assert set(entree) == {"message"}, f"{langue} : exceptions.{cle}"
+        assert CLE_DE_TRADUCTION.match(cle), cle
+
+
+def test_les_trois_familles_d_exceptions_ne_se_chevauchent_pas() -> None:
+    """Une clé n'appartient qu'à une famille : aucune ne masque l'autre."""
+    familles = [
+        set(notifications.CLES_DE_TRADUCTION),
+        set(CLES_DES_ERREURS),
+        set(upload.CLES_DE_TRADUCTION),
+    ]
+    assert sum(map(len, familles)) == len(set().union(*familles))
 
 
 @pytest.mark.parametrize("langue", LANGUES_ETENDUES)
@@ -501,6 +535,74 @@ def test_les_notifications_different_entre_les_langues() -> None:
     anglais = _traduction("en")["exceptions"]
 
     assert all(francais[cle] != anglais[cle] for cle in francais)
+
+
+### Messages des échecs de destination (#46) ###
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+@pytest.mark.parametrize("code", list(CodeErreur))
+def test_chaque_code_d_erreur_a_son_message(langue: str, code: CodeErreur) -> None:
+    """Critère 1 de #46 : un message par code, en français et en anglais.
+
+    Sans placeholder : le message est composé sans donnée venue du fournisseur,
+    le détail allant au journal. Et sans rien que `masquer()` altérerait : les
+    consommateurs internes (notifications, attribut `last_error`) masquent
+    encore `error` à la lecture, et doivent afficher le texte intact.
+    """
+    message = _traduction(langue)["exceptions"][cle_de_traduction_de_l_erreur(code)][
+        "message"
+    ]
+
+    assert message.strip()
+    assert not _placeholders(message)
+    assert masquer(message) == message
+
+
+def test_les_codes_d_erreur_sont_des_identifiants_stables() -> None:
+    """Contrat des automatisations : minuscules, chiffres et `_`, sans doublon."""
+    valeurs = [code.value for code in CodeErreur]
+
+    assert len(valeurs) == len(set(valeurs))
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]*", valeur) for valeur in valeurs)
+
+
+def _refus_d_upload_to() -> dict[str, set[str]]:
+    """Clé et placeholders de chaque `ServiceValidationError` de `upload.py`."""
+    refus: dict[str, set[str]] = {}
+    for noeud in ast.walk(_arbre(MODULE_UPLOAD)):
+        if not (
+            isinstance(noeud, ast.Call)
+            and isinstance(noeud.func, ast.Name)
+            and noeud.func.id == "ServiceValidationError"
+        ):
+            continue
+        cle = _mot_cle(noeud, "translation_key")
+        assert isinstance(cle, ast.Name), "clé de traduction en dur dans upload.py"
+        assert isinstance(_mot_cle(noeud, "translation_domain"), ast.Name)
+        assert not noeud.args, "un refus d'`upload_to` ne porte plus de texte en dur"
+        refus.setdefault(getattr(upload, cle.id), set()).update(
+            _cles_du_dict(_mot_cle(noeud, "translation_placeholders"))
+        )
+    return refus
+
+
+def test_chaque_refus_d_upload_to_est_traduisible() -> None:
+    """Critère 2 de #46 : chaque refus porte domaine et clé de traduction."""
+    assert set(_refus_d_upload_to()) == set(upload.CLES_DE_TRADUCTION)
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+def test_les_placeholders_des_refus_d_upload_to_sont_fournis(langue: str) -> None:
+    """Chaque placeholder d'un refus reçoit une valeur, et réciproquement."""
+    exceptions = _traduction(langue)["exceptions"]
+
+    ecarts = [
+        cle
+        for cle, placeholders in _refus_d_upload_to().items()
+        if _placeholders(exceptions[cle]["message"]) != placeholders
+    ]
+    assert not ecarts, f"placeholders divergents en {langue} : {ecarts}"
 
 
 ### Actions (`services.yaml`) ###

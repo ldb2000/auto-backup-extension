@@ -34,6 +34,7 @@ from custom_components.auto_backup.destinations import (
     async_effacer_la_reauthentification,
     async_signaler_la_reauthentification,
     notifications,
+    traductions,
 )
 from custom_components.auto_backup.destinations.models import VALEUR_MASQUEE
 from custom_components.auto_backup.destinations.notifications import (
@@ -235,18 +236,18 @@ async def test_le_chargement_asynchrone_des_traductions_est_bien_emprunte(
     monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
 
     appels: list[tuple[Any, ...]] = []
-    original = notifications.async_get_translations
+    original = traductions.async_get_translations
 
     async def espion(*args: Any, **kwargs: Any) -> dict[str, str]:
         appels.append(args)
         return await original(*args, **kwargs)
 
-    monkeypatch.setattr(notifications, "async_get_translations", espion)
+    monkeypatch.setattr(traductions, "async_get_translations", espion)
 
     await _charger(hass, "fr", config_factice())
     await _echec(hass)
 
-    assert appels == [(hass, "fr", notifications.CATEGORIE_DE_TRADUCTION, {DOMAIN})], (
+    assert appels == [(hass, "fr", traductions.CATEGORIE_DE_TRADUCTION, {DOMAIN})], (
         "async_get_translations n'a pas été appelé : le chemin asynchrone n'a pas couru"
     )
     assert _notification_d_echec(hass)["title"] == TITRE_FRANCAIS
@@ -264,13 +265,13 @@ def _chargement_retarde(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
     """
     monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
     attente = asyncio.Event()
-    original = notifications.async_get_translations
+    original = traductions.async_get_translations
 
     async def chargement_retarde(*args: Any, **kwargs: Any) -> dict[str, str]:
         await attente.wait()
         return await original(*args, **kwargs)
 
-    monkeypatch.setattr(notifications, "async_get_translations", chargement_retarde)
+    monkeypatch.setattr(traductions, "async_get_translations", chargement_retarde)
     return attente
 
 
@@ -403,14 +404,12 @@ async def test_un_chargement_en_echec_cree_quand_meme_la_notification(
     """
     await _charger(hass, "fr", config_factice())
     monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
-    monkeypatch.setattr(
-        notifications, "async_get_cached_translations", lambda *args: {}
-    )
+    monkeypatch.setattr(traductions, "async_get_cached_translations", lambda *args: {})
 
     async def chargement_en_echec(*args: Any, **kwargs: Any) -> dict[str, str]:
         raise OSError("lecture impossible de /config/secret_token=abc")
 
-    monkeypatch.setattr(notifications, "async_get_translations", chargement_en_echec)
+    monkeypatch.setattr(traductions, "async_get_translations", chargement_en_echec)
 
     await _echec(hass)
 
@@ -435,7 +434,7 @@ async def test_un_chargement_en_echec_retombe_sur_l_anglais_en_cache(
     async def chargement_en_echec(*args: Any, **kwargs: Any) -> dict[str, str]:
         raise OSError
 
-    monkeypatch.setattr(notifications, "async_get_translations", chargement_en_echec)
+    monkeypatch.setattr(traductions, "async_get_translations", chargement_en_echec)
 
     await _echec(hass)
 

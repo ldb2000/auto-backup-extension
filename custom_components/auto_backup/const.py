@@ -103,6 +103,10 @@ ATTR_DESTINATION = "destination"
 ATTR_DESTINATION_NAME = "destination_name"
 ATTR_SIZE = "size"
 ATTR_REMOTE_ID = "remote_id"
+# Code stable d'un échec de téléversement (issue #46), valeur de
+# `destinations.errors.CodeErreur` : la clé de filtrage des automatisations, le
+# texte d'`ATTR_ERROR` étant traduit.
+ATTR_ERROR_CODE = "error_code"
 
 # Délai maximum d'un téléversement, en secondes. Lu dans `entry.options`, où il
 # est réglé par l'étape « Réglages du téléversement » du flux d'options du fork

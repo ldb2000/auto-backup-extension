@@ -33,6 +33,7 @@ from custom_components.auto_backup.const import (
     ATTR_DESTINATION,
     ATTR_DESTINATION_NAME,
     ATTR_ERROR,
+    ATTR_ERROR_CODE,
     ATTR_REMOTE_ID,
     ATTR_SLUG,
     CONF_AUTO_PURGE,
@@ -54,6 +55,7 @@ from custom_components.auto_backup.destinations import (
     async_signaler_la_reauthentification,
     identifiant_du_probleme,
 )
+from custom_components.auto_backup.destinations.errors import CodeErreur
 from custom_components.auto_backup.destinations.masquage import masquer
 from custom_components.auto_backup.destinations.models import VALEUR_MASQUEE
 from custom_components.auto_backup.destinations.notifications import (
@@ -61,6 +63,7 @@ from custom_components.auto_backup.destinations.notifications import (
     identifiant_de_notification_de_reauthentification,
 )
 from destinations_factices import PROVIDER_FACTICE, config_factice, config_oauth_factice
+from messages_attendus import message_d_erreur
 
 DESTINATION = "destination_test"
 NOM_DE_LA_DESTINATION = "Destination de test"
@@ -375,18 +378,22 @@ async def test_l_option_desactivee_supprime_la_notification_pas_l_alerte(
 
     evenements = async_capture_events(hass, EVENT_UPLOAD_FAILED)
     with caplog.at_level(logging.ERROR):
-        hass.data[DATA_UPLOADS]._async_signaler_echec(
+        await hass.data[DATA_UPLOADS]._async_signaler_echec(
             DESTINATION,
             NOM_DE_LA_DESTINATION,
             NOM_DE_LA_SAUVEGARDE,
             SLUG,
+            CodeErreur.QUOTA_DEPASSE,
             "quota du compte dépassé",
         )
         await hass.async_block_till_done()
 
     assert _notification_d_echec(hass) is None
     assert len(evenements) == 1
-    assert evenements[0].data[ATTR_ERROR] == "quota du compte dépassé"
+    assert evenements[0].data[ATTR_ERROR] == message_d_erreur(
+        CodeErreur.QUOTA_DEPASSE, "fr"
+    )
+    assert evenements[0].data[ATTR_ERROR_CODE] == "quota_exceeded"
     assert "quota du compte dépassé" in caplog.text
 
 

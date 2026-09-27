@@ -183,6 +183,63 @@
         },
         "notification_cause_inconnue": {
             "message": "unknown cause"
+        },
+        "erreur_access_revoked": {
+            "message": "access to the destination was revoked or has expired: re-authorise it from the integration options"
+        },
+        "erreur_missing_scope": {
+            "message": "the destination's authorisation lacks a permission: re-authorise it and grant every requested permission"
+        },
+        "erreur_quota_exceeded": {
+            "message": "the account's storage is full: free up space with the provider or reduce the retention"
+        },
+        "erreur_rate_limited": {
+            "message": "the provider is temporarily limiting the number of requests: try again later"
+        },
+        "erreur_timeout": {
+            "message": "the time limit was exceeded: the provider did not answer in time or the upload took too long"
+        },
+        "erreur_network_error": {
+            "message": "the provider cannot be reached: check Home Assistant's Internet connection"
+        },
+        "erreur_provider_unavailable": {
+            "message": "the provider is temporarily unavailable: try again later"
+        },
+        "erreur_invalid_folder": {
+            "message": "the destination's remote folder is invalid or rejected by the provider: check the configured folder"
+        },
+        "erreur_api_disabled": {
+            "message": "the Google Drive API is not enabled on your Google Cloud project: enable “Google Drive API” under “APIs & Services” > “Library”, then try again"
+        },
+        "erreur_not_found": {
+            "message": "the requested item does not exist (any more) at the provider"
+        },
+        "erreur_unknown_destination": {
+            "message": "the destination no longer exists: it may have been removed since the action was called"
+        },
+        "erreur_local_backup_unreadable": {
+            "message": "the local backup could not be read for upload: details are in the Home Assistant log"
+        },
+        "erreur_invalid_config": {
+            "message": "the destination's configuration is invalid or incomplete: details are in the Home Assistant log"
+        },
+        "erreur_unknown_provider": {
+            "message": "the destination's provider is not supported by this version of Auto Backup"
+        },
+        "erreur_unknown": {
+            "message": "unexpected provider error: details are in the Home Assistant log"
+        },
+        "destination_inconnue": {
+            "message": "Unknown destination: “{destination}”. Configured destinations: {disponibles}."
+        },
+        "destination_inconnue_sans_destination": {
+            "message": "Unknown destination: “{destination}”. No remote destination is configured."
+        },
+        "destination_ambigue": {
+            "message": "Several destinations are named “{destination}”: specify its identifier ({identifiants})."
+        },
+        "televersement_indisponible": {
+            "message": "Remote upload is unavailable: the Auto Backup entry is not loaded."
         }
     },
     "entity": {

@@ -62,7 +62,10 @@ from custom_components.auto_backup.destinations import (
     provider_label,
     spec_oauth_du_fournisseur,
 )
-from custom_components.auto_backup.destinations.errors import UnknownProviderError
+from custom_components.auto_backup.destinations.errors import (
+    CodeErreur,
+    UnknownProviderError,
+)
 from custom_components.auto_backup.destinations.flow import IDENTIFIANT_PROVISOIRE
 from custom_components.auto_backup.destinations.masquage import masquer
 from custom_components.auto_backup.destinations.providers.dropbox import (
@@ -76,6 +79,7 @@ from custom_components.auto_backup.destinations.providers.dropbox import (
     CompteDropbox,
     DropboxDestination,
 )
+from messages_attendus import message_d_erreur
 
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
@@ -425,7 +429,11 @@ async def test_un_compte_injoignable_interrompt_l_ajout(
 
     assert resultat["type"] is FlowResultType.ABORT
     assert resultat["reason"] == "echec_fournisseur"
-    assert "500" in resultat["description_placeholders"]["detail"]
+    # Le détail est le message traduit du code stable (#46) ; le statut HTTP
+    # et le texte du fournisseur ne vont qu'au journal.
+    assert resultat["description_placeholders"]["detail"] == message_d_erreur(
+        CodeErreur.FOURNISSEUR_EN_PANNE
+    )
     assert CONF_DESTINATIONS not in entree.options
 
     # Le service rétabli, le flux repart sans redémarrer Home Assistant.
@@ -437,6 +445,35 @@ async def test_un_compte_injoignable_interrompt_l_ajout(
 
     assert resultat["step_id"] == "destination"
     assert _valeur_suggeree(resultat, CONF_NAME) == NOM_PAR_DEFAUT_ATTENDU
+
+
+async def test_le_detail_de_l_abandon_suit_la_langue_de_l_instance(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#46 : `{detail}` est le message du code, dans la langue de l'instance.
+
+    Le texte de Dropbox et son statut ne vont qu'au journal.
+    """
+    hass.config.language = "fr"
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.post(
+        URL_COMPTE,
+        status=401,
+        json={"error_summary": "missing_scope/..", "error": {".tag": "missing_scope"}},
+    )
+
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    resultat = await _retour_du_fournisseur(hass, resultat, code=CODE_AUTORISATION)
+
+    assert resultat["reason"] == "echec_fournisseur"
+    detail = resultat["description_placeholders"]["detail"]
+    assert detail == message_d_erreur(CodeErreur.PORTEE_MANQUANTE, "fr")
+    assert "HTTP 401" not in detail
+    assert "missing_scope" in caplog.text
 
 
 async def test_un_fournisseur_devenu_inutilisable_interrompt_l_ajout(
@@ -462,7 +499,9 @@ async def test_un_fournisseur_devenu_inutilisable_interrompt_l_ajout(
 
     assert resultat["type"] is FlowResultType.ABORT
     assert resultat["reason"] == "echec_fournisseur"
-    assert "fournisseur retiré" in resultat["description_placeholders"]["detail"]
+    detail = resultat["description_placeholders"]["detail"]
+    assert detail == message_d_erreur(CodeErreur.FOURNISSEUR_INCONNU)
+    assert "fournisseur retiré" not in detail
     assert CONF_DESTINATIONS not in entree.options
 
 
@@ -882,8 +921,10 @@ async def test_dropbox_injoignable_est_une_erreur_de_destination(
     """Une panne réseau est signalée comme telle, sans remettre l'accès en cause."""
     aioclient_mock.post(URL_COMPTE, exc=ClientError("réseau indisponible"))
 
-    with pytest.raises(DestinationError, match="injoignable"):
+    with pytest.raises(DestinationError, match="injoignable") as erreur:
         await _destination(hass, entree_dropbox).async_check_connection()
+
+    assert erreur.value.code is CodeErreur.RESEAU_INJOIGNABLE
 
 
 async def test_une_absence_de_reponse_est_signalee(
@@ -894,8 +935,58 @@ async def test_une_absence_de_reponse_est_signalee(
     """Un appel qui n'aboutit pas dans le délai imparti n'attend pas indéfiniment."""
     aioclient_mock.post(URL_COMPTE, exc=TimeoutError())
 
-    with pytest.raises(DestinationError, match="temps imparti"):
+    with pytest.raises(DestinationError, match="temps imparti") as erreur:
         await _destination(hass, entree_dropbox).async_check_connection()
+
+    assert erreur.value.code is CodeErreur.DELAI_DEPASSE
+
+
+@pytest.mark.parametrize(
+    ("statut", "resume", "code"),
+    [
+        pytest.param(
+            401, "expired_access_token/..", CodeErreur.ACCES_REVOQUE, id="jeton"
+        ),
+        pytest.param(
+            401,
+            "missing_scope/.",
+            CodeErreur.PORTEE_MANQUANTE,
+            id="portee-manquante-401",
+        ),
+        pytest.param(
+            403,
+            "missing_scope/..",
+            CodeErreur.PORTEE_MANQUANTE,
+            id="portee-manquante-403",
+        ),
+        pytest.param(
+            429, "too_many_requests/..", CodeErreur.LIMITATION_DE_DEBIT, id="debit"
+        ),
+        pytest.param(
+            503, "internal_error/", CodeErreur.FOURNISSEUR_EN_PANNE, id="panne"
+        ),
+        pytest.param(400, "bad_request/", CodeErreur.INCONNUE, id="inattendu"),
+    ],
+)
+async def test_chaque_refus_de_dropbox_porte_son_code_stable(
+    hass: HomeAssistant,
+    entree_dropbox: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    statut: int,
+    resume: str,
+    code: CodeErreur,
+) -> None:
+    """#46 : le code du fork, commun à Google Drive pour une même cause."""
+    aioclient_mock.post(
+        URL_COMPTE,
+        status=statut,
+        json={"error_summary": resume, "error": {".tag": resume.split("/")[0]}},
+    )
+
+    with pytest.raises(DestinationError) as erreur:
+        await _destination(hass, entree_dropbox).async_check_connection()
+
+    assert erreur.value.code is code
 
 
 ### Secrets ###

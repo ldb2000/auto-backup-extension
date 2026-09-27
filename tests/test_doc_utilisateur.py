@@ -38,6 +38,7 @@ from custom_components.auto_backup.const import (
     ATTR_DESTINATION,
     ATTR_DESTINATION_NAME,
     ATTR_ERROR,
+    ATTR_ERROR_CODE,
     ATTR_REMOTE_ID,
     ATTR_REMOTE_IDS,
     ATTR_SIZE,
@@ -59,6 +60,7 @@ from custom_components.auto_backup.const import (
     EVENT_UPLOAD_SUCCESSFUL,
     STORAGE_KEY_REMOTE_BACKUPS,
 )
+from custom_components.auto_backup.destinations.errors import CodeErreur
 
 RACINE_DEPOT = Path(__file__).resolve().parent.parent
 README = RACINE_DEPOT / "README.md"
@@ -88,7 +90,7 @@ CHAMPS_DES_EVENEMENTS: dict[str, tuple[str, ...]] = {
     EVENT_BACKUPS_PURGED: ("backups",),
     EVENT_UPLOAD_START: CHAMPS_UPLOAD,
     EVENT_UPLOAD_SUCCESSFUL: (*CHAMPS_UPLOAD, ATTR_SIZE, ATTR_REMOTE_ID),
-    EVENT_UPLOAD_FAILED: (*CHAMPS_UPLOAD, ATTR_ERROR),
+    EVENT_UPLOAD_FAILED: (*CHAMPS_UPLOAD, ATTR_ERROR, ATTR_ERROR_CODE),
     EVENT_REMOTE_PURGE: (ATTR_DESTINATION, ATTR_DESTINATION_NAME, ATTR_REMOTE_IDS),
 }
 
@@ -317,6 +319,35 @@ def test_la_page_des_services_decrit_chaque_evenement_avec_ses_champs() -> None:
         assert ligne is not None, f"événement absent du tableau : {evenement}"
         cites = set(re.findall(r"`([a-z_]+)`", ligne.rsplit("|", 2)[1]))
         assert cites == set(champs), f"{evenement} : {cites} au lieu de {champs}"
+
+
+def _codes_documentes() -> dict[str, str]:
+    """Codes du tableau « Codes d'erreur » de la page des services, et leur cause."""
+    texte = _lire(DOC_SERVICES)
+    debut = texte.index("## Codes d'erreur")
+    section = texte[debut : texte.index("\n## ", debut + 1)]
+    return {
+        code: cause.strip()
+        for code, cause in re.findall(r"^\| `([a-z_]+)` \|([^|]+)\|", section, re.M)
+    }
+
+
+def test_la_page_des_services_documente_chaque_code_d_erreur() -> None:
+    """#46 : `error_code` est un contrat public, chaque valeur est documentée.
+
+    Et seulement elles : un code documenté que le code n'émet pas tromperait
+    une automatisation qui filtrerait dessus.
+    """
+    assert set(_codes_documentes()) == {code.value for code in CodeErreur}
+    assert all(_codes_documentes().values())
+
+
+def test_l_exemple_d_alerte_filtre_sur_le_code_et_non_sur_le_texte() -> None:
+    """Le texte de `error` est traduit : l'exemple ne le compare jamais."""
+    texte = _lire(DOC_SERVICES)
+
+    assert "error_code: " in "\n".join(BLOC_YAML.findall(texte))
+    assert "trigger.event.data.error ==" not in texte
 
 
 def test_l_option_des_notifications_citee_par_le_readme_existe() -> None:
