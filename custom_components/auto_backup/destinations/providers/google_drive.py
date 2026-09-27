@@ -1,16 +1,17 @@
-"""Destination Google Drive, autorisée en OAuth2 (issues #13 et #14).
+"""Destination Google Drive, autorisée en OAuth2 (issues #13, #14 et #15).
 
 Ce module branche Google Drive sur le socle des destinations distantes : il
 déclare son autorisation OAuth2 (`OAUTH2_SPEC`), identifie le compte autorisé,
-vérifie l'accès et téléverse une sauvegarde. Le listage et la suppression (#15)
-viendront le compléter sans rien changer ici d'autre que leurs deux méthodes ;
-d'ici là, elles lèvent une `DestinationError` explicite, que la rétention
-distante (#9) traite comme l'échec attendu qu'elle est.
+vérifie l'accès, téléverse une sauvegarde, liste celles déjà déposées et les
+supprime. Le cycle de vie du contrat `RemoteDestination` est donc complet, et la
+rétention distante (#9) s'applique réellement à une destination Google Drive.
 
-Le téléversement lui-même — dossier cible et envoi resumable — vit dans
-`google_drive_upload.py`, importé **dans** `async_upload()` : ce module-ci
-fournit les primitives partagées (appel authentifié, traduction des erreurs,
-signalement d'un accès révoqué) et ne peut donc pas l'importer au niveau du
+Les opérations elles-mêmes vivent dans deux modules voisins, importés **dans** les
+méthodes qui les appellent : `google_drive_upload.py` (dossier cible, envoi
+resumable, et les primitives de l'API `drive/v3/files`) et
+`google_drive_listage.py` (listage paginé, suppression). Ce module-ci fournit les
+primitives de plus bas niveau — appel authentifié, traduction des erreurs,
+signalement d'un accès révoqué — et ne peut donc pas les importer au niveau du
 module sans refermer un cycle.
 
 **Aucun SDK Google n'est utilisé** : les appels passent par la session aiohttp
@@ -488,32 +489,56 @@ class GoogleDriveDestination(RemoteDestination):
         return distante
 
     async def async_list_backups(self) -> list[RemoteBackup]:
-        """Listage : implémenté par l'issue #15.
+        """Liste les sauvegardes déposées dans le dossier dédié (issue #15).
 
-        L'absence de listage est une **erreur attendue**, pas un défaut de
-        programmation : depuis la rétention distante (#9), une destination
-        Google Drive porteuse d'une rétention appelle cette méthode après chaque
-        téléversement réussi. Une `NotImplementedError` y serait rattrapée comme
-        erreur inattendue et journalisée en `ERROR` avec une trace d'appel, à
-        chaque sauvegarde. Une `DestinationError` dit la même chose au
-        coordinateur de purge, qui l'attend, la journalise en une ligne lisible
-        et passe à la destination suivante.
+        Seules les sauvegardes **non supprimées portant le marqueur**
+        `auto_backup` sont renvoyées : un document que l'utilisateur aurait
+        déposé dans ce dossier, un fichier à la corbeille ou le dossier d'une
+        autre destination n'y figurent pas, et ne peuvent donc pas être purgés.
+        Le détail — requête `q`, pagination, bornes — vit dans
+        `google_drive_listage.py`.
+
+        Les appels sont bornés par le fournisseur lui-même, comme le contrat du
+        socle le demande : délai par requête, trois tentatives au plus, et un
+        plafond de pages parcourues.
         """
-        raise DestinationError(
-            "le listage des sauvegardes Google Drive n'est pas encore "
-            "implémenté, voir l'issue #15"
+        # Import différé, pour la même raison que le téléversement : le module
+        # s'appuie sur les primitives définies ici (via `google_drive_upload`).
+        from .google_drive_listage import async_lister_les_sauvegardes
+
+        distantes = await async_lister_les_sauvegardes(
+            self._session,
+            dossier=self.folder,
+            dossier_id=self.folder_id,
+            memoriser=self._memoriser_le_dossier,
         )
+        _LOGGER.debug(
+            "%s sauvegarde(s) listée(s) sur Google Drive pour la destination « %s »",
+            len(distantes),
+            self.destination_id,
+        )
+        return distantes
 
     async def async_delete_backup(self, remote_id: str) -> None:
-        """Suppression : implémentée par l'issue #15.
+        """Supprime définitivement une sauvegarde du Drive (issue #15).
 
-        `DestinationError` pour la même raison que le listage ci-dessus. La
-        purge n'atteint pas encore cette méthode — elle abandonne la destination
-        dès le listage — mais un appel direct doit échouer de la même façon.
+        La suppression ne passe **pas** par la corbeille : un fichier à la
+        corbeille continue de consommer le quota du compte Google pendant trente
+        jours, ce qui priverait d'effet la rétention de l'utilisateur qui l'a
+        réglée parce que son Drive se remplit. La décision est argumentée dans
+        l'ADR et annoncée dans `docs/destinations/google-drive.md`.
+
+        Un fichier déjà absent lève `DestinationNotFoundError` : la rétention
+        distante (#9) y voit une sauvegarde déjà purgée et continue.
         """
-        raise DestinationError(
-            "la suppression d'une sauvegarde Google Drive n'est pas encore "
-            "implémentée, voir l'issue #15"
+        from .google_drive_listage import async_supprimer_la_sauvegarde
+
+        await async_supprimer_la_sauvegarde(self._session, remote_id)
+        _LOGGER.debug(
+            "Sauvegarde distante « %s » supprimée de Google Drive pour la "
+            "destination « %s »",
+            remote_id,
+            self.destination_id,
         )
 
 

@@ -28,9 +28,10 @@ avec l'intégration.
 | Portées héritées | `include_granted_scopes=false` | L'autorisation reste exactement celle décrite ici, sans hériter d'autres portées accordées au même projet. |
 
 **Conséquence de la portée `drive.file` :** Auto Backup ne peut ni lire, ni lister, ni supprimer
-les fichiers que vous avez déposés vous-même. Il ne voit que ce qu'il a créé. C'est voulu : la
-purge distante ne peut donc jamais effacer vos propres documents. En contrepartie, si vous
-déplacez ou supprimez une sauvegarde à la main dans Drive, Auto Backup ne la retrouvera pas.
+les fichiers que vous avez déposés vous-même. Il ne voit que ce qu'il a créé. C'est la première
+des protections de la purge distante : vos propres documents lui sont structurellement invisibles,
+et aucune rétention ne peut donc les effacer. En contrepartie, si vous déplacez ou supprimez une
+sauvegarde à la main dans Drive, Auto Backup ne la retrouvera pas.
 
 ## Prérequis : une URL externe publique
 
@@ -127,8 +128,9 @@ Laissez le champ **Origines JavaScript autorisées** vide : Auto Backup n'en uti
 5. De retour dans Home Assistant, la destination est pré-nommée d'après le compte autorisé —
    par exemple `Google Drive – Camille Martin`. Ajustez le nom, le **dossier distant**
    (`Sauvegardes/Home Assistant` par exemple) et, si vous le souhaitez, une rétention propre à
-   cette destination — elle est enregistrée dès maintenant, mais ne s'appliquera qu'avec
-   l'issue #15 (voir « Ce qui n'est pas encore disponible »).
+   cette destination — une durée en jours, un nombre maximum de sauvegardes, ou les deux. Elle
+   s'applique réellement : lisez **« Rétention : ce qui est supprimé, et comment »** ci-dessous
+   avant de la régler, les suppressions sur Drive étant définitives.
 6. Validez : la destination apparaît dans les options.
 
 L'adresse du compte autorisé est conservée avec la destination, ce qui permet de savoir plus
@@ -170,8 +172,8 @@ courant sur Home Assistant Core, où les sauvegardes sans nom explicite s'appell
 
 Les fichiers portent aussi un **marqueur d'origine** invisible (une propriété privée
 `auto_backup`). C'est lui que la purge distante exige avant de supprimer quoi que ce soit : vos
-propres documents, qui ne le portent pas, ne peuvent pas être touchés. Le listage capable de le
-relire chez Google arrive avec l'issue #15 (voir « Ce qui n'est pas encore disponible »).
+propres documents, qui ne le portent pas, ne peuvent pas être touchés. Auto Backup le relit au
+listage — il demande d'ailleurs à Google de ne lui renvoyer *que* les fichiers qui le portent.
 
 ### Si le transfert rencontre un incident
 
@@ -187,6 +189,78 @@ relire chez Google arrive avec l'issue #15 (voir « Ce qui n'est pas encore disp
 Le **délai maximum** accordé à un téléversement se règle dans les options de l'intégration, entrée
 « Réglages du téléversement » (1800 secondes par défaut). Un envoi interrompu par un redémarrage de
 Home Assistant n'est pas repris : la sauvegarde est simplement à renvoyer.
+
+## Rétention : ce qui est supprimé, et comment
+
+Si vous avez réglé une rétention sur la destination — une durée en jours, un nombre maximum de
+sauvegardes, ou les deux —, Auto Backup fait le ménage dans le dossier distant.
+
+> ### Attention : la suppression est définitive, elle ne passe pas par la corbeille
+>
+> Une sauvegarde purgée par Auto Backup est **effacée de votre Drive sur-le-champ**. Elle
+> n'apparaît pas dans la corbeille, et **aucune récupération n'est possible**, ni depuis Drive, ni
+> depuis Home Assistant.
+>
+> C'est un choix assumé : un fichier mis à la corbeille continue de consommer l'espace de votre
+> compte Google pendant trente jours. Votre rétention ne libérerait donc rien pendant un mois —
+> exactement l'inverse de ce que vous lui demandez si vous l'avez réglée parce que votre Drive se
+> remplit. Le raisonnement complet est dans
+> [l'ADR](../adr/0001-destinations-distantes.md#lister-et-supprimer-sur-google-drive-issue-15).
+>
+> **Conseil : réglez large, puis resserrez.** Commencez par une rétention généreuse (30 jours, ou
+> 10 sauvegardes), vérifiez dans le journal ce qui est supprimé, et resserrez ensuite. Un chiffre
+> saisi trop bas ne se rattrape pas.
+
+### Ce qui peut être supprimé, et ce qui ne peut jamais l'être
+
+Auto Backup ne supprime un fichier que si **les deux** conditions suivantes sont réunies.
+
+1. **Il l'a déposé lui-même.** La preuve vient du marqueur `auto_backup` porté par le fichier, ou
+   du registre que Home Assistant tient de ses propres dépôts. Un document que vous avez déposé
+   dans ce dossier n'a ni l'un ni l'autre.
+2. **Il dépasse la rétention** que vous avez réglée pour cette destination.
+
+Quatre choses ne sont donc **jamais** touchées, quel que soit leur âge :
+
+- tout fichier que vous avez déposé vous-même dans le dossier — Auto Backup ne le voit même pas,
+  la portée `drive.file` le lui interdit ;
+- tout fichier du dossier qui ne porte pas le marqueur d'Auto Backup ;
+- les fichiers déjà à la corbeille : ils sont ignorés, pas « purgés » une seconde fois ;
+- les **sous-dossiers**, y compris ceux qu'Auto Backup a créés pour une autre destination. Si vous
+  réglez une destination sur `Sauvegardes` et une autre sur `Sauvegardes/Home Assistant`, la purge
+  de la première ne touchera jamais le dossier de la seconde.
+
+Et bien sûr : **le reste de votre Drive est hors d'atteinte**, ainsi que vos sauvegardes locales,
+qui suivent la rétention locale de l'intégration (`keep_days`) et non celle de la destination.
+
+### Quand la purge s'exécute
+
+- **après chaque sauvegarde téléversée avec succès**, si l'option **purge automatique**
+  (`auto_purge`) de l'intégration est active — c'est la même option qui commande la purge locale ;
+- **à chaque appel du service `auto_backup.purge`**, pour toutes les destinations configurées.
+
+Une destination sans aucune rétention n'est jamais purgée, et une destination en attente de
+ré-autorisation est sautée sans aucun appel réseau.
+
+### Ce que vous voyez dans le journal
+
+Une purge qui supprime quelque chose l'écrit, et émet l'événement `auto_backup.remote_purge` avec
+la liste des identifiants supprimés — de quoi bâtir une automatisation de notification :
+
+```text
+Purge distante de « Mon Drive » : 2 sauvegarde(s) supprimée(s)
+```
+
+Une purge qui ne trouve rien à supprimer ne dit rien et n'émet aucun événement. Une sauvegarde
+déjà disparue de Drive (vous l'avez retirée à la main entre-temps) est considérée comme purgée :
+elle quitte simplement le registre, avec un avertissement.
+
+### Combien de sauvegardes Auto Backup peut-il lister ?
+
+Le dossier est parcouru page par page, jusqu'à **5 000 sauvegardes**. Au-delà, le listage s'arrête
+avec un avertissement dans le journal et la rétention ne s'applique qu'à ce qui a été lu : rien
+n'est supprimé par erreur, mais il vous restera du ménage à faire. Aucun usage domestique
+n'atteint ce plafond.
 
 ## En cas d'échec
 
@@ -226,27 +300,11 @@ jeton sont effacés de Home Assistant. **Les sauvegardes déjà déposées sur D
 supprimées** : retirez-les à la main si vous le souhaitez. Pensez aussi à retirer l'accès depuis
 [les autorisations de votre compte Google](https://myaccount.google.com/permissions).
 
-## Ce qui n'est pas encore disponible
+## Supprimer une sauvegarde à la main
 
-La connexion du compte et le **dépôt des sauvegardes** sont disponibles. Reste à venir
-[#15](https://github.com/ldb2000/auto-backup-extension/issues/15) : **lister et supprimer** les
-sauvegardes déjà déposées sur Drive.
+Rien ne l'interdit : retirez le fichier depuis l'interface de Drive. Auto Backup ne le retrouvera
+plus au listage suivant et retirera son entrée de son registre sans rien signaler d'alarmant.
 
-**Conséquence sur la rétention distante.** La rétention distante existe (issue #9) et le champ
-est bien enregistré pour une destination Google Drive, mais elle **ne peut pas encore
-s'appliquer** ici : supprimer suppose de lister d'abord, et c'est précisément ce que #15 apporte.
-Tant qu'elle manque, la purge d'une destination Google Drive s'arrête au listage et se contente
-d'une ligne dans le journal :
-
-```text
-Purge distante de « Mon Drive » abandonnée : listage impossible
-(le listage des sauvegardes Google Drive n'est pas encore implémenté, voir l'issue #15)
-```
-
-Ce message est attendu et sans danger : rien n'est supprimé, ni sur Drive, ni en local.
-
-En attendant, les sauvegardes déposées s'accumulent dans le dossier distant : surveillez l'espace
-disponible de votre compte Google, ou faites le ménage à la main de temps en temps.
-
-Une destination configurée aujourd'hui profitera de ces ajouts sans rien reconfigurer : la
-rétention que vous réglez dès maintenant s'appliquera dès que #15 sera livrée.
+L'inverse — **déplacer** une sauvegarde hors du dossier de la destination — la soustrait à la
+rétention : Auto Backup ne la voit plus, et ne la supprimera donc jamais. C'est un moyen simple de
+mettre une sauvegarde de côté.

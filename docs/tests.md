@@ -57,6 +57,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_provider_dropbox_upload_cas_limites.py` | Cas limites du même dépôt : taille annoncée mensongère, deux téléversements successifs, nom ou slug hostile. |
 | `tests/test_provider_google_drive.py` | Fournisseur Google Drive : déclaration OAuth2, URL d'autorisation, ajout complet, identification du compte, erreurs, rafraîchissement et révocation. |
 | `tests/test_provider_google_drive_upload.py` | Téléversement Google Drive : dossier cible, envoi resumable par fragments, reprises, erreurs typées, journaux et parcours complet depuis le service. |
+| `tests/test_provider_google_drive_listage.py` | Listage et suppression Google Drive : requête filtrée, pagination et sa borne, fichiers écartés, suppression idempotente, erreurs d'authentification, purge de bout en bout par le service `purge`. |
 | `tests/test_entites_destinations.py` | Entités d'état d'une destination : création, succès, échec, masquage des secrets, compteur, restauration après redémarrage, ajout et suppression à chaud. |
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
@@ -651,12 +652,57 @@ Le fichier se termine par deux **parcours complets**, qui suivent les règles de
 - appel de `auto_backup.backup` avec `upload_to`, création de sauvegarde simulée, puis vérification
   que l'événement `auto_backup.upload_successful` porte l'identifiant distant renvoyé par Drive ;
 - le même parcours avec une **rétention configurée** sur la destination, qui déclenche la purge
-  distante (#9) après le téléversement. Le listage Google Drive n'existant pas avant #15, cette
-  purge échoue nécessairement : le test vérifie que l'échec est journalisé **sans trace d'appel**
-  (`"Traceback" not in caplog.text`, et aucun enregistrement porteur d'`exc_info`) et que le
-  message renvoie à l'issue. C'est un test de **bruit de journal** : sans lui, remplacer la
-  `DestinationError` des deux méthodes différées par une `NotImplementedError` repasserait
-  inaperçu, alors qu'il en résulterait une trace d'appel à chaque sauvegarde.
+  distante (#9) après le téléversement. Depuis #15, cette purge aboutit : elle liste le dossier, n'y
+  trouve que la sauvegarde qui vient d'être déposée et ne supprime rien. Le test vérifie qu'elle y
+  arrive **sans un mot** au niveau `ERROR`. C'est un test de **bruit de journal** : ce chemin est
+  parcouru après chaque sauvegarde, une ligne d'erreur ou une trace d'appel qui s'y glisserait
+  reviendrait indéfiniment. Le simulateur de #14 sait pour cela répondre au listage — la requête `q`
+  distingue les deux usages de `files.list` — sans reprendre ce que le fichier de #15 éprouve en
+  détail.
+
+## Tester le listage et la suppression sur Google Drive
+
+`tests/test_provider_google_drive_listage.py` (issue #15) éprouve l'autre moitié du cycle de vie :
+lister ce qui a été déposé, et le supprimer. Son simulateur `_FauxDrive` répond aux trois points
+d'accès utilisés — recherche de dossier, `files.list`, `files.delete` — et pagine ses réponses comme
+Google le fait, avec un `nextPageToken` tant qu'il reste des fichiers.
+
+Le point à comprendre avant d'y ajouter un test : **le simulateur n'applique pas la requête `q`
+qu'il reçoit**. Il renvoie tout ce qu'on lui a donné, fichiers étrangers, fichiers à la corbeille et
+dossiers compris. Ce n'est pas un raccourci, c'est la façon d'éprouver la bonne chose : le filtre
+envoyé à Google est une optimisation, et c'est la vérification que le fournisseur **refait sur
+chaque fichier reçu** qui garantit qu'un document de l'utilisateur ne sera jamais purgé. Un test
+séparé, lui, vérifie que la requête envoyée porte bien ses quatre conditions.
+
+Trois aides rendent ces tests courts :
+
+1. **`fichier_drive()`** construit un fichier tel que `files.list` le renvoie. Ses paramètres sont
+   autant d'anomalies à déclarer : `marqueur=None` pour un fichier déposé par l'utilisateur,
+   `corbeille=True`, `mime=MIME_DOSSIER` pour le dossier d'une autre destination, `taille=None` ou
+   `cree_le=None` pour un Drive avare en métadonnées. `jours=30` date le fichier relativement à
+   maintenant : aucun test ne dépend de l'horloge du jour.
+2. **Les anomalies du réseau se déclarent à la construction du simulateur** : `pannes_listage` est
+   une liste de `(statut, corps)` consommée avant les réponses normales, `pannes_suppression` un
+   dictionnaire `identifiant -> (statut, corps)`, et `jeton_sans_fin=True` fait renvoyer un
+   `nextPageToken` indéfiniment, ce qui éprouve la borne `PAGES_MAX`.
+3. **`par_page`** découpe les réponses indépendamment du `pageSize` demandé : trois pages se testent
+   avec cinq fichiers et `par_page=2`, sans en fabriquer cent.
+
+Deux points d'attention :
+
+- **la purge automatique suit un dépôt.** `auto_purge` est actif par défaut dans `_entree()` : un
+  test qui garnit le registre par un événement `auto_backup.upload_successful` déclenche aussitôt
+  une purge. Le désactiver (`options={CONF_AUTO_PURGE: False}`) est ce qui permet d'observer ensuite
+  le seul appel du service `auto_backup.purge` ;
+- **les fixtures viennent du fichier de #14.** Configuration de la destination (`config_google`),
+  jetons, corps d'erreur Google et la fixture `delais` sont importés de
+  `test_provider_google_drive_upload` plutôt que recopiés, comme
+  `test_provider_dropbox_upload_cas_limites` le fait pour Dropbox.
+
+La purge de bout en bout passe par le **service** `auto_backup.purge`, et la provenance des
+sauvegardes y vient du **marqueur relu chez Drive**, sans aucune entrée au registre : c'est
+l'exigence ajoutée par la validation métier de #9, et la seule façon de prouver qu'une sauvegarde
+déposée par une instance ayant perdu son registre reste purgeable.
 
 ## Compatibilité Python
 
@@ -738,10 +784,11 @@ autorisation OAuth2 vue depuis l'interface (ajout, ré-autorisation, suppression
 téléversement après création (lecture en flux, événements, échecs, délai maximum), la connexion
 d'un compte chez les deux fournisseurs livrés — Dropbox (issue #10) et Google Drive (issue #13) —
 la rétention distante (âge, nombre, provenance, tolérance aux erreurs, registre persistant), le
-dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14),
-les notifications d'échec et de ré-authentification, le masquage des secrets et la
-confirmation d'un changement de compte (issue #17), enfin les entités d'état exposées par chaque
-destination (succès, problème, compteur, restauration, issue #16). Le listage et la suppression
-chez chaque fournisseur (#12 et #15) sont testés par leurs issues respectives.
+dépôt réel d'une sauvegarde chez les deux, Dropbox (issue #11) comme Google Drive (issue #14), le
+**listage et la suppression sur Google Drive** (issue #15), jusqu'à la purge de bout en bout par
+le service `auto_backup.purge`, les notifications d'échec et de ré-authentification, le
+masquage des secrets et la confirmation d'un changement de compte (issue #17), enfin les entités
+d'état exposées par chaque destination (succès, problème, compteur, restauration, issue #16). Le
+listage et la suppression chez Dropbox restent à couvrir par #12.
 
 L'exécution de cette suite en intégration continue est décrite dans [`ci.md`](ci.md).

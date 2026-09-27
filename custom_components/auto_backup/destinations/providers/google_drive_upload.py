@@ -27,6 +27,21 @@ donc invisible — `files.list` ne le renverra jamais. Le dossier cible est par
 conséquent toujours créé par l'intégration, et son identifiant conservé avec la
 destination : c'est la seule façon de le retrouver au téléversement suivant.
 
+## Les primitives de l'API `files` vivent ici, et le listage les réutilise
+
+Ce module est aussi la **couche `drive/v3/files`** du fournisseur : point d'accès
+(`URL_FICHIERS`), projections (`CHAMPS_FICHIER`), appel avec nouvelles tentatives
+(`async_appel_drive_json()`), échappement d'une requête `q` (`echapper()`),
+résolution du dossier cible (`async_dossier_cible()`) et construction d'une
+`RemoteBackup` à partir d'un fichier Drive (`sauvegarde_distante_du_fichier()`).
+
+Le listage et la suppression (#15, dans `google_drive_listage.py`) s'appuient
+**tous** sur ces primitives, et non sur un second chemin parallèle : un dossier
+cible retrouvé autrement finirait par diverger de celui où les sauvegardes sont
+déposées, et une requête `q` composée sans échappement casserait sur un nom venu
+de Google. L'ordre des imports reste acyclique :
+`google_drive` <- `google_drive_upload` <- `google_drive_listage`.
+
 ## Mémoire
 
 L'empreinte est **bornée par la taille d'un fragment** (8 Mio) et ne dépend pas
@@ -62,6 +77,7 @@ from multidict import CIMultiDict
 from ..errors import DestinationError, DestinationNotFoundError
 from ..models import RemoteBackup
 from ..oauth import DestinationOAuth2Session
+from ..retention import marqueur_auto_backup
 from .google_drive import (
     DELAI_REQUETE,
     erreur_de_la_reponse,
@@ -87,8 +103,16 @@ CHAMPS_DOSSIER = "files(id,name)"
 
 # Propriétés privées posées sur chaque fichier et chaque dossier créés. Elles
 # sont invisibles pour l'utilisateur dans l'interface de Drive, mais requêtables :
-# le listage et la purge distante (#15, #9) s'en servent pour ne jamais toucher
-# à un fichier qu'Auto Backup n'a pas déposé.
+# le listage (#15) filtre dessus (`appProperties has { key=... and value=... }`)
+# pour ne jamais remonter — donc ne jamais laisser purger — un fichier qu'Auto
+# Backup n'a pas déposé.
+#
+# `MARQUEUR_AUTO_BACKUP` est le nom de la propriété **chez Google**, et non la clé
+# du marqueur que la rétention relit dans `RemoteBackup.metadata` : celle-là n'a
+# qu'une définition, `CLE_MARQUEUR` dans `destinations/retention.py`, et arrive
+# ici par `marqueur_auto_backup()`. Les deux valeurs coïncident aujourd'hui, mais
+# elles répondent à deux contrats différents — l'un est un choix d'API figé par
+# les fichiers déjà déposés, l'autre une convention interne au fork.
 MARQUEUR_AUTO_BACKUP = "auto_backup"
 PROPRIETE_SLUG = "slug"
 PROPRIETE_NOM = "name"
@@ -347,8 +371,15 @@ async def async_appel_drive_json(
 ### Dossier cible ###
 
 
-def _echapper(valeur: str) -> str:
-    """Échappe une valeur littérale d'une requête `q` de l'API Drive."""
+def echapper(valeur: str) -> str:
+    """Échappe une valeur littérale d'une requête `q` de l'API Drive.
+
+    Publique et non privée : le listage (#15) compose lui aussi des requêtes `q`
+    — filtre sur le dossier parent et sur `appProperties` — et doit échapper
+    exactement de la même façon. Une seconde fonction d'échappement finirait par
+    diverger de celle-ci, et c'est précisément le genre d'écart qui laisse passer
+    une apostrophe capable de rompre la chaîne littérale de la requête.
+    """
     return valeur.replace("\\", "\\\\").replace("'", "\\'")
 
 
@@ -359,8 +390,8 @@ def requete_de_dossier(nom: str, parent: str) -> str:
     listé par défaut, et y déposer une sauvegarde reviendrait à la jeter.
     """
     return (
-        f"name = '{_echapper(nom)}' and mimeType = '{MIME_DOSSIER}' "
-        f"and '{_echapper(parent)}' in parents and trashed = false"
+        f"name = '{echapper(nom)}' and mimeType = '{MIME_DOSSIER}' "
+        f"and '{echapper(parent)}' in parents and trashed = false"
     )
 
 
@@ -436,6 +467,34 @@ async def async_resoudre_le_dossier(
     for segment in dossier.split("/"):
         parent = await _async_sous_dossier(session, segment, parent)
     return parent
+
+
+async def async_dossier_cible(
+    session: DestinationOAuth2Session,
+    dossier: str,
+    *,
+    dossier_id: str | None = None,
+    memoriser: Callable[[str], None] | None = None,
+) -> str:
+    """Identifiant du dossier cible : celui déjà mémorisé, ou la hiérarchie résolue.
+
+    Point d'entrée **unique** du dossier cible, partagé par le téléversement
+    (#14) et par le listage (#15) : chercher le dossier par un second chemin
+    exposerait à lister un dossier autre que celui où les sauvegardes sont
+    déposées — deux dossiers homonymes créés à quelques secondes d'intervalle
+    suffiraient, la portée `drive.file` ne pouvant pas voir celui de l'autre
+    chemin.
+
+    `memoriser` est appelée **dès** que l'identifiant est connu, y compris pour
+    un listage : l'aller-retour par segment de chemin est ainsi épargné à
+    l'opération suivante, téléversement compris.
+    """
+    if dossier_id:
+        return dossier_id
+    identifiant = await async_resoudre_le_dossier(session, dossier)
+    if memoriser is not None:
+        memoriser(identifiant)
+    return identifiant
 
 
 ### Nommage ###
@@ -557,6 +616,61 @@ def _entier(valeur: Any) -> int | None:
     return None
 
 
+def sauvegarde_distante_du_fichier(
+    fichier: Mapping[str, Any],
+    *,
+    dossier: str,
+    slug: str | None = None,
+    nom_de_repli: str | None = None,
+    octets: int | None = None,
+) -> RemoteBackup:
+    """Construit la `RemoteBackup` décrivant un fichier de sauvegarde de Drive.
+
+    Partagée par le téléversement (#14), qui décrit le fichier qu'il vient de
+    déposer, et par le listage (#15), qui décrit chacun des fichiers renvoyés par
+    `files.list` : les deux lisent **les mêmes** champs (`CHAMPS_FICHIER`) et
+    doivent en tirer la même sauvegarde distante. Deux constructions parallèles
+    finiraient par différer sur un détail — le repli du nom, la clé du marqueur —
+    et la purge distante cesserait en silence de reconnaître ce que le
+    téléversement dépose.
+
+    `slug` prime sur la propriété privée `slug` du fichier quand l'appelant le
+    connaît déjà (c'est le cas du téléversement, dont le slug vient de Home
+    Assistant et non de Google) ; `nom_de_repli` et `octets` ne servent que si
+    Google n'a pas renvoyé le nom ou la taille.
+
+    Le marqueur de provenance vient de `marqueur_auto_backup()` : sa clé n'a
+    qu'une définition, celle de `destinations/retention.py`. La reproduire ici
+    marcherait tant que les deux valeurs coïncident, et un renommage côté
+    rétention ferait cesser en silence la reconnaissance de tous les dépôts.
+    """
+    identifiant = texte_optionnel(fichier.get("id"))
+    if identifiant is None:
+        raise DestinationError(
+            "Google Drive n'a pas renvoyé l'identifiant du fichier téléversé"
+        )
+    proprietes = fichier.get("appProperties")
+    proprietes = proprietes if isinstance(proprietes, Mapping) else {}
+    nom = texte_optionnel(fichier.get("name")) or nom_de_repli or identifiant
+    taille = _entier(fichier.get("size"))
+    slug_retenu = slug or texte_optionnel(proprietes.get(PROPRIETE_SLUG))
+    return RemoteBackup(
+        remote_id=identifiant,
+        name=nom,
+        slug=slug_retenu,
+        size=taille if taille is not None else octets,
+        created_at=dt_util.parse_datetime(
+            texte_optionnel(fichier.get("createdTime")) or ""
+        ),
+        path=f"{dossier}/{nom}",
+        metadata={
+            PROPRIETE_SLUG: slug_retenu,
+            "md5Checksum": texte_optionnel(fichier.get("md5Checksum")),
+            **marqueur_auto_backup(),
+        },
+    )
+
+
 @dataclass(slots=True)
 class TeleversementDrive:
     """Un téléversement vers Google Drive, du dossier cible au fichier déposé.
@@ -596,14 +710,18 @@ class TeleversementDrive:
     ### Dossier ###
 
     async def _async_dossier(self, *, forcer: bool = False) -> str:
-        """Identifiant du dossier cible, résolu au plus une fois par envoi."""
-        if not forcer and self.dossier_id:
-            return self.dossier_id
-        identifiant = await async_resoudre_le_dossier(self.session, self.dossier)
-        self.dossier_id = identifiant
-        if self.memoriser is not None:
-            self.memoriser(identifiant)
-        return identifiant
+        """Identifiant du dossier cible, résolu au plus une fois par envoi.
+
+        `forcer` fait oublier l'identifiant mémorisé : il ne désigne plus rien
+        chez Google, le dossier ayant été supprimé ou mis à la corbeille.
+        """
+        self.dossier_id = await async_dossier_cible(
+            self.session,
+            self.dossier,
+            dossier_id=None if forcer else self.dossier_id,
+            memoriser=self.memoriser,
+        )
+        return self.dossier_id
 
     ### Session d'envoi ###
 
@@ -850,38 +968,24 @@ class TeleversementDrive:
     ) -> RemoteBackup:
         """Construit la `RemoteBackup` décrivant le fichier déposé.
 
-        La taille renvoyée par Google est comparée à celle réellement envoyée :
-        une archive tronquée ne doit pas être déclarée comme une sauvegarde
-        valide, la rétention finirait par supprimer la copie locale.
+        Seule la **vérification de taille** est propre au téléversement : une
+        archive tronquée ne doit pas être déclarée comme une sauvegarde valide,
+        la rétention finirait par supprimer la copie locale. La lecture des
+        champs, elle, est celle que le listage (#15) applique aussi
+        (`sauvegarde_distante_du_fichier()`).
         """
-        identifiant = texte_optionnel(fichier.get("id"))
-        if identifiant is None:
-            raise DestinationError(
-                "Google Drive n'a pas renvoyé l'identifiant du fichier téléversé"
-            )
         taille = _entier(fichier.get("size"))
         if taille is not None and taille != octets:
             raise DestinationError(
                 f"la sauvegarde déposée sur Google Drive fait {taille} octets au "
                 f"lieu de {octets} : l'envoi est incomplet"
             )
-        nom_distant = texte_optionnel(fichier.get("name")) or nom_fichier
-        proprietes = fichier.get("appProperties")
-        proprietes = proprietes if isinstance(proprietes, Mapping) else {}
-        return RemoteBackup(
-            remote_id=identifiant,
-            name=nom_distant,
-            slug=slug or texte_optionnel(proprietes.get(PROPRIETE_SLUG)),
-            size=taille if taille is not None else octets,
-            created_at=dt_util.parse_datetime(
-                texte_optionnel(fichier.get("createdTime")) or ""
-            ),
-            path=f"{self.dossier}/{nom_distant}",
-            metadata={
-                PROPRIETE_SLUG: slug,
-                "md5Checksum": texte_optionnel(fichier.get("md5Checksum")),
-                MARQUEUR_AUTO_BACKUP: True,
-            },
+        return sauvegarde_distante_du_fichier(
+            fichier,
+            dossier=self.dossier,
+            slug=slug,
+            nom_de_repli=nom_fichier,
+            octets=octets,
         )
 
 
@@ -899,15 +1003,19 @@ __all__ = [
     "UNITE_FRAGMENT",
     "URL_ENVOI",
     "URL_FICHIERS",
+    "VRAI_DRIVE",
     "ReponseDrive",
     "TeleversementDrive",
     "async_appel_drive_json",
     "async_attendre_avant_reprise",
+    "async_dossier_cible",
     "async_resoudre_le_dossier",
     "delai_avant_reprise",
+    "echapper",
     "entete_content_range",
     "nom_du_fichier",
     "offset_du_range",
     "proprietes_du_fichier",
     "requete_de_dossier",
+    "sauvegarde_distante_du_fichier",
 ]
