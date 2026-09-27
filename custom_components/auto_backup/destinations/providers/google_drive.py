@@ -327,6 +327,10 @@ class GoogleDriveDestination(RemoteDestination):
 
     OAUTH2_SPEC: ClassVar[OAuth2ProviderSpec] = SPEC_OAUTH_GOOGLE_DRIVE
 
+    # L'identifiant du dossier cible ne vaut que pour le dossier configuré :
+    # le flux d'options l'oublie quand l'utilisateur change de dossier (#51).
+    CLES_LIEES_AU_DOSSIER: ClassVar[frozenset[str]] = frozenset({CLE_ID_DU_DOSSIER})
+
     # Libellé affiché dans le sélecteur de fournisseur du flux d'options et dans
     # ses formulaires, à la place de l'identifiant technique `google_drive`.
     LABEL: ClassVar[str] = LIBELLE_GOOGLE_DRIVE
@@ -377,8 +381,14 @@ class GoogleDriveDestination(RemoteDestination):
         """
         self._dossier_id = dossier_id
         try:
+            # Écriture réservée au dossier pour lequel l'identifiant a été
+            # résolu : un changement de dossier fait pendant l'envoi (#51) ne
+            # doit pas être défait par l'ancien identifiant.
             async_persist_provider_data(
-                self._hass, self.destination_id, {CLE_ID_DU_DOSSIER: dossier_id}
+                self._hass,
+                self.destination_id,
+                {CLE_ID_DU_DOSSIER: dossier_id},
+                dossier=self.folder,
             )
         except DestinationError as err:
             _LOGGER.warning(

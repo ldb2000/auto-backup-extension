@@ -419,15 +419,34 @@ class CoordinateurEntitesDestinations:
     async def _async_options_mises_a_jour(
         self, hass: HomeAssistant, entry: ConfigEntry
     ) -> None:
-        """Suit l'ajout et la suppression de destinations, sans rechargement."""
-        anciennes = set(self._connues)
+        """Suit l'ajout, la suppression et le renommage, sans rechargement.
+
+        Une destination renommée depuis les options (issue #51) garde ses
+        entités — même identifiant de destination, donc mêmes `unique_id` : il
+        suffit de prévenir ses entités, qui relisent alors leur nom affiché.
+        """
+        precedentes = dict(self._connues)
         self._recharger_les_destinations()
+        anciennes = set(precedentes)
         nouvelles = set(self._connues)
 
         for destination_id in sorted(nouvelles - anciennes):
             self._async_ajouter(destination_id)
         for destination_id in sorted(anciennes - nouvelles):
             self._async_retirer(destination_id)
+        for destination_id in sorted(anciennes & nouvelles):
+            if precedentes[destination_id].name != self._connues[destination_id].name:
+                _LOGGER.debug(
+                    "Nom affiché mis à jour pour la destination « %s »",
+                    destination_id,
+                )
+                self._async_notifier(destination_id)
+
+    @callback
+    def nom(self, destination_id: str) -> str | None:
+        """Nom actuel d'une destination dotée d'entités, `None` sinon."""
+        config = self._connues.get(destination_id)
+        return config.name if config is not None else None
 
     @callback
     def _async_ajouter(self, destination_id: str) -> None:
@@ -534,7 +553,25 @@ class _EntiteDestination:
     @callback
     def _async_rafraichir(self) -> None:
         """Réécrit l'état de l'entité après une mise à jour du coordinateur."""
+        self._suivre_le_nom_de_la_destination()
         self.async_write_ha_state()
+
+    @callback
+    def _suivre_le_nom_de_la_destination(self) -> None:
+        """Reprend le nom actuel de la destination dans le nom affiché (#51).
+
+        Home Assistant met le nom calculé d'une entité en cache (`name`), et
+        seule l'écriture de `_attr_name` l'invalide : changer les placeholders
+        ne suffit pas. Le cache est donc retiré ici, exactement comme le fait
+        Home Assistant lui-même à l'écriture d'un attribut `_attr_*`. Le nom
+        affiché (`friendly_name`) suit alors dès l'écriture d'état qui suit ;
+        l'`entity_id` et l'`unique_id`, eux, ne changent pas.
+        """
+        nom = self._coordinateur.nom(self._destination_id)
+        if nom is None or nom == self._attr_translation_placeholders.get("destination"):
+            return
+        self._attr_translation_placeholders = {"destination": nom}
+        self.__dict__.pop("name", None)
 
 
 class CapteurDernierTeleversement(_EntiteDestination, RestoreSensor):

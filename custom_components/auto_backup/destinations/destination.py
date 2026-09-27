@@ -37,10 +37,18 @@ class RemoteDestination(ABC):
     `LABEL` (issue #10) est le nom du service tel qu'il est montré à
     l'utilisateur (« Dropbox »). Laissé à `None`, le sélecteur du flux d'options
     retombe sur l'identifiant technique du fournisseur.
+
+    `CLES_LIEES_AU_DOSSIER` (issue #51) liste les clés de `provider_data` qui ne
+    valent que pour le dossier distant courant — l'identifiant du dossier cible
+    que Google Drive mémorise, par exemple. Quand l'utilisateur change le
+    dossier d'une destination existante, le flux d'options les retire : le
+    fournisseur résout alors le nouveau dossier au lieu de continuer à déposer
+    dans l'ancien. Laissé vide, rien n'est retiré.
     """
 
     OAUTH2_SPEC: ClassVar[OAuth2ProviderSpec | None] = None
     LABEL: ClassVar[str | None] = None
+    CLES_LIEES_AU_DOSSIER: ClassVar[frozenset[str]] = frozenset()
 
     def __init__(self, hass: HomeAssistant, config: DestinationConfig) -> None:
         """Mémorise l'instance Home Assistant et la configuration figée."""

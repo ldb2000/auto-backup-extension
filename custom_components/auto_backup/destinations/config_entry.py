@@ -22,6 +22,7 @@ from ..const import (
     CONF_BACKUP_TIMEOUT,
     CONF_DESTINATION_ID,
     CONF_DESTINATIONS,
+    CONF_FOLDER,
     CONF_PROVIDER_DATA,
     CONF_UPLOAD_TIMEOUT,
     DATA_DESTINATIONS,
@@ -233,7 +234,11 @@ def async_persist_token(
 
 @callback
 def async_persist_provider_data(
-    hass: HomeAssistant, destination_id: str, donnees: Mapping[str, Any]
+    hass: HomeAssistant,
+    destination_id: str,
+    donnees: Mapping[str, Any],
+    *,
+    dossier: str | None = None,
 ) -> None:
     """Fusionne des données de fournisseur dans celles d'une destination.
 
@@ -254,6 +259,12 @@ def async_persist_provider_data(
     une écriture d'options recharge les destinations, il n'y a pas lieu de le
     faire à chaque téléversement. Lève `DestinationNotFoundError` si la
     destination n'existe plus — elle a pu être supprimée pendant l'envoi.
+
+    `dossier` (issue #51) réserve l'écriture à une destination qui pointe
+    **toujours** vers ce dossier distant. Un fournisseur qui mémorise une donnée
+    propre à son dossier (l'identifiant du dossier cible de Google Drive) le
+    passe : si l'utilisateur a changé de dossier pendant l'envoi, l'ancienne
+    donnée n'est pas réécrite par-dessus la modification, et rien n'est écrit.
     """
     if not donnees:
         return
@@ -273,6 +284,13 @@ def async_persist_provider_data(
         copie = dict(brute)
         if copie.get(CONF_DESTINATION_ID) == destination_id:
             trouvee = True
+            if dossier is not None and copie.get(CONF_FOLDER) != dossier:
+                _LOGGER.debug(
+                    "Données de fournisseur de « %s » non persistées : le dossier "
+                    "distant a changé entre-temps",
+                    destination_id,
+                )
+                return
             actuelles = copie.get(CONF_PROVIDER_DATA)
             actuelles = dict(actuelles) if isinstance(actuelles, Mapping) else {}
             fusionnees = {**actuelles, **donnees}

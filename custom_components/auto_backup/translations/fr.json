@@ -243,6 +243,7 @@
             "autorisation_annulee": "L'autorisation a été refusée ou annulée chez le fournisseur : aucune destination n'a été créée, et rien n'a été modifié. Vous pouvez relancer « Ajouter une destination » quand vous le souhaitez.",
             "echec_fournisseur": "Le fournisseur a refusé la première requête : {detail}.",
             "changement_de_compte_annule": "Changement de compte non confirmé : rien n'a été enregistré. La destination reste rattachée à son compte d'origine, avec son autorisation précédente.",
+            "changement_de_dossier_annule": "Changement de dossier non confirmé : rien n'a été enregistré. La destination garde son nom, son dossier et sa rétention précédents.",
             "autorisation_refusee_sans_motif": "Autorisation refusée par le fournisseur, sans motif précisé. Relancez « Ajouter une destination » ; si le refus persiste, vérifiez les réglages de votre application chez le fournisseur.",
             "fournisseur_injoignable": "Le fournisseur « {fournisseur} » n'a pas répondu pendant l'identification du compte autorisé : rien n'a été enregistré. Vérifiez votre connexion, puis recommencez."
         },
@@ -261,6 +262,7 @@
                 "description": "Que souhaitez-vous configurer ?",
                 "menu_options": {
                     "ajouter_destination": "Ajouter une destination",
+                    "modifier_destination": "Modifier une destination",
                     "reautoriser_destination": "Ré-autoriser une destination",
                     "supprimer_destination": "Supprimer une destination",
                     "reglages_televersement": "Réglages du téléversement",
@@ -310,6 +312,34 @@
                     "retention_count": "Au-delà de ce nombre, les sauvegardes distantes les plus anciennes sont supprimées. Laissez vide pour ne fixer aucune limite. Sans aucune rétention, la destination n'est jamais purgée."
                 }
             },
+            "modifier_destination": {
+                "title": "Modifier une destination",
+                "description": "Choisissez la destination dont vous voulez changer le nom, le dossier distant ou la rétention. Son autorisation est conservée : aucune nouvelle connexion au fournisseur n'est demandée.",
+                "data": {
+                    "destination_id": "Destination"
+                },
+                "data_description": {
+                    "destination_id": "Pour changer de compte ou de fournisseur, utilisez plutôt « Ré-autoriser une destination » ou ajoutez une nouvelle destination."
+                }
+            },
+            "parametres_destination": {
+                "title": "Modifier « {destination} »",
+                "description": "Fournisseur « {fournisseur} ». Modifiez le nom, le dossier distant ou la rétention de cette destination. Son autorisation, ses entités et la liste des sauvegardes qu'elle a déjà déposées sont conservées.\n\nChanger de dossier distant vous sera fait confirmer : les sauvegardes de l'ancien dossier ne seront plus ni listées, ni purgées par Auto Backup.",
+                "data": {
+                    "name": "Nom de la destination",
+                    "folder": "Dossier distant",
+                    "retention_days": "Conserver pendant (jours)",
+                    "retention_count": "Nombre maximum de sauvegardes conservées",
+                    "auto_purge": "Suppression automatique des sauvegardes expirées"
+                },
+                "data_description": {
+                    "name": "Affiché dans les entités de la destination et accepté par le champ « upload_to » des actions de sauvegarde. Les entités gardent leur identifiant ; seul leur nom affiché change.",
+                    "folder": "Chemin relatif, chez le fournisseur, où sont déposées les sauvegardes. Prévoyez un dossier par instance Home Assistant. Les sauvegardes de l'ancien dossier ne sont pas déplacées.",
+                    "retention_days": "Les sauvegardes distantes plus anciennes que ce nombre de jours sont supprimées. Laissez vide pour ne fixer aucune limite d'âge.",
+                    "retention_count": "Au-delà de ce nombre, les sauvegardes distantes les plus anciennes sont supprimées. Laissez vide pour ne fixer aucune limite. Sans aucune rétention, la destination n'est jamais purgée.",
+                    "auto_purge": "Réglage commun à toute l'intégration : il s'applique aux sauvegardes locales et à toutes les destinations. Activé, la rétention est appliquée après chaque téléversement réussi ; sinon, seulement à l'appel de l'action « auto_backup.purge »."
+                }
+            },
             "reautoriser_destination": {
                 "title": "Ré-autoriser une destination",
                 "description": "Choisissez la destination dont l'accès doit être renouvelé. Les autres destinations ne sont pas touchées.",
@@ -325,6 +355,16 @@
                 "description": "L'autorisation que vous venez d'accorder porte sur un autre compte que celui de la destination « {destination} ».\n\nCompte précédent : {ancien_compte}\nNouveau compte : {nouveau_compte}\n\nSi vous confirmez, la destination enverra désormais les sauvegardes vers le nouveau compte. Les sauvegardes déjà déposées sur l'ancien compte ne seront plus ni listées, ni purgées par Auto Backup : elles resteront chez le fournisseur, à vous de les gérer.\n\nSans confirmation, rien n'est enregistré : la destination garde son compte et son autorisation précédente.",
                 "data": {
                     "confirmer": "Je confirme le changement de compte"
+                },
+                "data_description": {
+                    "confirmer": "Laissez décoché pour garder la destination telle qu'elle était."
+                }
+            },
+            "confirmer_changement_de_dossier": {
+                "title": "Changement de dossier distant",
+                "description": "Vous allez changer le dossier distant de la destination « {destination} ».\n\nDossier actuel : {ancien_dossier}\nNouveau dossier : {nouveau_dossier}\n\nSi vous confirmez, les prochaines sauvegardes seront déposées dans le nouveau dossier. Les sauvegardes déjà présentes dans l'ancien dossier ne seront plus ni listées, ni purgées par Auto Backup : elles resteront chez le fournisseur, à vous de les déplacer ou de les supprimer.\n\nSans confirmation, rien n'est enregistré : la destination garde tous ses réglages précédents.",
+                "data": {
+                    "confirmer": "Je confirme le changement de dossier"
                 },
                 "data_description": {
                     "confirmer": "Laissez décoché pour garder la destination telle qu'elle était."

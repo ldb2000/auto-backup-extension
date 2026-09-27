@@ -2,8 +2,10 @@
 
 Ce module apporte au flux d'options upstream un menu et les étapes d'ajout, de
 ré-autorisation et de suppression d'une destination, ainsi que — depuis
-l'issue #8 — les réglages du téléversement (délai maximum) et — depuis l'issue
-#17 — ceux des notifications d'échec. Il n'existe pas dans
+l'issue #8 — les réglages du téléversement (délai maximum), — depuis l'issue
+#17 — ceux des notifications d'échec et — depuis l'issue #51 — la
+modification du nom, du dossier distant et de la rétention d'une destination
+existante, sans nouvelle autorisation. Il n'existe pas dans
 l'upstream et ne modifie aucune de ses lignes : `config_flow.py` se contente
 d'envelopper sa classe `OptionsFlowHandler` par `etendre_le_flux_d_options()`,
 qui construit une sous-classe portant les étapes ci-dessous
@@ -73,6 +75,7 @@ from homeassistant.helpers.selector import (
 from homeassistant.util import slugify
 
 from ..const import (
+    CONF_AUTO_PURGE,
     CONF_DESTINATION_ID,
     CONF_DESTINATIONS,
     CONF_FOLDER,
@@ -105,8 +108,16 @@ from .oauth import (
     spec_oauth_du_fournisseur,
     url_de_retour,
 )
-from .reauth import async_effacer_la_reauthentification
-from .registry import create_destination, list_providers, provider_label
+from .reauth import (
+    async_effacer_la_reauthentification,
+    async_renommer_la_reauthentification,
+)
+from .registry import (
+    cles_liees_au_dossier,
+    create_destination,
+    list_providers,
+    provider_label,
+)
 from .schema import chemin_de_dossier
 
 _LOGGER = logging.getLogger(__name__)
@@ -259,6 +270,36 @@ def _identifiant_disponible(nom: str, pris: Iterable[str]) -> str:
             return candidat
 
 
+def _appliquer_la_modification(
+    config: DestinationConfig, modification: Mapping[str, Any]
+) -> DestinationConfig:
+    """Applique à une destination les champs modifiables depuis les options (#51).
+
+    Seuls le nom, le dossier et les deux rétentions changent : `replace()`
+    revalide la configuration (`DestinationConfig.__post_init__()`) et laisse
+    intact tout le reste, jeton et identifiants d'application compris.
+
+    Quand le dossier change, les données du fournisseur propres à l'ancien
+    dossier (`RemoteDestination.CLES_LIEES_AU_DOSSIER`, l'identifiant du dossier
+    cible chez Google Drive) sont oubliées : le fournisseur résoudra le nouveau
+    dossier au lieu de continuer à déposer dans l'ancien. Les données du
+    compte, elles, sont conservées.
+    """
+    dossier = str(modification[CONF_FOLDER])
+    donnees = config.provider_data
+    if donnees and dossier != config.folder:
+        cles = cles_liees_au_dossier(config.provider)
+        donnees = {cle: valeur for cle, valeur in donnees.items() if cle not in cles}
+    return replace(
+        config,
+        name=str(modification[CONF_NAME]),
+        folder=dossier,
+        retention_days=modification[CONF_RETENTION_DAYS],
+        retention_count=modification[CONF_RETENTION_COUNT],
+        provider_data=donnees or None,
+    )
+
+
 class GestionDesDestinationsMixin:
     """Étapes du flux d'options propres au fork.
 
@@ -283,6 +324,9 @@ class GestionDesDestinationsMixin:
     _donnees_externes: dict[str, Any] | None = None
     _nom_propose: str | None = None
     _provider_data: dict[str, Any] | None = None
+    # Modification d'une destination existante (issue #51) : valeurs saisies,
+    # appliquées à la configuration **relue** au moment d'enregistrer.
+    _modification: dict[str, Any] | None = None
 
     ### Lecture de l'existant ###
 
@@ -331,7 +375,11 @@ class GestionDesDestinationsMixin:
         oublier_les_etats_du_flux(self.hass, self.flow_id)
         options = ["ajouter_destination"]
         if self._configurations():
-            options += ["reautoriser_destination", "supprimer_destination"]
+            options += [
+                "modifier_destination",
+                "reautoriser_destination",
+                "supprimer_destination",
+            ]
         options += ["reglages_televersement", "reglages_notifications", "init"]
         return self.async_show_menu(step_id="menu", menu_options=options)
 
@@ -771,6 +819,243 @@ class GestionDesDestinationsMixin:
         propose = nom.strip() if isinstance(nom, str) else ""
         self._nom_propose = propose or None
         self._provider_data = dict(donnees) if donnees else None
+
+    ### Modification d'une destination existante (issue #51) ###
+
+    async def async_step_modifier_destination(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choix de la destination à modifier : nom, dossier ou rétention."""
+        configurations = self._configurations()
+        if not configurations:
+            return self.async_abort(reason="aucune_destination")
+
+        if user_input is not None:
+            config = self._configuration(user_input[CONF_DESTINATION_ID])
+            if config is None:
+                return self.async_abort(reason="destination_inconnue")
+            self._destination_id = config.destination_id
+            self._provider = config.provider
+            self._modification = None
+            return await self.async_step_parametres_destination()
+
+        return self.async_show_form(
+            step_id="modifier_destination",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_DESTINATION_ID): SelectSelector(
+                        SelectSelectorConfig(
+                            options=self._choix_de_destinations(configurations),
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_parametres_destination(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Nom, dossier distant et rétention d'une destination existante.
+
+        Seuls ces champs changent : l'identifiant de la destination, son
+        fournisseur, ses identifiants d'application et son jeton sont conservés
+        — aucune nouvelle autorisation n'est demandée. L'identifiant ne suivant
+        pas le nom, les entités (#16), le registre des sauvegardes déposées (#9)
+        et le signalement de ré-autorisation (#17) restent rattachés à la même
+        destination.
+
+        La validation est celle de l'ajout : nom non vide et unique (la
+        destination modifiée exceptée), dossier accepté par `chemin_de_dossier()`
+        — normalisation NFKC, liste blanche de caractères et bornes de longueur —,
+        rétentions entières strictement positives ou vides.
+
+        La suppression automatique (`auto_purge`) est l'option **commune** de
+        l'intégration : elle commande la purge locale comme la purge distante de
+        toutes les destinations. Elle est proposée ici parce que c'est elle qui
+        décide si la rétention s'applique après chaque téléversement.
+        """
+        config = self._configuration(str(self._destination_id))
+        if config is None:
+            return self.async_abort(reason="destination_inconnue")
+
+        erreurs: dict[str, str] = {}
+        purge_automatique = bool(self.config_entry.options.get(CONF_AUTO_PURGE, True))
+
+        if user_input is not None:
+            nom = str(user_input.get(CONF_NAME, "")).strip()
+            if not nom:
+                erreurs[CONF_NAME] = "nom_invalide"
+            elif any(
+                autre.destination_id != config.destination_id
+                and autre.name.casefold() == nom.casefold()
+                for autre in self._configurations()
+            ):
+                erreurs[CONF_NAME] = "nom_deja_utilise"
+
+            dossier = ""
+            try:
+                dossier = chemin_de_dossier(
+                    str(user_input.get(CONF_FOLDER, config.folder))
+                )
+            except vol.Invalid as err:
+                _LOGGER.debug("Dossier distant refusé : %s", masquer(str(err)))
+                erreurs[CONF_FOLDER] = "dossier_invalide"
+
+            if not erreurs:
+                modification = {
+                    CONF_NAME: nom,
+                    CONF_FOLDER: dossier,
+                    CONF_AUTO_PURGE: bool(
+                        user_input.get(CONF_AUTO_PURGE, purge_automatique)
+                    ),
+                }
+                try:
+                    modification[CONF_RETENTION_DAYS] = _retention(
+                        user_input, CONF_RETENTION_DAYS
+                    )
+                    modification[CONF_RETENTION_COUNT] = _retention(
+                        user_input, CONF_RETENTION_COUNT
+                    )
+                    _appliquer_la_modification(config, modification)
+                except DestinationConfigError as err:
+                    _LOGGER.debug("Modification refusée : %s", masquer(str(err)))
+                    erreurs["base"] = "destination_invalide"
+                else:
+                    self._modification = modification
+                    if dossier != config.folder:
+                        return await self.async_step_confirmer_changement_de_dossier()
+                    return self._terminer_la_modification()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_NAME): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.TEXT)
+                ),
+                vol.Required(CONF_FOLDER): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.TEXT)
+                ),
+                vol.Optional(CONF_RETENTION_DAYS): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1,
+                        max=RETENTION_JOURS_MAX,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Optional(CONF_RETENTION_COUNT): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1,
+                        max=RETENTION_NOMBRE_MAX,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(CONF_AUTO_PURGE): BooleanSelector(),
+            }
+        )
+        if user_input is not None:
+            proposees: Mapping[str, Any] = user_input
+        else:
+            # Une rétention absente reste un champ vide, et non « None ».
+            proposees = {
+                CONF_NAME: config.name,
+                CONF_FOLDER: config.folder,
+                CONF_RETENTION_DAYS: config.retention_days,
+                CONF_RETENTION_COUNT: config.retention_count,
+                CONF_AUTO_PURGE: purge_automatique,
+            }
+        return self.async_show_form(
+            step_id="parametres_destination",
+            data_schema=self.add_suggested_values_to_schema(
+                schema,
+                {cle: val for cle, val in proposees.items() if val is not None},
+            ),
+            errors=erreurs,
+            description_placeholders={
+                "destination": config.name,
+                "fournisseur": _libelle_du_fournisseur(config.provider),
+            },
+        )
+
+    async def async_step_confirmer_changement_de_dossier(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Fait valider un changement de dossier distant avant de l'enregistrer.
+
+        Le listage et la purge distante ne regardent que le dossier configuré :
+        les sauvegardes déjà déposées dans l'ancien dossier ne seront donc plus
+        ni listées, ni purgées par Auto Backup. Elles restent chez le
+        fournisseur, et l'utilisateur doit le savoir avant de valider.
+        """
+        config = self._configuration(str(self._destination_id))
+        if config is None or self._modification is None:
+            return self.async_abort(reason="destination_inconnue")
+
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRMER):
+                _LOGGER.info(
+                    "Modification de « %s » abandonnée : le changement de dossier "
+                    "n'a pas été confirmé, rien n'a été enregistré",
+                    config.name,
+                )
+                return self.async_abort(reason="changement_de_dossier_annule")
+            return self._terminer_la_modification()
+
+        return self.async_show_form(
+            step_id="confirmer_changement_de_dossier",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_CONFIRMER, default=False): BooleanSelector()}
+            ),
+            description_placeholders={
+                "destination": config.name,
+                "ancien_dossier": config.folder,
+                "nouveau_dossier": str(self._modification[CONF_FOLDER]),
+            },
+        )
+
+    def _terminer_la_modification(self) -> ConfigFlowResult:
+        """Enregistre la modification sur la configuration relue, et clôt le flux.
+
+        La configuration est relue ici plutôt que reprise du formulaire : un
+        rafraîchissement de jeton, ou l'identifiant de dossier mémorisé par
+        Google Drive, a pu être écrit pendant que le formulaire était ouvert.
+        Seuls les champs saisis sont remplacés (`dataclasses.replace()`), tout
+        le reste — jeton compris — est repris tel qu'il est persisté.
+        """
+        modification = self._modification
+        configurations = self._configurations()
+        identifiant = str(self._destination_id)
+        actuelle = next(
+            (
+                config
+                for config in configurations
+                if config.destination_id == identifiant
+            ),
+            None,
+        )
+        if actuelle is None or modification is None:
+            return self.async_abort(reason="destination_inconnue")
+
+        try:
+            modifiee = _appliquer_la_modification(actuelle, modification)
+            options = options_avec_destinations(
+                self.config_entry,
+                [
+                    modifiee if config.destination_id == identifiant else config
+                    for config in configurations
+                ],
+            )
+        except DestinationConfigError as err:
+            _LOGGER.error("Modification non enregistrée : %s", masquer(str(err)))
+            return self.async_abort(reason="configuration_invalide")
+
+        # Option commune de l'intégration, et non de la destination.
+        options[CONF_AUTO_PURGE] = bool(modification[CONF_AUTO_PURGE])
+        if modifiee.name != actuelle.name:
+            async_renommer_la_reauthentification(self.hass, modifiee)
+        _LOGGER.info("Destination « %s » modifiée depuis les options", identifiant)
+        return self.async_create_entry(data=options)
 
     ### Ré-autorisation d'une destination existante ###
 
