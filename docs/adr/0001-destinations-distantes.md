@@ -112,15 +112,27 @@ Conséquences pratiques :
   persistance retenu étant `entry.options`, il n'existe pas d'autre endroit propre où mettre le
   jeton d'une destination (voir la décision 4 ci-dessous).
 
-### Révision possible
+### Réévaluation (#32) — close
 
-La condition posée ici est remplie depuis l'issue #28 : le plancher annoncé vaut 2026.3.0, donc
-au-delà du 2025.3 qu'exigent les sous-entrées. Migrer est désormais possible, et intéressant pour
-la gestion des jetons OAuth par compte, mais reste hors périmètre : c'est une re-décision à
-prendre explicitement, pas une conséquence automatique. La migration consisterait à transformer
-chaque élément de la liste en sous-entrée dans `async_migrate_entry` : le format persisté
-(identifiant stable, fournisseur, nom, dossier, rétentions) est déjà celui qu'une sous-entrée
-porterait.
+**Décision du 2026-09-27 : `entry.options` est conservé.** Depuis #28, le plancher de version (Home Assistant 2026.3.0) n'empêche plus de migrer. La réévaluation a donc porté uniquement sur les bénéfices attendus des sous-entrées de configuration. Ils ont été vérifiés dans le code de Home Assistant, de 2026.3 à 2026.9 :
+
+- **Jeton OAuth2 par compte : non fourni.** `AbstractOAuth2FlowHandler` est un `ConfigFlow`. La vue de retour standard ne sait reprendre qu'un config flow (`hass.config_entries.flow.async_configure`), et `OAuth2Session` écrit le jeton dans `entry.data`. Avec des sous-entrées, la vue `/auth/auto_backup/callback` (décision 4, #7) resterait nécessaire, et l'écriture du jeton resterait à la charge du fork.
+- **Ré-authentification par compte : non fournie.** Un flux de sous-entrée n'accepte que les sources `user` et `reconfigure`. La ré-authentification native vise l'entrée entière. Le problème et la notification par destination de #17 resteraient à écrire à la main.
+- **Interface d'ajout et de modification, appareil par destination : fournis.** C'est le seul gain réel. Il ne justifie pas de réécrire le flux (#7, #51), l'OAuth (#7, #17), la persistance des jetons et de `provider_data` (#13, #14) ni les entités (#16, #58). Il ne justifie pas non plus d'imposer une migration irréversible aux installations existantes : jetons et `provider_data` à déplacer, entités à rattacher à de nouveaux appareils, et destinations qui disparaîtraient en cas de retour à une version antérieure.
+
+Conséquences sur les issues livrées :
+
+- #7 et #51 conservent leur flux d'options et leur vue de retour propre.
+- #16 conserve ses entités rattachées à l'appareil de service. Un appareil par destination reste possible sans sous-entrées, avec un `DeviceInfo` propre à la destination (`identifiers={(DOMAIN, f"{entry_id}_{destination_id}")}`, `via_device` vers l'appareil de service). Ce serait une évolution distincte et facultative.
+- #17 conserve son problème non réparable et ses notifications par `destination_id`.
+
+Aucune migration n'est imposée : `destination_id`, les `unique_id`, le registre #9 et `upload_to` restent inchangés.
+
+Le sujet n'est rouvert que si un élément nouveau apparaît :
+
+- Home Assistant fournit l'autorisation OAuth2 ou la ré-authentification au niveau d'une sous-entrée ;
+- ou l'upstream adopte lui-même les sous-entrées ;
+- ou un besoin fonctionnel exige, pour chaque destination, un cycle de vie que les options ne permettent pas.
 
 ## Décision 2 — un registre de fournisseurs, pas d'import en dur
 
@@ -2164,9 +2176,8 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   qui s'appuyaient sur l'ancien plancher sont annotés ci-dessus : l'argument de version ne
   soutient plus le choix d'`entry.options`, qui reste retenu pour ses autres raisons. Migrer vers
   les sous-entrées de configuration était hors périmètre de #28 et demanderait une issue dédiée.
-  L'issue #32 (créée le 2026-09-26) réévaluera cette persistance après la clôture de
-  l'epic, sur décision du propriétaire du fork : le frein du plancher étant levé, il ne
-  reste que les autres arguments à peser.
+  L'issue #32 a réévalué cette persistance : `entry.options` est conservé (voir « Réévaluation
+  (#32) — close » dans la décision 1).
 
 - **Limitation d'une corrélation par nom en présence d'appels concurrents (FAQ, issue #19)** :
   deux appels **concurrents** portant le **même nom explicite** et `upload_to` ne sont pas
