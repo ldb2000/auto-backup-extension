@@ -217,8 +217,9 @@ automation:
 ### Notifications
 
 Quand l'envoi d'une sauvegarde vers une destination distante échoue **définitivement** (après
-les nouvelles tentatives), Auto Backup affiche une **notification persistante** en français qui
-nomme la destination, la sauvegarde et la cause de l'échec.
+les nouvelles tentatives), Auto Backup affiche une **notification persistante**, dans la langue de
+Home Assistant (français ou anglais, anglais pour les autres langues), qui nomme la
+destination, la sauvegarde et la cause de l'échec.
 
 - **Une notification par destination**, jamais une par sauvegarde : les échecs suivants mettent
   la même notification à jour et affichent le nombre d'échecs consécutifs.

@@ -189,13 +189,17 @@ caractère près.
   qui remplacent deux textes que `destinations/flow.py` écrivait en dur en français.
   `tests/test_traductions.py` vérifie que chaque clé référencée par le code existe dans les
   deux langues, qu'aucune n'est orpheline et que les placeholders concordent.
+  L'issue #45 y ajoute une section `exceptions`, insérée après `issues` : les titres et
+  messages des notifications persistantes (`notification_echec_titre`,
+  `notification_echec_message`, `notification_reauth_titre`, `notification_reauth_message`)
+  et les deux valeurs de repli `notification_sauvegarde_sans_nom` et
+  `notification_cause_inconnue`, lus par `destinations/notifications.py`.
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
   `sk`, `ur`) ne sont pas touchées : Home Assistant retombe sur l'anglais pour les clés
-  absentes. Leur traduction n'est rattachée à aucune issue à ce jour — la mention de l'issue #17
-  qui figurait ici visait les notifications, qui n'ont finalement aucune clé de traduction
-  (voir l'ADR, section « Notifications des échecs et des accès révoqués »).
+  absentes. Leur traduction n'est rattachée à aucune issue à ce jour ; les notifications,
+  traduites depuis l'issue #45, y apparaissent donc en anglais.
 - Le fork enregistre une vue HTTP propre, `/auth/auto_backup/callback`, au moment où une
   autorisation OAuth2 démarre. Elle est nécessaire parce que la vue standard
   (`/auth/external/callback`) ne sait reprendre qu'un *config flow*, alors que les destinations
