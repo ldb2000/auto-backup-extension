@@ -392,7 +392,7 @@
             },
             "parametres_destination": {
                 "title": "Modifier « {destination} »",
-                "description": "Fournisseur « {fournisseur} ». Modifiez le nom, le dossier distant ou la rétention de cette destination. Son autorisation, ses entités et la liste des sauvegardes qu'elle a déjà déposées sont conservées.\n\nSi vous changez de dossier distant, une confirmation vous sera demandée : les sauvegardes de l'ancien dossier ne seront plus ni listées, ni purgées par Auto Backup.",
+                "description": "Fournisseur « {fournisseur} ». Modifiez le nom, le dossier distant ou la rétention de cette destination. Son autorisation, ses entités et la liste des sauvegardes qu'elle a déjà déposées sont conservées.\n\nSi vous changez de dossier distant, une confirmation vous sera demandée : les sauvegardes de l'ancien dossier ne seront plus ni listées, ni purgées, ni comptées par Auto Backup.",
                 "data": {
                     "name": "Nom de la destination",
                     "folder": "Dossier distant",
@@ -430,7 +430,7 @@
             },
             "confirmer_changement_de_dossier": {
                 "title": "Changement de dossier distant",
-                "description": "Vous allez changer le dossier distant de la destination « {destination} ».\n\nDossier actuel : {ancien_dossier}\nNouveau dossier : {nouveau_dossier}\n\nSi vous confirmez, les prochaines sauvegardes seront déposées dans le nouveau dossier. Les sauvegardes déjà présentes dans l'ancien dossier ne seront plus ni listées, ni purgées par Auto Backup : elles resteront chez le fournisseur, à vous de les déplacer ou de les supprimer.\n\nSans confirmation, rien n'est enregistré : la destination garde tous ses réglages précédents.",
+                "description": "Vous allez changer le dossier distant de la destination « {destination} ».\n\nDossier actuel : {ancien_dossier}\nNouveau dossier : {nouveau_dossier}\n\nSi vous confirmez, les prochaines sauvegardes seront déposées dans le nouveau dossier. Les sauvegardes déjà présentes dans l'ancien dossier ne seront plus ni listées, ni purgées, ni comptées par Auto Backup : elles resteront chez le fournisseur, à vous de les déplacer ou de les supprimer. Si vous revenez plus tard à l'ancien dossier, elles seront de nouveau prises en compte.\n\nSans confirmation, rien n'est enregistré : la destination garde tous ses réglages précédents.",
                 "data": {
                     "confirmer": "Je confirme le changement de dossier"
                 },

@@ -92,11 +92,13 @@ FAUX_JETON_BASE64 = "ZXlKaGJHY2lPaUpJVXpJMU5pSjk"
 class RegistreFactice:
     """Doublure du registre des sauvegardes distantes de l'issue #9.
 
-    Seule `entrees(destination_id)` est utilisée par les entités : le capteur
-    compte ce qu'elle renvoie. Le mode `defaillant` éprouve le repli quand le
-    registre lève au lieu de répondre — un cas que le registre réel ne sait pas
-    produire, d'où la doublure. Le contrat avec le vrai registre est éprouvé,
-    lui, par `test_le_registre_reel_de_la_retention_alimente_le_compteur`.
+    Seule `entrees_du_dossier(destination_id, dossier)` est utilisée par les
+    entités : le capteur compte ce qu'elle renvoie (le dossier est ignoré ici,
+    le filtrage par dossier étant éprouvé sur le registre réel). Le mode
+    `defaillant` éprouve le repli quand le registre lève au lieu de répondre —
+    un cas que le registre réel ne sait pas produire, d'où la doublure.
+    Le contrat avec le vrai registre est éprouvé, lui, par
+    `test_le_registre_reel_de_la_retention_alimente_le_compteur`.
     """
 
     def __init__(self, comptes: dict[str, int], *, defaillant: bool = False) -> None:
@@ -104,7 +106,7 @@ class RegistreFactice:
         self.comptes = comptes
         self.defaillant = defaillant
 
-    def entrees(self, destination_id: str) -> list[str]:
+    def entrees_du_dossier(self, destination_id: str, dossier: str) -> list[str]:
         """Sauvegardes distantes connues pour cette destination."""
         if self.defaillant:
             raise RuntimeError("registre indisponible")
@@ -853,7 +855,8 @@ async def test_le_registre_reel_de_la_retention_alimente_le_compteur(
     Les autres tests de cette section passent par une doublure ; celui-ci monte
     le registre réel de la rétention distante pour vérifier qu'il n'y a pas que
     les chaînes qui correspondent, mais bien le contrat : le capteur appelle
-    `entrees(destination_id)` et en compte les `EntreeRegistre`.
+    `entrees_du_dossier(destination_id, dossier)` et en compte les
+    `EntreeRegistre` du dossier configuré.
 
     Il montre aussi ce que le capteur **ne** compte pas : une sauvegarde
     enregistrée pour une autre destination, et un fichier que l'utilisateur
@@ -865,11 +868,16 @@ async def test_le_registre_reel_de_la_retention_alimente_le_compteur(
     for index in range(2):
         await registre.async_enregistrer(
             "destination_test",
-            EntreeRegistre(remote_id=f"distant-{index}", name=f"nuit-{index}.tar"),
+            EntreeRegistre(
+                remote_id=f"distant-{index}",
+                name=f"nuit-{index}.tar",
+                folder="Sauvegardes",
+            ),
         )
     # Bruit : cette entrée appartient à une autre destination.
     await registre.async_enregistrer(
-        DESTINATION_DEUX, EntreeRegistre(remote_id="ailleurs", name="ailleurs.tar")
+        DESTINATION_DEUX,
+        EntreeRegistre(remote_id="ailleurs", name="ailleurs.tar", folder="Sauvegardes"),
     )
 
     _emettre_succes(hass)

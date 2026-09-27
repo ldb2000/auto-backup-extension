@@ -32,8 +32,11 @@ Trois choix structurants :
 3. **Le nombre de sauvegardes distantes est lu, pas compté.** La rétention
    distante (#9) tient dans `hass.data[DATA_REMOTE_BACKUPS]` un registre
    persistant des sauvegardes réellement présentes chez chaque fournisseur : le
-   capteur en compte les entrées, et les événements ne sont plus que des
-   déclencheurs de relecture. Quand ce registre est absent ou défaillant —
+   capteur en compte les entrées **du dossier configuré** (issue #58), et les
+   événements ne sont plus que des déclencheurs de relecture. Après un
+   changement de dossier (#51), les sauvegardes de l'ancien dossier restent au
+   registre mais ne sont plus comptées ; un retour à ce dossier les fait
+   réapparaître. Quand ce registre est absent ou défaillant —
    rétention distante non encore chargée, ou registre qui lève —, le capteur
    retombe sur un compteur interne, incrémenté sur `upload_successful`, diminué
    sur `remote_purge`, et restauré au redémarrage par `RestoreSensor`.
@@ -294,16 +297,21 @@ class CoordinateurEntitesDestinations:
         """Nombre d'entrées du registre de la rétention distante (issue #9).
 
         Le registre est persistant et tenu à jour à chaque téléversement comme à
-        chaque suppression : il fait autorité. L'accès est défensif, car la clé
-        est absente tant que la rétention distante n'est pas chargée (et après son
-        déchargement), et parce qu'un registre
+        chaque suppression : il fait autorité. Seules comptent les entrées du
+        dossier distant **configuré** (issue #58) : celles d'un ancien dossier
+        ne sont plus ni listées ni purgées par Auto Backup. L'accès est
+        défensif, car la clé est absente tant que la rétention distante n'est
+        pas chargée (et après son déchargement), et parce qu'un registre
         défaillant ne doit pas casser un capteur d'état.
         """
         registre = self._hass.data.get(DATA_REMOTE_BACKUPS)
-        if registre is None:
+        config = self._connues.get(destination_id)
+        if registre is None or config is None:
             return None
         try:
-            return max(len(registre.entrees(destination_id)), 0)
+            return max(
+                len(registre.entrees_du_dossier(destination_id, config.folder)), 0
+            )
         except Exception as err:  # un registre défaillant ne casse pas le capteur
             journaliser_une_exception(
                 _LOGGER,
@@ -419,11 +427,13 @@ class CoordinateurEntitesDestinations:
     async def _async_options_mises_a_jour(
         self, hass: HomeAssistant, entry: ConfigEntry
     ) -> None:
-        """Suit l'ajout, la suppression et le renommage, sans rechargement.
+        """Suit l'ajout, la suppression et la modification, sans rechargement.
 
         Une destination renommée depuis les options (issue #51) garde ses
         entités — même identifiant de destination, donc mêmes `unique_id` : il
         suffit de prévenir ses entités, qui relisent alors leur nom affiché.
+        Un changement de dossier distant (issue #58) les prévient de même : le
+        capteur recompte alors les sauvegardes du nouveau dossier.
         """
         precedentes = dict(self._connues)
         self._recharger_les_destinations()
@@ -435,9 +445,11 @@ class CoordinateurEntitesDestinations:
         for destination_id in sorted(anciennes - nouvelles):
             self._async_retirer(destination_id)
         for destination_id in sorted(anciennes & nouvelles):
-            if precedentes[destination_id].name != self._connues[destination_id].name:
+            avant, apres = precedentes[destination_id], self._connues[destination_id]
+            if avant.name != apres.name or avant.folder != apres.folder:
                 _LOGGER.debug(
-                    "Nom affiché mis à jour pour la destination « %s »",
+                    "Nom affiché ou dossier distant mis à jour pour la "
+                    "destination « %s »",
                     destination_id,
                 )
                 self._async_notifier(destination_id)

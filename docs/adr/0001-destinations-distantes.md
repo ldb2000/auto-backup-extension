@@ -1261,8 +1261,10 @@ trouve rien à supprimer n'émet rien.
 Le registre `hass.data[DATA_REMOTE_BACKUPS]` est un `Store` Home Assistant persisté dans
 `.storage/auto_backup.remote_backups`. Il expose une **méthode `entrees(destination_id)`** qui
 renvoie la liste des sauvegardes déposées pour une destination donnée : chaque entrée porte
-`remote_id`, `name`, `slug`, `created_at` et `size`. **C'est la source de vérité du nombre de
-sauvegardes distantes pour une destination**, notamment pour l'issue #16 (entités d'état). Le
+`remote_id`, `name`, `slug`, `created_at`, `size` et, depuis l'issue #58, `folder` (le dossier
+distant du dépôt). **C'est la source de vérité du nombre de sauvegardes distantes pour une
+destination**, notamment pour l'issue #16 (entités d'état), qui compte depuis #58 les seules
+entrées du dossier configuré (`entrees_du_dossier()`). Le
 registre n'expose aucun secret : ni jeton, ni identifiant de compte ne figure dans ses entrées.
 
 ### Le filet de sécurité : borner les appels réseau de la purge
@@ -2003,8 +2005,65 @@ lequel il a été résolu.
 
 Le registre des sauvegardes déposées est **conservé** tel quel, y compris quand le dossier
 change : ses entrées restent vraies (ces fichiers existent), et les effacer serait
-irréversible. Conséquence assumée : le capteur du nombre de sauvegardes distantes continue de
-compter les entrées de l'ancien dossier, faute de réconciliation du registre avec le listage.
+irréversible. Le capteur du nombre de sauvegardes distantes, lui, ne compte plus que les
+entrées du dossier configuré : chaque entrée retient désormais son dossier de dépôt (voir
+« Registre rangé par dossier (issue #58) »), et un changement de dossier remet le compteur à jour
+sans rechargement.
+
+## Registre rangé par dossier (issue #58)
+
+**Problème.** Depuis #51, le dossier distant d'une destination peut changer. Le registre des
+sauvegardes déposées (#9) était indexé par destination seulement : après un changement, le
+capteur (#16) continuait de compter les sauvegardes de l'ancien dossier, qu'Auto Backup ne
+listait ni ne purgeait plus.
+
+**Décision.** Chaque entrée du registre porte le **dossier distant où elle a été déposée**
+(`folder`), normalisé par `chemin_de_dossier()` comme le dossier d'une destination, pour que la
+comparaison se fasse à l'identique (NFKC compris). Le registre expose
+`entrees_du_dossier(destination_id, dossier)`, et c'est cette vue qui sert partout où le dossier
+compte :
+
+- le **capteur** compte les entrées du dossier configuré ; l'écouteur de mise à jour des options
+  prévient les entités d'une destination dont le dossier a changé, qui recomptent sans
+  rechargement (0 avant le premier envoi vers le nouveau dossier) ;
+- la **purge** ne tient pour preuve de provenance que les entrées du dossier configuré : une
+  entrée d'un autre dossier n'est ni candidate, ni comptée dans `retention_count`. Le listage
+  portant déjà sur le seul dossier configuré, la rétention en nombre borne bien ce qui reste
+  dans ce dossier ;
+- la **reconnaissance Dropbox** au listage (`entrees_du_registre(hass, destination_id,
+  dossier)`) ne lit que les entrées du dossier listé.
+
+Les entrées de l'ancien dossier **ne sont pas effacées** : les fichiers existent toujours chez le
+fournisseur, et revenir au dossier précédent les rend de nouveau comptées et purgeables.
+
+Le dossier d'un dépôt vient de l'événement `auto_backup.upload_successful`, qui porte désormais
+un champ `folder` : c'est le dossier réellement utilisé par le téléversement, même si la
+destination a été modifiée pendant l'envoi. Un événement sans dossier exploitable (émetteur plus
+ancien, valeur invalide) retombe sur le dossier configuré de la destination.
+
+**Migration.** Le `Store` `auto_backup.remote_backups` passe de la version 1.1 à la 1.2 (version
+mineure : un code plus ancien relit le fichier en ignorant le champ). `_async_migrate_func`
+rattache chaque entrée **sans dossier** au dossier configuré **au moment de la migration**, lu
+dans les options brutes de l'entrée : jusqu'à #51, c'était le seul dossier possible. La migration
+est :
+
+- **sans perte** : aucune entrée n'est retirée, un contenu inattendu est rendu tel quel et le
+  chargement l'écarte ensuite comme avant ;
+- **idempotente** : une entrée qui a déjà un dossier le garde ;
+- **prudente pour une destination qui n'existe plus** : ses entrées sont conservées avec un
+  dossier inconnu (`None`). On ne devine pas où elles ont été déposées ; n'appartenant à aucun
+  dossier, elles ne sont ni comptées ni purgées par le registre — la destination n'existant plus,
+  rien ne les comptait ni ne les purgeait de toute façon. Il en va de même d'une entrée dont le
+  dossier est illisible (fichier modifié à la main).
+
+**Alternatives écartées.**
+
+- *Effacer les entrées de l'ancien dossier au changement* : irréversible, et un retour au dossier
+  précédent laisserait des sauvegardes d'Auto Backup hors de la rétention.
+- *Rapprocher le registre du listage distant* : demanderait un appel réseau à chaque lecture du
+  capteur, et ne résout pas le cas d'un fichier supprimé à la main ; hors périmètre de #58.
+- *Indexer le registre par (destination, dossier)* : change la forme du fichier de stockage pour
+  un gain nul, la liste des entrées d'une destination restant courte.
 
 ## Points ouverts pour les issues suivantes
 

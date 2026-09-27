@@ -1350,7 +1350,9 @@ class DropboxDestination(RemoteDestination):
         """
         inscrites = {
             entree.remote_id: entree
-            for entree in entrees_du_registre(self._hass, self.destination_id)
+            for entree in entrees_du_registre(
+                self._hass, self.destination_id, self.folder
+            )
         }
         sauvegardes: list[RemoteBackup] = []
         pages = 0

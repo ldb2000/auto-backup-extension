@@ -392,7 +392,7 @@
             },
             "parametres_destination": {
                 "title": "Edit “{destination}”",
-                "description": "Provider “{fournisseur}”. Change the name, remote folder or retention of this destination. Its authorization, its entities and the list of backups it has already uploaded are kept.\n\nChanging the remote folder will ask for confirmation: backups in the previous folder will no longer be listed or purged by Auto Backup.",
+                "description": "Provider “{fournisseur}”. Change the name, remote folder or retention of this destination. Its authorization, its entities and the list of backups it has already uploaded are kept.\n\nChanging the remote folder will ask for confirmation: backups in the previous folder will no longer be listed, purged or counted by Auto Backup.",
                 "data": {
                     "name": "Destination name",
                     "folder": "Remote folder",
@@ -430,7 +430,7 @@
             },
             "confirmer_changement_de_dossier": {
                 "title": "Remote folder change",
-                "description": "You are about to change the remote folder of the destination “{destination}”.\n\nCurrent folder: {ancien_dossier}\nNew folder: {nouveau_dossier}\n\nIf you confirm, the next backups will be uploaded to the new folder. Backups already in the previous folder will no longer be listed or purged by Auto Backup: they stay with the provider, for you to move or delete.\n\nWithout confirmation nothing is saved: the destination keeps all its previous settings.",
+                "description": "You are about to change the remote folder of the destination “{destination}”.\n\nCurrent folder: {ancien_dossier}\nNew folder: {nouveau_dossier}\n\nIf you confirm, the next backups will be uploaded to the new folder. Backups already in the previous folder will no longer be listed, purged or counted by Auto Backup: they stay with the provider, for you to move or delete. If you later switch back to the previous folder, they will be taken into account again.\n\nWithout confirmation nothing is saved: the destination keeps all its previous settings.",
                 "data": {
                     "confirmer": "I confirm the folder change"
                 },

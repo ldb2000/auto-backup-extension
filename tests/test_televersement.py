@@ -42,6 +42,7 @@ from custom_components.auto_backup.const import (
     ATTR_ERROR,
     ATTR_ERROR_CODE,
     ATTR_EXCLUDE,
+    ATTR_FOLDER,
     ATTR_LAST_ERROR,
     ATTR_SIZE,
     ATTR_SLUG,
@@ -417,6 +418,8 @@ async def test_le_televersement_emet_le_debut_puis_le_succes(
     assert succes[0].data[ATTR_SLUG] == SLUG
     assert succes[0].data[ATTR_DESTINATION] == "destination_test"
     assert succes[0].data[ATTR_SIZE] == len(CONTENU_SAUVEGARDE)
+    # Dossier réellement utilisé, retenu par le registre (issue #58).
+    assert succes[0].data[ATTR_FOLDER] == "Sauvegardes"
 
     destination = instance.destination("destination_test")
     assert destination.octets_recus == CONTENU_SAUVEGARDE

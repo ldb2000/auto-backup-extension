@@ -80,6 +80,7 @@ from ..const import (
     ATTR_DESTINATION_NAME,
     ATTR_ERROR,
     ATTR_ERROR_CODE,
+    ATTR_FOLDER,
     ATTR_REMOTE_ID,
     ATTR_SIZE,
     ATTR_SLUG,
@@ -665,6 +666,10 @@ class CoordinateurTeleversement:
                     **base,
                     ATTR_SIZE: taille_envoyee,
                     ATTR_REMOTE_ID: distante.remote_id,
+                    # Dossier réellement utilisé (issue #58) : le registre le
+                    # retient, même si la destination a changé de dossier
+                    # pendant l'envoi.
+                    ATTR_FOLDER: destination.folder,
                 },
             )
 

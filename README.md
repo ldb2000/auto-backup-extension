@@ -88,7 +88,8 @@ l'URL de redirection affichée par le formulaire — de la forme
 maximum, suppression automatique) sans refaire l'autorisation : le jeton, les entités (mêmes
 identifiants, nom affiché mis à jour) et la liste des sauvegardes déjà déposées sont conservés.
 Un changement de dossier distant est confirmé à part : les sauvegardes de l'ancien dossier ne
-sont plus ni listées ni purgées par Auto Backup. Changer de compte reste l'affaire de
+sont plus ni listées, ni purgées, ni comptées par Auto Backup (elles le redeviennent si vous
+revenez à ce dossier). Changer de compte reste l'affaire de
 **Ré-autoriser une destination**.
 
 Votre instance doit donc avoir une **URL externe configurée** (Paramètres > Système > Réseau)
@@ -142,7 +143,8 @@ nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto
 **Événements** : trois événements sont émis pendant le téléversement :
 - `auto_backup.upload_start` : le téléversement vers une destination commence ;
 - `auto_backup.upload_successful` : le téléversement a réussi (champs : `name`, `slug`,
-  `destination`, `destination_name`, `size`, `remote_id`) ;
+  `destination`, `destination_name`, `size`, `remote_id`, `folder` — le dossier distant
+  utilisé) ;
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`, `error_code`).
 

@@ -325,7 +325,8 @@ affiché des entités suit le nouveau nom.
 
 Changer de **dossier distant** demande une confirmation : les sauvegardes déjà déposées dans
 l'ancien dossier (`Applications/<nom de votre app>/<ancien dossier>`) y restent, mais ne sont
-plus ni listées ni purgées par Auto Backup. Le nouveau dossier est créé au premier téléversement.
+plus ni listées, ni purgées, ni comptées par Auto Backup. Le nouveau dossier est créé au premier
+téléversement.
 
 Elle ne touche ni la clé ni le secret de l'application : quand ceux-ci changent, la marche à
 suivre reste celle du tableau de « Ce qui se passe ensuite ».

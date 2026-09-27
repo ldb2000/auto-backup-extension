@@ -168,6 +168,8 @@ Le détail des changements, issue par issue, suit.
 
 ### Modifié
 
+- Registre des sauvegardes distantes rangé par dossier : chaque entrée retient le dossier distant où la sauvegarde a été déposée (`folder`, aussi émis par l'événement `auto_backup.upload_successful`). Après un changement de dossier, le capteur du nombre de sauvegardes distantes ne compte plus que le dossier configuré (0 avant le premier envoi, mis à jour sans rechargement), et la purge ne tient plus les entrées d'un autre dossier pour candidates ni ne les compte dans `retention_count`. Les entrées de l'ancien dossier sont conservées : revenir à ce dossier les rend de nouveau comptées et purgeables. Le stockage `auto_backup.remote_backups` passe en version 1.2 ; la migration rattache les entrées existantes au dossier configuré, sans perte, et conserve celles d'une destination supprimée avec un dossier inconnu. Refs #58
+
 - Le script ad hoc `tests/check_issue_2.py` est remplacé par `tests/test_conformite_upstream.py` : les contrôles hors ligne sont exécutés par `pytest`, la comparaison avec le dépôt upstream est marquée `network` et ne s'exécute qu'avec `uv run pytest --tests-reseau`. Refs #4
 - Les destinations configurées sont conservées quand le flux d'options upstream est enregistré, et complétées par les options upstream par défaut lorsqu'elles n'ont jamais été saisies. Refs #6
 - `tests/test_conformite_upstream.py` tolère les modules upstream étendus par le fork mais vérifie qu'ils ne subissent que des ajouts, exclut le sous-paquet `destinations/` de la comparaison et exige que chaque écart soit documenté dans `docs/UPSTREAM.md`. Refs #6
