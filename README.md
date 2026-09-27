@@ -232,7 +232,7 @@ destination, la sauvegarde et la cause de l'échec.
 - **Retrait automatique** : dès qu'un envoi vers cette destination aboutit, la notification
   disparaît.
 - **Accès révoqué** : la notification invite à relancer « Ré-autoriser une destination » et
-  accompagne le problème affiché dans l'interface des intégrations, sans le doubler.
+  accompagne le problème affiché dans **Paramètres → Système → Réparations**, sans le doubler.
 - **Aucun secret affiché** : jetons, valeurs de `access_token` / `refresh_token` et chemins de
   fichiers absolus sont masqués (`***`) avant affichage.
 

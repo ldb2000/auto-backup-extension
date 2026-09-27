@@ -1633,7 +1633,7 @@ suivant le reconstruira.
 ### Jamais deux signalements pour la même cause
 
 Un accès révoqué produit déjà un problème Home Assistant. La notification qui l'accompagne le
-**complète** (le problème vit dans l'interface des intégrations, la notification à l'écran
+**complète** (le problème vit dans Paramètres → Système → Réparations, la notification à l'écran
 d'accueil) et disparaît avec lui : `async_effacer_la_reauthentification()` efface les deux, à la
 ré-autorisation comme à la suppression de la destination — une notification qui survivrait à la
 destination qu'elle nomme serait impossible à faire disparaître.
