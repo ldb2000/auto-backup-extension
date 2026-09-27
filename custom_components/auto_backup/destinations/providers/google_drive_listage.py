@@ -338,6 +338,10 @@ async def async_supprimer_la_sauvegarde(
     lettres, chiffres, tiret et souligné — mais celui-ci peut venir du registre
     persistant, donc d'un fichier de stockage éditable à la main : sans encodage,
     une barre oblique désignerait une autre ressource de l'API.
+
+    **La suppression ne revérifie pas le marqueur et fait confiance à l'appelant.**
+    Seule la purge distante (retention.py, qui ne transmet que des identifiants du
+    registre ou d'un listage marqué) doit appeler cette fonction.
     """
     identifiant = texte_optionnel(remote_id)
     if identifiant is None:

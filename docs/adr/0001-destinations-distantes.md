@@ -1329,6 +1329,11 @@ qui l'exigerait, mais celui-ci peut venir du registre persistant, donc d'un fich
 éditable à la main : sans encodage, une barre oblique remonterait d'un segment et désignerait une
 autre ressource de l'API.
 
+**La suppression ne revérifie pas le marqueur et fait confiance à l'appelant.** Seule la purge
+distante (#9), qui ne transmet que des identifiants du registre ou d'un listage marqué, doit
+appeler le crochet de suppression. Ce faisant, le fournisseur n'a pas à refaire la vérification
+de provenance qu'il a déjà imposée au listage.
+
 ### Les bornes sont celles du fournisseur, pas celles du coordinateur
 
 Le contrat de `RemoteDestination` demande depuis #9 à chaque fournisseur de borner lui-même ses
