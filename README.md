@@ -145,10 +145,12 @@ entités. L'événement est en effet visible dans les outils de développement, 
 automatisation qui l'écoute et conservé par l'enregistreur. Une cause sans secret (« quota
 dépassé », « délai de téléversement dépassé (1800 s) ») reste identique mot pour mot. Le masquage
 avale aussi, par prudence, toute suite de vingt caractères ou plus sans espace qui mêle chiffres,
-majuscules ou `_` : un code technique de fournisseur (`too_many_write_operations`) ou un nom de
-destination ou de sauvegarde sans espace cité dans la cause (« Dropbox-Compte-Familial ») y
-apparaissent donc sous la forme `***`. Pour filtrer sur une destination, préférez les champs
-`destination` et `destination_name`, qui ne sont pas masqués.
+majuscules ou `_` : un nom de destination ou de sauvegarde sans espace cité dans la cause
+(« Dropbox-Compte-Familial ») y apparaît donc sous la forme `***`. Les codes d'erreur **connus**
+de Dropbox et de Google Drive restent en revanche lisibles (`expired_access_token`,
+`invalid_access_token`, `too_many_write_operations`, `userRateLimitExceeded`,
+`storageQuotaExceeded`…) : une automatisation peut filtrer dessus. Pour filtrer sur une
+destination, préférez les champs `destination` et `destination_name`, qui ne sont pas masqués.
 
 Chez **Dropbox**, la sauvegarde est déposée dans le dossier de la destination sous le nom
 `<nom de la sauvegarde> [<slug>].tar`. Un fichier de même nom n'est **jamais** remplacé : le

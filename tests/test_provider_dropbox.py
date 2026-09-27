@@ -64,6 +64,7 @@ from custom_components.auto_backup.destinations import (
 )
 from custom_components.auto_backup.destinations.errors import UnknownProviderError
 from custom_components.auto_backup.destinations.flow import IDENTIFIANT_PROVISOIRE
+from custom_components.auto_backup.destinations.masquage import masquer
 from custom_components.auto_backup.destinations.providers.dropbox import (
     CLE_ACCOUNT_ID,
     LIBELLE_DROPBOX,
@@ -732,6 +733,36 @@ async def test_un_jeton_refuse_par_l_api_declenche_la_reauthentification(
     assert gestionnaire.reauthentification_requise(identifiant)
     registre = ir.async_get(hass)
     assert registre.async_get_issue(DOMAIN, identifiant_du_probleme(identifiant))
+
+
+async def test_le_code_expired_access_token_reste_intact_dans_le_message_reel(
+    hass: HomeAssistant,
+    entree_dropbox: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Critère 2 de #48 : le message réel de `_erreur_d_acces()` reste lisible.
+
+    Contrairement aux deux tests ci-dessus, qui ne vérifient que le statut HTTP
+    (`match="401"`), celui-ci prend le message complet que `_erreur_d_acces()`
+    construit — pas un texte retapé à la main — et le fait passer par le
+    masquage partagé : le code Dropbox `expired_access_token` (vingt caractères,
+    ex-victime de la passe 6 avant #48) doit en ressortir identique, casse
+    comprise, alors que ce message est justement celui que `masquer()` masque
+    déjà à l'émission de l'événement `auto_backup.upload_failed` (#44).
+    """
+    aioclient_mock.post(
+        URL_COMPTE,
+        status=401,
+        json={"error_summary": "expired_access_token/", "error": {}},
+    )
+
+    destination = _destination(hass, entree_dropbox)
+    with pytest.raises(DestinationAuthError) as excinfo:
+        await destination.async_check_connection()
+
+    message = str(excinfo.value)
+    assert "expired_access_token" in message
+    assert masquer(message) == message, "le code a été masqué par la passe 6"
 
 
 async def test_une_portee_manquante_demande_une_nouvelle_autorisation(
