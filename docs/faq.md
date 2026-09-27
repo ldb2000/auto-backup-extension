@@ -226,15 +226,16 @@ l'ajout.
 
 ### Que deviennent les sauvegardes si je change de dossier distant ?
 
-Elles restent où elles sont, chez le fournisseur : Auto Backup ne déplace rien. Comme il ne liste
-et ne purge que le dossier configuré, les sauvegardes de l'ancien dossier ne sont **plus ni
-listées, ni purgées** : retirez-les ou déplacez-les à la main. C'est pourquoi l'interface demande
-une confirmation explicite, en nommant l'ancien et le nouveau dossier ; sans confirmation, rien
-n'est enregistré. Le nouveau dossier est créé au téléversement suivant.
+Elles restent où elles sont, chez le fournisseur : Auto Backup ne déplace rien. Comme il ne liste,
+ne purge et ne compte que le dossier configuré, les sauvegardes de l'ancien dossier ne sont **plus
+ni listées, ni purgées, ni comptées** : retirez-les ou déplacez-les à la main. C'est pourquoi
+l'interface demande une confirmation explicite, en nommant l'ancien et le nouveau dossier ; sans
+confirmation, rien n'est enregistré. Le nouveau dossier est créé au téléversement suivant.
 
-Le capteur du nombre de sauvegardes distantes compte ce qu'Auto Backup a inscrit dans son
-registre : les sauvegardes de l'ancien dossier y restent comptées tant qu'elles n'en sortent
-pas.
+Le capteur du nombre de sauvegardes distantes ne compte que les sauvegardes du dossier configuré :
+il repasse à 0 dès l'enregistrement, sans redémarrage, puis compte chaque envoi vers le nouveau
+dossier. Auto Backup garde néanmoins la trace des sauvegardes déposées dans l'ancien dossier : si
+vous y revenez, elles sont de nouveau comptées et soumises à la rétention de la destination.
 
 Changer de **compte** ou de **fournisseur** ne se fait pas ici : c'est **Ré-autoriser une
 destination** (autre compte, même application), ou l'ajout d'une nouvelle destination.

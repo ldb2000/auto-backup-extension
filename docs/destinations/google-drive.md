@@ -323,8 +323,8 @@ déposées. Le nom affiché des entités suit le nouveau nom.
 
 Changer de **dossier distant** demande une confirmation. Auto Backup oublie alors l'identifiant
 de l'ancien dossier qu'il avait mémorisé : il cherche — ou crée — le nouveau au téléversement
-suivant. Les sauvegardes de l'ancien dossier restent sur Drive, mais ne sont plus ni listées ni
-purgées par Auto Backup : retirez-les à la main si vous le souhaitez.
+suivant. Les sauvegardes de l'ancien dossier restent sur Drive, mais ne sont plus ni listées, ni
+purgées, ni comptées par Auto Backup : retirez-les à la main si vous le souhaitez.
 
 Elle ne touche pas aux identifiants de l'application : quand ceux-ci changent, la marche à
 suivre reste celle de « Durée de vie de l'autorisation », plus haut.

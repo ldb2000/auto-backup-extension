@@ -29,6 +29,7 @@ DOC_FAQ = RACINE_DEPOT / "docs" / "faq.md"
 DOC_SERVICES = RACINE_DEPOT / "docs" / "services.md"
 DOC_DROPBOX = RACINE_DEPOT / "docs" / "destinations" / "dropbox.md"
 DOC_GOOGLE_DRIVE = RACINE_DEPOT / "docs" / "destinations" / "google-drive.md"
+DOC_ADR = RACINE_DEPOT / "docs" / "adr" / "0001-destinations-distantes.md"
 
 
 def _lire(chemin: Path) -> str:
@@ -78,6 +79,24 @@ def test_la_faq_avertit_du_sort_des_sauvegardes_de_l_ancien_dossier() -> None:
     assert "Que deviennent les sauvegardes si je change de dossier distant" in texte
     assert "plus ni listées, ni purgées" in aplati
     assert "confirmation explicite" in aplati
+
+
+def test_la_faq_decrit_le_capteur_apres_un_changement_de_dossier() -> None:
+    """#58 : le capteur ne compte plus l'ancien dossier, un retour le recompte."""
+    aplati = _aplati(DOC_FAQ)
+
+    assert "ne compte que les sauvegardes du dossier configuré" in aplati
+    assert "il repasse à 0 dès l'enregistrement" in aplati
+    assert "si vous y revenez, elles sont de nouveau comptées" in aplati
+    assert "y restent comptées" not in aplati
+
+
+def test_l_adr_ne_dit_plus_que_le_capteur_compte_l_ancien_dossier() -> None:
+    """#58 : la conséquence assumée de #51 est levée dans l'ADR."""
+    aplati = _aplati(DOC_ADR)
+
+    assert "continue de compter les entrées de l'ancien dossier" not in aplati
+    assert "Registre rangé par dossier (issue #58)" in _lire(DOC_ADR)
 
 
 def test_la_section_faq_de_modification_ne_dit_plus_de_supprimer() -> None:

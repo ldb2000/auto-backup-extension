@@ -51,6 +51,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_modification.py` | Interface : modification du nom, du dossier distant et de la rétention d'une destination existante (issue #51) — jeton, registre des sauvegardes déposées et entités conservés, nom affiché mis à jour, confirmation d'un changement de dossier. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
+| `tests/test_registre_par_dossier.py` | Registre des sauvegardes distantes rangé par dossier (issue #58) : dossier retenu à chaque dépôt, capteur et purge limités au dossier configuré (y compris `retention_count`), retour à l'ancien dossier, reconnaissance Dropbox filtrée, migration du stockage 1.1 → 1.2 sans perte et idempotente. |
 | `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés, frontière avec la purge distante. |
 | `tests/test_masquage.py` | Masquage des secrets, point unique du fork : vecteurs relevés par l'audit (jetons nus, URL de session, adresse électronique, base64), formes d'affectation, chemins absolus, messages français préservés, noms du fork exemptés du dernier filet (`masquer_un_nom()`), codes d'erreur connus des fournisseurs épargnés par liste blanche exacte (suites voisines toujours masquées, passes précédentes prioritaires, #48), réserves assumées, troncature. |
 | `tests/test_garde_masquage.py` | Garde statique du point unique de masquage (issue #35) : aucun motif de masquage en regex n'existe en dehors de `destinations/masquage.py`, aucune trace brute n'atteint le journal (`_LOGGER.exception()` ou `exc_info=`), aucune exception rattrapée n'y arrive sans masquer. Limites assumées documentées : suivi des dérivés local à la fonction, receveurs indirects non suivis. |
@@ -275,7 +276,7 @@ await _deposer(hass, destination, "photos", jours=99, inscrire=False)
 supprimes = await _coordinateur(hass).async_purger_toutes()
 ```
 
-Cinq points à connaître :
+Six points à connaître :
 
 1. **Le registre décide de ce qui est purgeable.** `_deposer(..., inscrire=False)` simule un
    fichier que l'utilisateur aurait déposé lui-même : il ne figure pas au registre du fork
@@ -312,6 +313,13 @@ Cinq points à connaître :
    L'attente réelle est donc de quelques millisecondes, pas de 300 secondes. Le même principe
    vaut pour le téléversement, où c'est l'option `upload_timeout` qui est réglée à `0.01` et
    `attente_secondes` qui fait patienter.
+6. **Une entrée du registre appartient à un dossier (issue #58).** Seules les entrées dont le
+   `folder` est le dossier configuré de la destination comptent pour le capteur et la purge :
+   `_deposer()` inscrit donc l'entrée avec `folder=destination.folder`. Une `EntreeRegistre`
+   construite sans `folder` a un dossier inconnu et n'est ni comptée ni purgeable. Le fournisseur
+   factice listant tout ce qu'il contient quel que soit le dossier, `tests/test_registre_par_dossier.py`
+   y dépose aussi les sauvegardes d'un autre dossier : c'est le pire cas pour la purge. Changer
+   de dossier recharge les destinations, et la destination factice repart vide.
 
 ## Tester les notifications d'échec
 
