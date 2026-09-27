@@ -69,7 +69,7 @@ un code d'erreur HTTP (« code=500 » devient « code=*** ») que laisser fuir u
 jeton de rafraîchissement. Il épargne en revanche le mot ordinaire qui suit un
 mot-clé séparé par une simple espace (« token expiré », « code de la
 sauvegarde ») : le masquer n'aurait rien protégé et aurait rendu illisibles les
-messages en français. Restent trois angles morts connus et acceptés :
+messages en français. Restent quatre angles morts connus et acceptés :
 
 - **Base64 standard.** Un secret contenant `/`, `=` ou `.` est découpé par ces
   caractères, exclus du jeu de la passe 6 pour ne pas masquer les URL. Il peut
@@ -99,6 +99,20 @@ messages en français. Restent trois angles morts connus et acceptés :
   d'un fournisseur reste masqué jusqu'à ce qu'on l'y ajoute, source à l'appui.
   Cette réserve ne porte que sur la cause d'un échec : les noms passent par
   `masquer_un_nom()`, hors de portée de cette passe.
+- **Caractère non ASCII dans une suite opaque (#54).** La passe 6 ne
+  reconnaît une suite que sur l'alphabet ASCII `[A-Za-z0-9_+-]`. Un caractère
+  non ASCII — un homoglyphe cyrillique (U+0430) glissé dans un secret, par
+  exemple — la découpe en morceaux qui, s'ils font chacun moins de
+  `LONGUEUR_MIN_SUITE_OPAQUE` caractères, échappent au dernier filet : la
+  suite sort intacte. Non exploitable aujourd'hui : les jetons des
+  fournisseurs intégrés sont en ASCII et reconnus par leur forme (passe 4), et
+  aucun secret n'est fabriqué par un tiers — le texte masqué vient du
+  fournisseur, qui n'a aucune raison d'y glisser un homoglyphe. Le motif n'est
+  **pas** élargi à l'Unicode, ni le texte normalisé avant masquage : le
+  français accentué sans espace de vingt caractères ou plus
+  (« sauvegarde-planifiée-échouée »), que ses accents coupent aujourd'hui,
+  deviendrait une suite opaque et serait masqué. À rouvrir seulement avec un
+  fournisseur dont les jetons sortent de l'ASCII.
 
 **Pourquoi la liste blanche ne rouvre aucune fuite.** Elle n'agit qu'en passe
 6, sur une suite que les passes précédentes n'ont pas déjà remplacée : la

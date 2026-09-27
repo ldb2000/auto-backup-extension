@@ -1710,7 +1710,7 @@ le nom de la sauvegarde.
 **Réserves assumées, reprises de #16 et documentées en tête de module.** Le masquage est
 volontairement large — « code=500 » devient « code=*** » — mais épargne le mot ordinaire qui suit
 un mot-clé séparé par une simple espace (« token expiré », « code de la sauvegarde ») : le masquer
-n'aurait rien protégé et aurait rendu les notifications françaises illisibles. Trois angles morts
+n'aurait rien protégé et aurait rendu les notifications françaises illisibles. Quatre angles morts
 subsistent, chacun avec son test :
 
 - un secret en base64 **standard** est découpé par `/`, `=` et `.`, exclus du jeu de la dernière
@@ -1733,7 +1733,16 @@ subsistent, chacun avec son test :
   nouveau reste masqué jusqu'à son ajout. La cause reste de toute façon diagnosticable : les
   fournisseurs du fork la traduisent en français et ne rejettent le code brut qu'en fin de message
   — « (motif : …) » chez Google Drive, l'`error_summary` entre parenthèses ou après un deux-points
-  chez Dropbox. La réserve ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
+  chez Dropbox. La réserve ne porte que sur la cause, les noms passant par `masquer_un_nom()` ;
+- la passe 6 ne reconnaît une suite opaque que sur l'alphabet ASCII `[A-Za-z0-9_+-]` (issue #54).
+  Un caractère non ASCII — un homoglyphe cyrillique glissé dans un secret, par exemple — la
+  découpe en morceaux qui, s'ils font chacun moins de `LONGUEUR_MIN_SUITE_OPAQUE` (vingt)
+  caractères, échappent au dernier filet : la suite sort intacte. Accepté : les jetons des
+  fournisseurs intégrés sont en ASCII et reconnus par leur forme en passe 4, et aucun secret
+  n'est fabriqué par un tiers — le texte masqué vient du fournisseur. Élargir le motif à
+  l'Unicode, ou normaliser le texte avant masquage, ferait masquer le français accentué sans
+  espace de vingt caractères ou plus (« sauvegarde-planifiée-échouée »), que ses accents coupent
+  aujourd'hui. À rouvrir seulement avec un fournisseur dont les jetons sortent de l'ASCII.
 
 **Adoption par l'issue #16.** `assainir_le_message()` d'`entities.py` est l'enveloppe qui ramène
 `None` et une chaîne vide à `cause inconnue`, puis appelle
