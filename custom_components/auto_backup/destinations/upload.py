@@ -680,15 +680,23 @@ class CoordinateurTeleversement:
     ) -> None:
         """Journalise l'échec d'un téléversement et émet l'événement dédié.
 
-        `message` est la cause relayée d'un fournisseur ou d'une exception : le
-        journal n'en reçoit que la version masquée (#35).
+        `message` est la cause relayée d'un fournisseur ou d'une exception : ni
+        le journal (#35) ni l'événement (#44) n'en reçoivent le texte brut, mais
+        sa version masquée par `masquer()`. L'événement est visible des outils
+        de développement, de toute automatisation qui l'écoute, et stocké par
+        l'enregistreur : une URI de session Google Drive et son `upload_id` n'y
+        ont pas leur place. Le schéma de l'événement est inchangé ; seul le
+        contenu de `error` l'est, et seulement quand il portait un motif masqué.
+        Les consommateurs internes (notifications #17, entités #16) le masquent
+        de nouveau à la lecture, sans effet : le masquage est idempotent.
         """
+        cause = masquer(message)
         _LOGGER.error(
             "Échec du téléversement de la sauvegarde « %s » (%s) vers « %s » : %s",
             nom,
             slug,
             destination_nom,
-            masquer(message),
+            cause,
         )
         self._hass.bus.async_fire(
             EVENT_UPLOAD_FAILED,
@@ -697,7 +705,7 @@ class CoordinateurTeleversement:
                 ATTR_SLUG: slug,
                 ATTR_DESTINATION: destination_id,
                 ATTR_DESTINATION_NAME: destination_nom,
-                ATTR_ERROR: message,
+                ATTR_ERROR: cause,
             },
         )
 

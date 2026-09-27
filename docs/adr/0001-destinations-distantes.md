@@ -943,6 +943,19 @@ distincte de `DestinationError` : l'échec vient d'ici, pas du fournisseur dista
 | `auto_backup.upload_successful` | les précédents, plus `size` et `remote_id` |
 | `auto_backup.upload_failed` | les champs de `upload_start`, plus `error` |
 
+**`error` est masqué à l'émission (issue #44).** La cause d'un échec est souvent un texte de
+fournisseur ou le message d'une exception réseau, qui peut citer un jeton ou l'URI de session d'un
+envoi reprenable Google Drive et son `upload_id`. Or l'événement est visible des outils de
+développement, transmis à toute automatisation qui l'écoute et conservé par l'enregistreur :
+`_async_signaler_echec()` y place donc `masquer(cause)`, la même valeur que dans le journal. Le
+schéma ne change pas — mêmes champs, mêmes noms — et aucun champ `error_brut` ni aucune option ne
+réintroduit le texte d'origine : ce serait rouvrir la fuite par une autre porte. Les consommateurs
+internes (notifications #17, entités #16) masquent encore la cause à la lecture ; ils affichent
+exactement la même chose, car `masquer()` est idempotent (`masquer(masquer(x)) == masquer(x)`,
+éprouvé sur tous les vecteurs de `tests/test_masquage.py`). Une cause sans secret reste identique ;
+les réserves de la passe 6 (codes techniques et noms sans espace de vingt caractères ou plus,
+réduits à `***`) s'appliquent désormais aussi au texte que reçoit une automatisation.
+
 **`size` peut valoir `null`.** Sous Supervisor, la taille vient de l'en-tête `Content-Length` de
 `GET /backups/<slug>/download` ; s'il manque, la sauvegarde est téléversée quand même, mais sa
 taille reste inconnue, et le fournisseur n'en renvoie pas toujours une non plus. Une automatisation

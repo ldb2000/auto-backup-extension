@@ -15,6 +15,7 @@ qu'ils n'apparaissent **pas** en sortie.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -602,3 +603,119 @@ def test_journaliser_une_exception_ne_donne_la_trace_qu_en_debug(
     for secret in (IDENTIFIANT_DE_SESSION, JETON_GOOGLE):
         assert secret not in caplog.text
     assert all(enregistrement.exc_info is None for enregistrement in caplog.records)
+
+
+### Idempotence (#44) ###
+
+# L'événement `auto_backup.upload_failed` porte désormais une cause déjà masquée
+# (#44), que les notifications (#17) et les entités (#16) masquent de nouveau à
+# la lecture. Leur affichage ne reste inchangé que si masquer un texte déjà
+# masqué ne le modifie plus. Placée en fin de module, cette section rassemble
+# **toutes** les entrées des vecteurs paramétrés ci-dessus : un vecteur ajouté
+# plus tard est éprouvé ici sans qu'on ait à le recopier.
+
+
+def _entrees_des_vecteurs() -> list[str]:
+    """Premier argument texte de chaque cas paramétré de ce module."""
+    entrees: dict[str, None] = {}
+    for objet in list(globals().values()):
+        for marque in getattr(objet, "pytestmark", ()):
+            if marque.name != "parametrize":
+                continue
+            for cas in marque.args[1]:
+                valeurs = getattr(cas, "values", cas)
+                premier = valeurs[0] if isinstance(valeurs, tuple) else valeurs
+                if isinstance(premier, str):
+                    entrees[premier] = None
+    return list(entrees)
+
+
+ENTREES_DES_VECTEURS = _entrees_des_vecteurs()
+
+
+def test_les_vecteurs_sont_bien_rassembles() -> None:
+    """Garde-fou : une collecte vide rendrait le test suivant trivialement vert."""
+    assert len(ENTREES_DES_VECTEURS) >= 40
+    assert f"invalid access token {JETON_DROPBOX}" in ENTREES_DES_VECTEURS
+
+
+@pytest.mark.parametrize("brut", ENTREES_DES_VECTEURS)
+def test_masquer_un_texte_deja_masque_ne_le_change_plus(brut: str) -> None:
+    """`masquer(masquer(x)) == masquer(x)`, avec ou sans troncature.
+
+    La composition éprouvée est aussi celle des entités : l'événement porte
+    `masquer(x)`, l'attribut d'entité applique `masquer(…, longueur_max=255)`.
+    """
+    masque = masquer(brut)
+
+    assert masquer(masque) == masque
+    for borne in (255, 32):
+        assert masquer(masque, longueur_max=borne) == masquer(brut, longueur_max=borne)
+    assert masquer_un_nom(masquer_un_nom(brut)) == masquer_un_nom(brut)
+
+
+### Documentation du masquage à l'émission de l'événement (critère 5 de #44) ###
+
+RACINE_DEPOT = Path(__file__).resolve().parent.parent
+README = RACINE_DEPOT / "README.md"
+CHANGELOG = RACINE_DEPOT / "CHANGELOG.md"
+DOC_UPSTREAM = RACINE_DEPOT / "docs" / "UPSTREAM.md"
+
+
+def test_le_readme_documente_le_masquage_du_champ_error() -> None:
+    """Critère 5 : la section des événements dit que `error` est masqué.
+
+    Le README décrit le schéma de `auto_backup.upload_failed` juste avant :
+    c'est là, et non ailleurs dans le document, que la précision sur le
+    masquage doit se trouver pour qu'un lecteur qui découvre l'événement la
+    voie immédiatement.
+    """
+    texte = README.read_text(encoding="utf-8")
+
+    marqueur = "**Événements**"
+    assert marqueur in texte, f"section des événements absente du README : {marqueur!r}"
+
+    section = texte.split(marqueur, 1)[1]
+    assert "auto_backup.upload_failed" in section
+    assert "masqu" in section.casefold()
+    # L'exemple qui rassure sur la stabilité d'une cause sans secret, cité mot
+    # pour mot, pour qu'une automatisation sache qu'elle continue de fonctionner.
+    assert "quota" in section.casefold()
+
+
+def test_le_changelog_signale_le_changement_visible_pour_les_automatisations() -> None:
+    """Critère 5 : le CHANGELOG signale, pour #44, le texte désormais masqué.
+
+    Le critère demande explicitement que « le changement visible pour une
+    automatisation qui comparerait le texte exact d'une erreur contenant un
+    secret » soit signalé au CHANGELOG — pas seulement que `error` est masqué.
+    """
+    texte = CHANGELOG.read_text(encoding="utf-8")
+
+    entrees_44 = [ligne for ligne in texte.splitlines() if "Refs #44" in ligne]
+    assert entrees_44, "aucune entrée du CHANGELOG ne référence #44"
+
+    entree_automatisations = next(
+        (ligne for ligne in entrees_44 if "automatisation" in ligne.casefold()), None
+    )
+    assert entree_automatisations is not None, (
+        "aucune entrée #44 ne signale le changement visible pour les automatisations"
+    )
+    assert "upload_failed" in entree_automatisations
+    assert "***" in entree_automatisations
+
+
+def test_upstream_ne_decrit_plus_une_cause_transportee_brute() -> None:
+    """Critère 5 : `docs/UPSTREAM.md` reflète le masquage à l'émission.
+
+    Avant #44, ce document disait explicitement que l'événement « transporte
+    la cause brute » : cette affirmation, devenue fausse, ne doit plus s'y
+    trouver.
+    """
+    texte = DOC_UPSTREAM.read_text(encoding="utf-8")
+
+    assert "auto_backup.upload_failed" in texte
+    assert "transporte la cause brute" not in texte
+    assert "#44" in texte
+    section = texte.split("auto_backup.upload_failed", 1)[1]
+    assert "masqu" in section.casefold()
