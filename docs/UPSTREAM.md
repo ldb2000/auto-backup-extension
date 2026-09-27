@@ -282,6 +282,26 @@ L'option `notify_on_failure` de l'issue #17 suit exactement ce modèle : sa prop
 (`reglages_notifications`), son écriture par `options_avec_reglage()`, sa clé dans
 `CLES_DU_FORK`. Le formulaire upstream reste intact.
 
+#### Ce que le fork ne masque pas : le message d'erreur de `sensor.py`
+
+Tout texte non maîtrisé que le **fork** affiche ou journalise passe par
+`destinations/masquage.py` (issues #17, #16 et #35), et `tests/test_garde_masquage.py` échoue
+si un module du fork relaie une exception au journal sans `masquer()`, recopie une trace
+brute (`_LOGGER.exception()`, `exc_info=`) ou réimplante un motif de masquage ailleurs. Ce
+test ne porte **que sur le code du fork** : les modules upstream, à la racine de
+`custom_components/auto_backup/`, en sont exclus nommément.
+
+Conséquence assumée de l'import à l'identique : le capteur upstream
+`AutoBackupLastFailureSensor` (`sensor.py`) recopie tel quel, dans son attribut `error`, le
+message de l'événement `auto_backup.backup_failed`, **sans masquage**. Cet attribut est lisible
+par toute personne ayant accès à l'instance et historisé par l'enregistreur. Le fork ne le
+corrige pas : masquer ce message demanderait de **modifier** une ligne upstream, ce que la
+règle « que des ajouts » ci-dessus exclut. Le risque reste borné : l'événement ne relaie que
+l'échec d'une sauvegarde **locale** (message du Supervisor ou de Home Assistant), jamais une
+réponse de Dropbox ou de Google Drive, dont les échecs passent par `auto_backup.upload_failed`
+et par les entités du fork, elles masquées. À reconsidérer si l'upstream ajoute un jour son
+propre masquage, ou si le fork décide de remplacer ce capteur.
+
 ### Comment ces écarts sont contrôlés
 
 `tests/test_conformite_upstream.py` énumère les écarts et vérifie qu'ils restent bornés :
