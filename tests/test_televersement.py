@@ -67,6 +67,9 @@ from custom_components.auto_backup.destinations import (
 )
 from custom_components.auto_backup.destinations.flow import _delai_de_televersement
 from custom_components.auto_backup.destinations.masquage import masquer
+from custom_components.auto_backup.destinations.providers.google_drive import (
+    erreur_de_la_reponse,
+)
 from custom_components.auto_backup.destinations.upload import (
     DELAI_CONFIRMATION_DEMANDE,
     ErreurLectureSauvegarde,
@@ -1648,6 +1651,164 @@ async def test_une_cause_sans_secret_reste_identique_dans_l_evenement(
 
     assert len(echecs) == 1
     assert echecs[0].data[ATTR_ERROR] == message
+
+
+# Critère 2, avec les erreurs telles que les fournisseurs du fork les
+# construisent réellement (`google_drive.py::erreur_de_la_reponse`, corps
+# d'erreur de forme Google habituelle), plutôt qu'un texte retapé à la main :
+# c'est cette fonction de production qui décide du message final.
+def _charge_google(raison: str) -> dict[str, Any]:
+    """Corps d'erreur de l'API Google Drive, dans sa forme habituelle."""
+    return {
+        "error": {
+            "code": 0,
+            "message": "erreur simulée",
+            "errors": [
+                {"domain": "global", "reason": raison, "message": "erreur simulée"}
+            ],
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("erreur", "message_attendu"),
+    [
+        # `rateLimitExceeded` (17 caractères) : sous le seuil de la passe 6 de
+        # `masquer()` (`LONGUEUR_MIN_SUITE_OPAQUE` = 20), le motif de limitation
+        # de débit passe intact.
+        pytest.param(
+            erreur_de_la_reponse(429, _charge_google("rateLimitExceeded")),
+            "Google Drive a renvoyé une réponse inattendue (HTTP 429) : "
+            "rateLimitExceeded",
+            id="google-rate-limit-court",
+        ),
+        # `accessNotConfigured` : message-guide entièrement récrit en français,
+        # sans code brut embarqué.
+        pytest.param(
+            erreur_de_la_reponse(403, _charge_google("accessNotConfigured")),
+            "l'API Google Drive n'est pas activée sur votre projet Google Cloud. "
+            "Ouvrez « API et services » > « Bibliothèque », activez « Google "
+            "Drive API », puis relancez l'ajout de la destination",
+            id="google-api-desactivee",
+        ),
+        # `storageQuotaExceeded` (20 caractères, casse mixte) : masquable par la
+        # passe 6, mais la traduction dédiée du quota de stockage ne recopie
+        # jamais ce code brut dans son message.
+        pytest.param(
+            erreur_de_la_reponse(403, _charge_google("storageQuotaExceeded")),
+            "l'espace de stockage du compte Google est épuisé : libérez de la "
+            "place dans Google Drive, puis réessayez",
+            id="google-quota-stockage",
+        ),
+        pytest.param(
+            erreur_de_la_reponse(404, _charge_google("notFound")),
+            "la ressource demandée n'existe pas (ou plus) sur Google Drive",
+            id="google-ressource-absente",
+        ),
+        # Panne serveur Dropbox : `resume` porte l'`error_summary` réel
+        # (`internal_error/`, 15 caractères), sous le seuil de la passe 6.
+        pytest.param(
+            DestinationError(
+                "Dropbox est en panne passagère (HTTP 500) et n'a pas accepté "
+                "« nuit.tar » pour la destination « Dropbox perso » après 5 "
+                "tentatives : internal_error/"
+            ),
+            "Dropbox est en panne passagère (HTTP 500) et n'a pas accepté "
+            "« nuit.tar » pour la destination « Dropbox perso » après 5 "
+            "tentatives : internal_error/",
+            id="dropbox-panne-serveur",
+        ),
+    ],
+)
+async def test_des_erreurs_typees_reelles_restent_identiques_dans_l_evenement(
+    hass: HomeAssistant,
+    instance: _Instance,
+    erreur: DestinationError,
+    message_attendu: str,
+) -> None:
+    """Critère 2, avec les messages réellement produits par les fournisseurs.
+
+    `erreur_de_la_reponse()` (Google Drive) est le code de production, pas un
+    texte retapé : si son message change un jour, ce test le signale. Les
+    causes ci-dessus ne portent aucun secret et doivent rester identiques dans
+    l'événement, pour les automatisations qui filtrent dessus.
+    """
+    assert str(erreur) == message_attendu, "le message réel a changé sous le test"
+    echecs = await _declencher_un_echec(hass, instance, erreur)
+
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_ERROR] == message_attendu
+
+
+@pytest.mark.parametrize(
+    ("erreur", "cause_reelle", "code_masque"),
+    [
+        # `userRateLimitExceeded` (21 caractères, casse mixte) : même famille
+        # d'erreur que `rateLimitExceeded` ci-dessus (limitation de débit,
+        # réessayée jusqu'à épuisement des tentatives), mais assez long pour
+        # que la passe 6 la masque.
+        pytest.param(
+            erreur_de_la_reponse(429, _charge_google("userRateLimitExceeded")),
+            "Google Drive a renvoyé une réponse inattendue (HTTP 429) : "
+            "userRateLimitExceeded",
+            "userRateLimitExceeded",
+            id="google-rate-limit-utilisateur",
+        ),
+        # `too_many_write_operations` (26 caractères, `_`) : quota réel
+        # d'opérations d'écriture Google Drive, embarqué tel quel dans le
+        # message générique d'un 403 non qualifié.
+        pytest.param(
+            erreur_de_la_reponse(403, _charge_google("too_many_write_operations")),
+            "Google Drive a refusé l'accès (403). Vérifiez que l'API Drive est "
+            "activée et que le compte autorisé est bien celui attendu (motif : "
+            "too_many_write_operations)",
+            "too_many_write_operations",
+            id="google-quota-ecriture",
+        ),
+        # `expired_access_token` (20 caractères, `_`) : code Dropbox réel d'un
+        # jeton expiré, recopié par `_erreur_d_acces()` — pas un secret, juste
+        # le nom de la cause.
+        pytest.param(
+            DestinationError(
+                "Dropbox refuse l'accès de la destination « Dropbox perso » "
+                "(HTTP 401) : expired_access_token/"
+            ),
+            "Dropbox refuse l'accès de la destination « Dropbox perso » "
+            "(HTTP 401) : expired_access_token/",
+            "expired_access_token",
+            id="dropbox-jeton-expire",
+        ),
+    ],
+)
+async def test_les_codes_de_fournisseur_reels_ge_20_caracteres_sont_masques(
+    hass: HomeAssistant,
+    instance: _Instance,
+    erreur: DestinationError,
+    cause_reelle: str,
+    code_masque: str,
+) -> None:
+    """Comportement assumé (arbitrage métier #44) pour trois codes ≥ 20 caractères.
+
+    Critère 2 reformulé : les codes techniques de fournisseur d'au moins vingt
+    caractères (`userRateLimitExceeded`, `too_many_write_operations`,
+    `expired_access_token`) restent masqués par la passe 6 de `masquer()`,
+    exactement comme dans le journal (#35), les notifications (#17) et les
+    entités (#16). Les épargner est hors périmètre ici, reporté à l'issue #48.
+
+    Ce test fixe donc, positivement, le comportement retenu : le code devient
+    `***`, le reste du message ne bouge pas, et le résultat vaut
+    `masquer(cause_reelle)` — pas un texte retapé à la main.
+    """
+    assert str(erreur) == cause_reelle, "le message réel a changé sous le test"
+    echecs = await _declencher_un_echec(hass, instance, erreur)
+
+    assert len(echecs) == 1
+    cause = echecs[0].data[ATTR_ERROR]
+    assert cause == masquer(cause_reelle)
+    # Seul le code est remplacé : le reste du message (statut HTTP, nom de la
+    # destination, ponctuation française) ne bouge pas.
+    assert cause == cause_reelle.replace(code_masque, "***")
+    assert code_masque not in cause
 
 
 async def test_le_delai_depasse_reste_identique_dans_l_evenement(
