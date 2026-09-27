@@ -38,17 +38,32 @@ from ..const import (
     IDENTIFIANT_PROVISOIRE,
     ISSUE_REAUTH_PREFIX,
 )
+from .errors import UnknownProviderError
 from .models import DestinationConfig
 from .notifications import (
     async_effacer_les_notifications,
     async_notifier_la_reauthentification,
 )
+from .registry import provider_label
 
 _LOGGER = logging.getLogger(__name__)
 
 # Clé de traduction du problème, commune à toutes les destinations : le nom de la
 # destination et son fournisseur sont passés en paramètres.
 CLE_TRADUCTION_REAUTH = "reauthentification_requise"
+
+
+def _libelle_du_fournisseur(provider: str) -> str:
+    """Libellé lisible du fournisseur (« Google Drive »), son identifiant à défaut.
+
+    Le problème est affiché tel quel à l'utilisateur (#18) : il y lit le nom du
+    service, pas `google_drive`. Un fournisseur retiré du registre ne doit pas
+    empêcher le signalement : son identifiant technique est alors affiché.
+    """
+    try:
+        return provider_label(provider)
+    except UnknownProviderError:
+        return provider
 
 
 @callback
@@ -96,7 +111,7 @@ def async_signaler_la_reauthentification(
         translation_key=CLE_TRADUCTION_REAUTH,
         translation_placeholders={
             "nom": config.name,
-            "fournisseur": config.provider,
+            "fournisseur": _libelle_du_fournisseur(config.provider),
         },
     )
     # Le problème signale la destination dans l'interface des intégrations ; la

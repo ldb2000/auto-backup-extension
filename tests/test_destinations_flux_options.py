@@ -527,6 +527,56 @@ async def test_un_refus_inconnu_est_rendu_tel_quel(
     assert resultat["description_placeholders"] == {"erreur": "server_error"}
 
 
+async def test_un_refus_sans_code_a_son_propre_message_traduit(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Sans code d'erreur, aucun texte en dur n'est glissé dans le message (#18)."""
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+
+    resultat = await _retour_du_fournisseur(hass, resultat, error="")
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "autorisation_refusee_sans_motif"
+    assert not resultat.get("description_placeholders")
+    assert CONF_DESTINATIONS not in entree.options
+
+
+@pytest.mark.parametrize("panne", [ClientError("réseau coupé"), TimeoutError()])
+async def test_un_fournisseur_muet_pendant_l_identification_interrompt_l_ajout(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+    panne: Exception,
+) -> None:
+    """Une panne réseau non convertie par le fournisseur a un message traduit.
+
+    Le motif `fournisseur_injoignable` nomme le fournisseur par son libellé ; le
+    texte brut de l'exception n'est pas rendu à l'utilisateur (#18).
+    """
+    aioclient_mock.post(URL_JETON_FACTICE, json=reponse_de_jeton_factice())
+    destination = AsyncMock()
+    destination.async_nom_par_defaut.side_effect = panne
+
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    with patch(
+        "custom_components.auto_backup.destinations.flow.create_destination",
+        return_value=destination,
+    ):
+        resultat = await _retour_du_fournisseur(
+            hass, resultat, code=CODE_AUTORISATION_FACTICE
+        )
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "fournisseur_injoignable"
+    assert resultat["description_placeholders"] == {
+        "fournisseur": _libelle_du_fournisseur(PROVIDER_OAUTH_FACTICE)
+    }
+    assert CONF_DESTINATIONS not in entree.options
+
+
 async def test_un_echec_d_echange_du_code_interrompt_le_flux(
     hass: HomeAssistant,
     entree: MockConfigEntry,
