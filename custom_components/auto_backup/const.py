@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .destinations.notifications import GestionnaireDeNotifications
     from .destinations.oauth import EtatOAuth
     from .destinations.upload import CoordinateurTeleversement
+    from .destinations.entities import CoordinateurEntitesDestinations
     from .destinations.retention import (
         CoordinateurPurgeDistante,
         RegistreSauvegardesDistantes,
@@ -236,3 +237,34 @@ DEFAULT_NOTIFY_ON_FAILURE = True
 # fin du bloc du fork, la liste des clés du fork est complétée ici aussi plutôt que
 # récrite plus haut.
 CLES_DU_FORK = (*CLES_DU_FORK, CONF_NOTIFY_ON_FAILURE)
+
+### ENTITÉS D'ÉTAT DES DESTINATIONS (issue #16) ###
+# Ajouts du fork (cf. docs/UPSTREAM.md). Chaque destination configurée expose
+# deux capteurs et un capteur binaire, créés par `destinations/entities.py` et
+# branchés à la fin de l'`async_setup_entry()` de `sensor.py` et de
+# `binary_sensor.py`.
+
+# Coordinateur qui tient l'état de chaque destination et fait vivre ses entités.
+DATA_DESTINATION_ENTITIES: HassKey[CoordinateurEntitesDestinations] = HassKey(
+    f"{DOMAIN}_destination_entities"
+)
+
+# Attributs du capteur binaire « problème » d'une destination. `last_error` est
+# l'erreur **active** (effacée au premier téléversement réussi) ; les deux
+# autres gardent la trace du dernier échec connu.
+ATTR_LAST_ERROR = "last_error"
+ATTR_LAST_FAILED_SLUG = "last_failed_slug"
+ATTR_LAST_FAILED_AT = "last_failed_at"
+
+# Champs du repli du capteur de comptage. Le registre DATA_REMOTE_BACKUPS de la
+# rétention distante (#9, ci-dessus) fait autorité : il liste les sauvegardes
+# déposées par Auto Backup et encore présentes chez le fournisseur, et il survit
+# au redémarrage. Le repli ne sert donc qu'aux deux cas où ce registre ne répond
+# pas — clé absente de `hass.data`, ou lecture en échec —, et corrige alors son
+# compteur interne à partir de ce qu'annonce `auto_backup.remote_purge`. La
+# rétention distante n'émet ni `deleted` ni `remaining` : `remaining` serait
+# structurellement faux, l'événement n'étant pas émis quand rien n'a été
+# supprimé. Les deux restent lus, un émetteur futur pouvant les fournir ;
+# `remote_ids`, le champ réellement émis, est défini avec le bloc de #9.
+ATTR_DELETED = "deleted"
+ATTR_REMAINING = "remaining"

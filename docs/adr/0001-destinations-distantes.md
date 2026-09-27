@@ -1530,13 +1530,10 @@ subsistent, chacun avec son test :
   chez Dropbox —, si bien que la cause reste diagnosticable une fois le code masqué. La réserve
   ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
 
-**Ce que l'issue #16 doit faire à sa fusion.** La branche `issue-16-entites-destinations` n'est
-pas fusionnée au moment où ce module est créé, et y garde son propre `assainir_le_message()`. Elle
-doit y **déléguer** : `assainir_le_message(message)` devient l'enveloppe qui ramène `None` et une
-chaîne vide à `cause inconnue`, puis appelle `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`.
-Aucun motif ne doit rester dans `entities.py` — c'est précisément la divergence que ce module
-supprime. L'ordre de fusion retenu est #17 puis #16, pour que #16 adopte ce module au moment de sa
-propre fusion.
+**Adoption par l'issue #16.** `assainir_le_message()` d'`entities.py` est l'enveloppe qui ramène
+`None` et une chaîne vide à `cause inconnue`, puis appelle
+`masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`. Aucun motif ne reste dans `entities.py` —
+c'est précisément la divergence que ce module supprime.
 
 **Textes en français dans le code.** Une notification persistante n'a pas de clé de traduction
 côté Home Assistant, contrairement aux problèmes et aux étapes du flux d'options : ses libellés
@@ -1569,6 +1566,142 @@ Le comportement voulu est écrit tel quel — fournisseur muet, on conserve ; fo
 répond, on remplace — sans dépendre du fait qu'un dictionnaire vide soit déjà ramené à `None` en
 amont.
 
+## Entités d'état des destinations (issue #16)
+
+L'upstream expose des capteurs sur les sauvegardes **locales**. Sans équivalent distant, un
+téléversement qui échoue depuis des semaines passe inaperçu. Chaque destination configurée
+reçoit donc trois entités, définies dans `destinations/entities.py` :
+
+| Entité | Domaine | État | Attributs |
+| --- | --- | --- | --- |
+| `dernier_televersement` | `sensor` (`device_class` TIMESTAMP) | date du dernier téléversement réussi | — |
+| `sauvegardes_distantes` | `sensor` (`state_class` MEASUREMENT) | nombre de sauvegardes chez le fournisseur | — |
+| `probleme` | `binary_sensor` (`device_class` PROBLEM) | le dernier téléversement a échoué | `last_error`, `last_failed_slug`, `last_failed_at` |
+
+### Brancher les entités sans récrire les plateformes upstream
+
+`sensor.py` et `binary_sensor.py` sont des modules **importés de l'upstream** : le fork ne
+supprime ni ne modifie aucune de leurs lignes (cf. `docs/UPSTREAM.md`). Trois lignes leur sont
+ajoutées dans chacun — un import et un appel **à la fin** de leur `async_setup_entry()` :
+
+```python
+    # Fork (#16) : une entité d'état par destination distante configurée.
+    await async_setup_destination_sensors(hass, entry, async_add_entities)
+```
+
+Les options écartées :
+
+- **une plateforme dédiée** (`Platform.SENSOR` déclarée une seconde fois) : Home Assistant
+  n'accepte qu'une plateforme par domaine et par intégration ;
+- **un `sensor.py` du fork qui réexporterait l'upstream** : cela aurait fait sortir
+  `sensor.py` de la comparaison ligne à ligne avec l'upstream, alors que l'écart réel se
+  résume à deux appels.
+
+### Un état par destination, partagé par ses trois entités
+
+`CoordinateurEntitesDestinations` écoute **une seule fois** `auto_backup.upload_successful`,
+`auto_backup.upload_failed` et `auto_backup.remote_purge`, met à jour l'`EtatDestination`
+correspondant, puis prévient les entités concernées par un signal de dispatcher
+(`auto_backup_destination_maj_<entry_id>_<destination_id>`).
+
+Pourquoi ne pas laisser chaque entité écouter le bus, comme le font les capteurs upstream :
+avec trois entités par destination et autant de destinations que l'utilisateur en configure,
+le nombre d'abonnements croît vite, et surtout l'état deviendrait *dupliqué* — le capteur
+binaire et le capteur d'horodatage doivent réagir de façon **cohérente** au même événement
+(un succès efface l'erreur active *et* horodate le succès). Un état commun garantit cette
+cohérence ; le dispatcher ne transporte aucune donnée, il ne fait que dire « relis ton état ».
+
+`last_error` porte l'erreur **active** : elle est effacée au premier téléversement réussi, ce
+qui fait retomber le capteur « problème ». `last_failed_slug` et `last_failed_at` gardent en
+revanche la trace du dernier échec connu, même après un succès : ils répondent à « qu'est-ce
+qui avait échoué, et quand », pas à « y a-t-il un problème maintenant ».
+
+### Aucun secret dans un attribut d'entité
+
+Un attribut d'entité est lisible par toute personne ayant accès à l'instance, et l'enregistreur
+le conserve dans son historique. Or le message d'erreur d'un fournisseur recopie parfois la
+requête refusée, en-tête `Authorization` compris — et il n'écrit pas toujours le jeton derrière
+une clé reconnaissable.
+
+`assainir_le_message()` ne tient **aucun motif propre** : c'est une enveloppe qui ramène `None`
+et la chaîne vide à `cause inconnue`, puis délègue à
+`masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` du module commun `destinations/masquage.py`
+(voir la section « `destinations/masquage.py` : un seul masquage pour tout le fork »). Les
+passes, la valeur de remplacement `***` et les réserves assumées — mot ordinaire épargné derrière
+un mot-clé, coupure aux `/`, `=` et `.` qui garde les URL lisibles — sont celles de ce module, et
+décrites en tête de celui-ci. Un attribut d'entité masque donc exactement ce qu'une notification
+masque : une copie locale, plus étroite, laissait passer `accessToken: …`, les chemins
+`/backup/…` et `/config/…` ou `tokens=[…]`. Le message est enfin borné à 255 caractères.
+
+### Le registre de la rétention distante fait autorité sur le compte
+
+Le nombre de sauvegardes distantes pourrait être obtenu en appelant `async_list_backups()` sur
+la destination. Ce serait un appel réseau à chaque rafraîchissement, sur un chemin que rien ne
+rend indispensable — et impossible pour une destination en attente de ré-autorisation.
+
+La rétention distante (issue #9) tient, elle, un **registre persistant** des sauvegardes
+réellement déposées chez chaque fournisseur, exposé dans `hass.data[DATA_REMOTE_BACKUPS]` et
+interrogeable par `entrees(destination_id)`. Le capteur en compte les entrées : c'est la seule
+source qui ne dérive pas, et les événements ne sont plus que des **déclencheurs de relecture**.
+
+Un compteur incrémental a été écarté pour une raison de fond : `auto_backup.remote_purge` n'est
+émis que **lorsqu'une suppression a réellement eu lieu**. Sans rétention configurée, avec une
+ré-authentification en attente, sur un listage en échec, ou quand la rétention est déjà
+respectée, aucun événement ne part. Un compteur piloté par ces seuls événements — et *a
+fortiori* par un champ `remaining` — resterait figé sur une valeur fausse.
+
+Le registre étant persistant, il est aussi la source de la **restauration** du compte après un
+redémarrage (critère 5 de l'issue) : il n'a besoin de personne pour survivre.
+
+L'issue #9 n'étant pas encore fusionnée, la lecture est **défensive** : clé absente, ou registre
+qui lève, et le capteur retombe sur un compteur interne, alimenté par les événements
+(`remote_ids`, `deleted`, `remaining`) et restauré par `RestoreSensor`. `RestoreSensor` est donc
+conservé pour ce repli, et les deux chemins sont testés.
+
+### Restauration après redémarrage
+
+`RestoreSensor` et `RestoreEntity` suffisent : le dernier succès, le compteur de repli et l'état
+du capteur binaire — avec ses trois attributs — sont restitués sans magasin de données propre.
+Un `Store` dédié aurait ajouté un fichier de stockage, sa migration et son nettoyage pour une
+information que Home Assistant sait déjà conserver.
+
+La valeur restaurée ne s'impose pas : un événement traité entre le démarrage du coordinateur et
+l'ajout des entités l'emporte. L'écouteur d'options s'exécute en effet sans attente, donc le
+coordinateur connaît une destination — et traite ses événements — avant que Home Assistant
+n'ait fini de monter ses entités.
+
+Encore faut-il pouvoir dire si l'état a *déjà été renseigné*. `EtatDestination` porte pour cela
+deux marqueurs, `erreur_initialisee` et `compteur_initialise`, posés par les seuls chemins
+d'écriture (`definir_l_erreur()`, `definir_le_compte()`). Ils ne sont pas cosmétiques :
+`derniere_erreur is None` signifie à la fois « aucun événement depuis le démarrage » et « un
+téléversement vient de réussir et a effacé l'erreur » ; `0` sauvegardes signifie à la fois
+« jamais compté » et « une purge vient de tout supprimer ». S'appuyer sur ces valeurs
+réinstallerait un état périmé — capteur repassé en « problème » alors que la destination va
+bien, compte ressuscité après une purge légitime.
+
+`dernier_slug_echec` et `dernier_echec` n'ont pas besoin de marqueur : rien ne les efface
+jamais, `None` y veut donc bien dire « inconnu ».
+
+Le message restauré est repassé par `assainir_le_message()` au chargement : un historique écrit
+par une version au masquage plus étroit est nettoyé au lieu d'être republié tel quel.
+
+### Suivre l'ajout et la suppression d'une destination
+
+Le coordinateur écoute les options de l'entrée, comme le gestionnaire de destinations :
+
+- **destination ajoutée** : ses entités sont créées par les `async_add_entities` mémorisés à
+  la déclaration de chaque plateforme, sans rechargement de l'intégration ;
+- **destination supprimée** : ses entités sont retirées du **registre d'entités**, dont Home
+  Assistant déduit la suppression de l'entité elle-même — y compris pour une entité
+  désactivée, qui n'avait jamais été instanciée. Sans ce retrait, elles resteraient
+  indisponibles dans les tableaux de bord de l'utilisateur.
+
+La liste des destinations est relue dans `hass.data[DATA_DESTINATIONS]`, et non dans les
+options brutes : le gestionnaire est la seule source de vérité de ce qui est réellement
+utilisable, et son écouteur de mise à jour est enregistré par `async_setup_destinations()`,
+donc **avant** celui d'une plateforme — il s'est déjà rechargé quand le coordinateur est
+prévenu.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :
@@ -1598,7 +1731,14 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   ci-dessus) ; `auto_backup.remote_purge` l'est **depuis #9** (voir « Rétention distante »),
   avec les champs `destination`, `destination_name` et `remote_ids`. Ils étaient définis dès #6
   pour laisser le schéma de constantes stable et lisible, et pour que les issues suivantes
-  n'aient qu'à les émettre sans les déclarer.
+  n'aient qu'à les émettre sans les déclarer. **#16 les consomme** : les entités d'état d'une
+  destination se mettent à jour sur `upload_successful`, `upload_failed` et `remote_purge`.
+  L'événement de purge **n'émet ni `deleted` ni `remaining`** — il n'est émis que lorsqu'une
+  suppression a réellement eu lieu, si bien qu'un nombre restant serait structurellement faux.
+  Le compte de sauvegardes distantes ne vient donc pas de cet événement, mais du registre
+  persistant de #9 (`hass.data[DATA_REMOTE_BACKUPS]`, méthode `entrees(destination_id)`), que
+  #9 expose bien sous cette clé ; l'événement n'est qu'un déclencheur de relecture. Le compteur
+  interne de #16 n'est plus qu'un repli, pour le cas où ce registre manque ou refuse de répondre.
 
 - **URI de redirection et prérequis d'URL externe** : l'URI `https://<instance>/auth/auto_backup/callback`
   doit être déclarée chez le fournisseur. **Traité en #10 pour Dropbox et en #13 pour Google
@@ -1644,6 +1784,13 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   motif de refus `autorisation_annulee` commun, `provider_data` borné. Politique d'échec d'un
   crochet : l'ajout **s'interrompt** (abandon `echec_fournisseur`), voir la section « Échec d'un
   crochet » ci-dessus.
+
+- **Renommage d'une destination (issue #16)** : le nom d'une destination est figé dans le nom
+  d'origine de ses entités au moment où le registre les enregistre. Le flux d'options ne sait
+  pas renommer une destination aujourd'hui ; le jour où il le saura, il devra mettre à jour
+  l'`original_name` des entités concernées dans le registre, faute de quoi elles continueront
+  d'afficher l'ancien nom. Le contournement actuel — supprimer puis recréer la destination —
+  fonctionne mais fait repartir ses compteurs de zéro.
 
 - **Plancher d'Home Assistant** : **traité en #28**. Le fork annonçait **2025.1.0** comme version
   minimale alors que le code OAuth2 livré en #7 importe `OAuth2TokenRequestError` et
@@ -1716,13 +1863,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   que le registre garde ce que `RemoteBackup` sait déjà relèverait de #12, qui a besoin de ces
   champs pour le listage.
 
-- **Délégation du masquage par les entités d'état (issue #16)** : `destinations/masquage.py` est le
-  point unique de masquage du fork depuis #17 (voir la section « Un seul masquage pour tout le
-  fork » ci-dessus), mais la branche `issue-16-entites-destinations` n'est pas fusionnée et garde
-  son propre `assainir_le_message()`. **À faire à la fusion de #16** : en faire une enveloppe qui
-  ramène `None` et la chaîne vide à `cause inconnue`, puis appelle
-  `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` ; aucun motif ne doit rester dans
-  `entities.py`. L'ordre de fusion retenu est #17 puis #16.
+- **Délégation du masquage par les entités d'état (issue #16)** : résolu. `assainir_le_message()`
+  délègue à `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)` de `destinations/masquage.py` ;
+  aucun motif ne reste dans `entities.py`.
 
 ## Conséquences
 
@@ -1747,6 +1890,24 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
 - L'affichage des échecs est isolé dans `destinations/notifications.py` (#17), branché sur les
   seuls événements publics : ni `upload.py` ni les fournisseurs n'en savent rien, et une option
   du fork de plus (`notify_on_failure`) est protégée par `CLES_DU_FORK`.
+
+Ajouts de l'issue #16 :
+
+- Chaque destination configurée expose deux capteurs et un capteur binaire, rattachés au device
+  de service upstream et nommés avec le nom de la destination par un `translation_key` à
+  marqueur (`{destination}`).
+- `sensor.py` et `binary_sensor.py` ne gagnent qu'un import et un appel chacun : toute la
+  logique vit dans `destinations/entities.py`.
+- Le nombre de sauvegardes distantes est lu dans le registre persistant de la rétention
+  distante (#9), `hass.data[DATA_REMOTE_BACKUPS]` ; en son absence, un compteur interne
+  alimenté par les événements et restauré au redémarrage sert de repli.
+- Les messages d'erreur exposés en attribut sont masqués et bornés par
+  `assainir_le_message()`, qui délègue au module commun `destinations/masquage.py` : ni jeton —
+  même nu, sans clé adjacente —, ni adresse électronique, ni chemin absolu ne peut atteindre
+  l'historique d'états.
+- L'état d'une destination distingue « jamais renseigné » de « remis à sa valeur neutre » par
+  des marqueurs explicites : une restauration ne peut pas réinstaller une erreur résolue ni un
+  compte purgé.
 
 Ajouts de l'issue #7 :
 

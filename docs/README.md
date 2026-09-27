@@ -32,8 +32,8 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
 ## Tests
 
 - **[Tests](tests.md)** : Lancement, structure des tests, fixtures disponibles, validation
-  stricte des entités, tester une destination distante, les notifications d'échec et un
-  changement de compte, modification du code upstream.
+  stricte des entités, tester une destination distante, les notifications d'échec, un
+  changement de compte et les entités d'état d'une destination, modification du code upstream.
 
 ## Équipe d'agents
 
