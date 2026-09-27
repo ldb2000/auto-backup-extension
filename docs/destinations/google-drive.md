@@ -233,6 +233,14 @@ Quatre choses ne sont donc **jamais** touchées, quel que soit leur âge :
 Et bien sûr : **le reste de votre Drive est hors d'atteinte**, ainsi que vos sauvegardes locales,
 qui suivent la rétention locale de l'intégration (`keep_days`) et non celle de la destination.
 
+> **Important : un dossier par instance.** Le marqueur `auto_backup` ne dit pas quelle instance
+> Home Assistant a déposé le fichier. Si plusieurs instances utilisent les mêmes identifiants
+> OAuth (le même projet Google Cloud) et le même dossier distant, chacune voit les sauvegardes des
+> autres, les compte dans sa rétention et peut les **supprimer définitivement**. **Utilisez un
+> dossier distinct pour chaque instance Home Assistant** (`Home Assistant/Maison`,
+> `Home Assistant/Chalet`…) : la purge ne descendant jamais dans les sous-dossiers, les instances
+> ne se gênent plus.
+
 ### Quand la purge s'exécute
 
 - **après chaque sauvegarde téléversée avec succès**, si l'option **purge automatique**
@@ -308,3 +316,9 @@ plus au listage suivant et retirera son entrée de son registre sans rien signal
 L'inverse — **déplacer** une sauvegarde hors du dossier de la destination — la soustrait à la
 rétention : Auto Backup ne la voit plus, et ne la supprimera donc jamais. C'est un moyen simple de
 mettre une sauvegarde de côté.
+
+## Pour aller plus loin
+
+- [Services, options et rétention distante](../services.md) : toutes les options de service, les
+  événements et une automatisation complète de sauvegarde quotidienne envoyée dans le cloud.
+- [Questions fréquentes](../faq.md) : taille et quotas, chiffrement, jetons, ré-authentification.

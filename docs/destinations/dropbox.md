@@ -345,3 +345,9 @@ un clic — que diagnostiquer plus tard une destination muette.
   laisse pas de fichier partiel derrière elle.
 - **Une sauvegarde de moins de 150 Mo n'est pas renvoyée** si Dropbox la refuse en cours de
   route (voir « Si Dropbox refuse ou tarde » ci-dessus).
+
+## Pour aller plus loin
+
+- [Services, options et rétention distante](../services.md) : toutes les options de service, les
+  événements et une automatisation complète de sauvegarde quotidienne envoyée dans le cloud.
+- [Questions fréquentes](../faq.md) : taille et quotas, chiffrement, jetons, ré-authentification.
