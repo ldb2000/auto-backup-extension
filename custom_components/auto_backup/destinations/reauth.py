@@ -73,6 +73,23 @@ def identifiant_du_probleme(destination_id: str) -> str:
 
 
 @callback
+def _async_creer_le_probleme(hass: HomeAssistant, config: DestinationConfig) -> None:
+    """Crée — ou réécrit — le problème Home Assistant de la destination."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        identifiant_du_probleme(config.destination_id),
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=CLE_TRADUCTION_REAUTH,
+        translation_placeholders={
+            "nom": config.name,
+            "fournisseur": _libelle_du_fournisseur(config.provider),
+        },
+    )
+
+
+@callback
 def async_signaler_la_reauthentification(
     hass: HomeAssistant, config: DestinationConfig
 ) -> None:
@@ -102,18 +119,7 @@ def async_signaler_la_reauthentification(
             config.name,
             config.provider,
         )
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        identifiant_du_probleme(config.destination_id),
-        is_fixable=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key=CLE_TRADUCTION_REAUTH,
-        translation_placeholders={
-            "nom": config.name,
-            "fournisseur": _libelle_du_fournisseur(config.provider),
-        },
-    )
+    _async_creer_le_probleme(hass, config)
     # Le problème signale la destination dans l'interface des intégrations ; la
     # notification (issue #17) la porte à l'écran d'accueil. Les deux décrivent
     # la même panne et disparaissent ensemble (`async_effacer_la_reauthentification`).
@@ -137,6 +143,27 @@ def async_effacer_la_reauthentification(
     # Les notifications de la destination partent avec le problème (issue #17) :
     # celle qui invite à la ré-autoriser comme celle d'un échec de téléversement.
     async_effacer_les_notifications(hass, destination_id)
+
+
+@callback
+def async_renommer_la_reauthentification(
+    hass: HomeAssistant, config: DestinationConfig
+) -> None:
+    """Fait suivre le nouveau nom d'une destination renommée à son signalement (#51).
+
+    Le problème et la notification citent la destination par son nom, figé au
+    moment du signalement. Une destination renommée alors qu'elle attend d'être
+    ré-autorisée serait sinon désignée par un nom qui n'existe plus nulle part
+    dans l'interface. Rien n'est fait si la destination n'est pas signalée :
+    renommer ne doit pas créer de problème.
+    """
+    probleme = ir.async_get(hass).async_get_issue(
+        DOMAIN, identifiant_du_probleme(config.destination_id)
+    )
+    if probleme is None:
+        return
+    _async_creer_le_probleme(hass, config)
+    async_notifier_la_reauthentification(hass, config)
 
 
 @callback

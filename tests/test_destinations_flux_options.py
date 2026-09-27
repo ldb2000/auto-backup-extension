@@ -198,7 +198,7 @@ async def _retour_du_fournisseur(
 async def test_le_menu_s_adapte_aux_destinations_existantes(
     hass: HomeAssistant, entree_avec_destination: MockConfigEntry
 ) -> None:
-    """Avec une destination, le menu propose aussi ré-autoriser et supprimer."""
+    """Avec une destination, le menu propose modifier, ré-autoriser, supprimer."""
     resultat = await hass.config_entries.options.async_init(
         entree_avec_destination.entry_id
     )
@@ -206,6 +206,7 @@ async def test_le_menu_s_adapte_aux_destinations_existantes(
     assert resultat["type"] is FlowResultType.MENU
     assert list(resultat["menu_options"]) == [
         "ajouter_destination",
+        "modifier_destination",
         "reautoriser_destination",
         "supprimer_destination",
         "reglages_televersement",

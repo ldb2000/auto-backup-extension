@@ -14,7 +14,8 @@ Première version du fork **auto-backup-extension** de
 sauvegardes créées par Auto Backup peuvent désormais partir **directement dans le cloud**.
 
 - **Destinations cloud** : Dropbox et Google Drive se connectent depuis les options de
-  l'intégration, avec votre propre application OAuth2 ; l'option `upload_to` des services
+  l'intégration, avec votre propre application OAuth2, puis se renomment ou changent de dossier
+  et de rétention sans nouvelle autorisation ; l'option `upload_to` des services
   `auto_backup.backup`, `backup_full` et `backup_partial` envoie la sauvegarde créée vers une ou
   plusieurs destinations, en tâche de fond, sans jamais toucher à la sauvegarde locale.
 - **Rétention distante** : chaque destination conserve ses sauvegardes selon sa propre durée
@@ -160,6 +161,7 @@ Le détail des changements, issue par issue, suit.
 
 - Documentation utilisateur de bout en bout : `README.md` présente le fork, son installation via HACS (dépôt personnalisé) et renvoie à la documentation détaillée ; nouvelle page `docs/services.md` (services, options dont `upload_to`, rétentions locale et distante, événements, automatisation YAML complète de sauvegarde quotidienne chiffrée envoyée dans le cloud) et nouvelle FAQ `docs/faq.md` (taille et quotas, chiffrement, portées OAuth et stockage des jetons, ré-authentification, un dossier distant par instance). Le guide Google Drive recommande lui aussi un dossier distant par instance Home Assistant. Refs #19
 - Tests de la documentation (`tests/test_doc_utilisateur.py`) : liens internes et ancres valides dans le `README.md` et `docs/`, services, options et événements cités conformes au code, automatisations YAML d'exemple analysables et limitées aux services et options réellement déclarés. Refs #19
+- Modification d'une destination existante : l'entrée « Modifier une destination » du flux d'options change le nom, le dossier distant et la rétention (`retention_days`, `retention_count`, ainsi que l'option commune `auto_purge`) sans nouvelle autorisation. La validation est celle de l'ajout (nom unique, dossier normalisé et borné). Le jeton, l'identifiant de destination, le registre des sauvegardes déposées et les entités (mêmes `unique_id`) sont conservés ; le nom affiché des entités et du problème de ré-autorisation suit le nouveau nom sans rechargement. Un changement de dossier est confirmé à part, l'interface prévenant que les sauvegardes de l'ancien dossier ne seront plus ni listées ni purgées, et fait oublier l'identifiant de dossier mémorisé par Google Drive (`folder_id`). Refs #51
 
 - Code d'erreur stable pour chaque échec de destination : chaque `DestinationError` porte un `code` (énumération `CodeErreur` de `destinations/errors.py` : `access_revoked`, `missing_scope`, `quota_exceeded`, `rate_limited`, `timeout`, `network_error`, `provider_unavailable`, `invalid_folder`, `api_disabled`, `not_found`, `unknown_destination`, `local_backup_unreadable`, `invalid_config`, `unknown_provider`, `unknown`), attribué par l'intégration et commun à Dropbox et Google Drive pour une même cause. L'événement `auto_backup.upload_failed` l'expose dans un nouveau champ `error_code`, documenté dans `docs/services.md` (section « Codes d'erreur ») pour filtrer dans une automatisation. Refs #46
 - Messages des échecs de destination traduits en français et en anglais (section `exceptions` de `translations/*.json`, clés `erreur_<code>`), lus dans la langue de Home Assistant par le module `destinations/traductions.py`, désormais partagé avec les notifications. Refs #46

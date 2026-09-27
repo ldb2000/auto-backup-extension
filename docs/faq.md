@@ -205,6 +205,40 @@ demande confirmation. Sans confirmation, rien n'est modifié : relancez la ré-a
 bon compte. Si vous confirmez, les sauvegardes déjà déposées sur l'ancien compte ne sont plus ni
 listées ni purgées par Auto Backup.
 
+## Modifier une destination
+
+### Comment changer le nom, le dossier ou la rétention d'une destination ?
+
+**Configurer → Modifier une destination**, puis choisissez la destination. Le formulaire reprend
+son nom, son dossier distant, sa rétention (**Conserver pendant (jours)**, **Nombre maximum de
+sauvegardes conservées**) et l'option commune **« Suppression automatique des sauvegardes
+expirées »**. Rien d'autre ne change :
+
+- **aucune nouvelle autorisation** : le jeton et les identifiants d'application sont conservés ;
+- les **entités** de la destination restent les mêmes (même identifiant, mêmes historiques) ;
+  seul leur nom affiché suit le nouveau nom, sans redémarrage ;
+- la liste des sauvegardes déjà déposées est conservée : la nouvelle rétention s'applique dès la
+  purge suivante ;
+- un problème « à ré-autoriser » en cours nomme la destination par son nouveau nom.
+
+Le nom doit rester unique parmi vos destinations, et le dossier obéit aux mêmes règles qu'à
+l'ajout.
+
+### Que deviennent les sauvegardes si je change de dossier distant ?
+
+Elles restent où elles sont, chez le fournisseur : Auto Backup ne déplace rien. Comme il ne liste
+et ne purge que le dossier configuré, les sauvegardes de l'ancien dossier ne sont **plus ni
+listées, ni purgées** : retirez-les ou déplacez-les à la main. C'est pourquoi l'interface demande
+une confirmation explicite, en nommant l'ancien et le nouveau dossier ; sans confirmation, rien
+n'est enregistré. Le nouveau dossier est créé au téléversement suivant.
+
+Le capteur du nombre de sauvegardes distantes compte ce qu'Auto Backup a inscrit dans son
+registre : les sauvegardes de l'ancien dossier y restent comptées tant qu'elles n'en sortent
+pas.
+
+Changer de **compte** ou de **fournisseur** ne se fait pas ici : c'est **Ré-autoriser une
+destination** (autre compte, même application), ou l'ajout d'une nouvelle destination.
+
 ## Plusieurs instances Home Assistant
 
 ### Puis-je envoyer les sauvegardes de plusieurs instances vers le même compte ?

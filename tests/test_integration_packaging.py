@@ -103,6 +103,9 @@ ETAPES_D_OPTIONS_DU_FORK = (
     "reglages_televersement",
     "reglages_notifications",
     "confirmer_changement_de_compte",
+    "modifier_destination",
+    "parametres_destination",
+    "confirmer_changement_de_dossier",
 )
 LANGUES_ETENDUES = ("fr", "en")
 
@@ -141,6 +144,7 @@ def test_les_traductions_couvrent_les_etapes_du_fork(langue: str) -> None:
     # Le menu nomme chacune de ses entrées, y compris le formulaire upstream.
     assert set(etapes["menu"]["menu_options"]) == {
         "ajouter_destination",
+        "modifier_destination",
         "reautoriser_destination",
         "supprimer_destination",
         "reglages_televersement",

@@ -316,6 +316,20 @@ déjà d'identifier ne fonctionnerait pas davantage une fois créée : elle éch
 sauvegarde, sans rien dire de ce qu'il faut corriger. Mieux vaut recommencer l'ajout — c'est
 un clic — que diagnostiquer plus tard une destination muette.
 
+## Modifier la destination
+
+**Configurer → Modifier une destination** change le nom, le dossier distant et la rétention d'une
+destination Dropbox **sans repasser par Dropbox** : la clé, le secret et le jeton sont conservés,
+tout comme les entités de la destination et la liste des sauvegardes déjà déposées. Le nom
+affiché des entités suit le nouveau nom.
+
+Changer de **dossier distant** demande une confirmation : les sauvegardes déjà déposées dans
+l'ancien dossier (`Applications/<nom de votre app>/<ancien dossier>`) y restent, mais ne sont
+plus ni listées ni purgées par Auto Backup. Le nouveau dossier est créé au premier téléversement.
+
+Elle ne touche ni la clé ni le secret de l'application : quand ceux-ci changent, la marche à
+suivre reste celle du tableau de « Ce qui se passe ensuite ».
+
 ## Limites connues
 
 - **Une URL externe HTTPS et joignable est obligatoire.** Une instance accessible uniquement

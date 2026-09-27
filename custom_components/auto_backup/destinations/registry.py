@@ -89,6 +89,24 @@ def provider_label(provider_id: str) -> str:
 
 
 @callback
+def cles_liees_au_dossier(provider_id: str) -> frozenset[str]:
+    """Clés de `provider_data` à oublier quand le dossier distant change (#51).
+
+    Elles sont déclarées par la fabrique (`RemoteDestination.CLES_LIEES_AU_DOSSIER`).
+    Un fournisseur qui n'en déclare pas — ou qui a disparu du registre — n'en a
+    aucune : ses données de compte sont conservées telles quelles.
+    """
+    try:
+        fabrique = get_provider(provider_id)
+    except UnknownProviderError:
+        return frozenset()
+    cles = getattr(fabrique, "CLES_LIEES_AU_DOSSIER", None)
+    if not isinstance(cles, frozenset | set | tuple | list):
+        return frozenset()
+    return frozenset(cle for cle in cles if isinstance(cle, str))
+
+
+@callback
 def list_providers() -> tuple[str, ...]:
     """Identifiants des fournisseurs enregistrés, par ordre alphabétique."""
     return tuple(sorted(_FABRIQUES))

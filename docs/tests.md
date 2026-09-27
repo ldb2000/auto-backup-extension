@@ -48,6 +48,7 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/test_destinations_persistance.py` | Persistance des destinations dans l'entrée et rechargement après redémarrage. |
 | `tests/test_destinations_oauth.py` | Autorisation OAuth2 : déclaration d'un fournisseur, masquage des secrets, états, rafraîchissement du jeton, ré-authentification requise. |
 | `tests/test_destinations_flux_options.py` | Interface : menu des options, ajout, ré-autorisation et suppression d'une destination, vue de retour d'autorisation. |
+| `tests/test_destinations_modification.py` | Interface : modification du nom, du dossier distant et de la rétention d'une destination existante (issue #51) — jeton, registre des sauvegardes déposées et entités conservés, nom affiché mis à jour, confirmation d'un changement de dossier. |
 | `tests/test_televersement.py` | Lecture en flux d'une sauvegarde (Supervisor et Core) et téléversement vers les destinations demandées. |
 | `tests/test_purge_distante.py` | Rétention distante : âge, nombre, provenance d'une sauvegarde, tolérance aux erreurs et aux appels qui ne reviennent pas, déclenchements (téléversement et service `purge`), registre persistant. |
 | `tests/test_notifications.py` | Notifications persistantes : échec de téléversement, mise à jour, retrait automatique, ré-authentification, option `notify_on_failure`, traversée du masquage par les champs affichés, frontière avec la purge distante. |
