@@ -163,7 +163,9 @@ lisent dans `trigger.event.data`.
 
 `destination` est l'identifiant de la destination et `destination_name` son nom lisible. Le
 champ `error` de `auto_backup.upload_failed` décrit la cause de l'échec en français ; elle est
-destinée à être affichée, et les secrets (jetons, identifiants d'application) en sont masqués.
+destinée à être affichée, et les secrets (jetons, identifiants d'application) en sont masqués. Les
+codes d'erreur connus des fournisseurs (`expired_access_token`, `userRateLimitExceeded`,
+`too_many_write_operations`…) y restent lisibles.
 `auto_backup.remote_purge` n'est pas émis quand rien n'a été supprimé.
 
 Un échec d'envoi déclenche aussi, par défaut, une notification persistante et allume l'entité

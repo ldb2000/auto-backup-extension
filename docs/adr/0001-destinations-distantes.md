@@ -953,8 +953,36 @@ réintroduit le texte d'origine : ce serait rouvrir la fuite par une autre porte
 internes (notifications #17, entités #16) masquent encore la cause à la lecture ; ils affichent
 exactement la même chose, car `masquer()` est idempotent (`masquer(masquer(x)) == masquer(x)`,
 éprouvé sur tous les vecteurs de `tests/test_masquage.py`). Une cause sans secret reste identique ;
-les réserves de la passe 6 (codes techniques et noms sans espace de vingt caractères ou plus,
-réduits à `***`) s'appliquent désormais aussi au texte que reçoit une automatisation.
+les réserves de la passe 6 (noms sans espace de vingt caractères ou plus et codes techniques
+**inconnus**, réduits à `***`) s'appliquent désormais aussi au texte que reçoit une automatisation.
+Les codes d'erreur **connus** des fournisseurs (`expired_access_token`, `userRateLimitExceeded`,
+`too_many_write_operations`…) y passent en clair depuis l'issue #48 : voir « Codes d'erreur connus
+des fournisseurs » ci-dessous.
+
+**Codes d'erreur connus des fournisseurs (issue #48).** `masquer()` tient une liste blanche
+**exacte**, `CODES_D_ERREUR_CONNUS` : la suite opaque trouvée par la passe 6 doit être égale, casse
+comprise, à l'un de ses codes — jamais un motif ni un préfixe. Chaque code y cite sa source :
+spécification Dropbox API v2 (`auth.AuthError`, `auth.RateLimitReason`, `files.WriteError`,
+`files.UploadSessionFinishError`) ou guide « Resolve errors » de l'API Google Drive
+(`error.errors[].reason`). La liste n'agit qu'en passe 6 : une valeur de clé sensible (passe 3) ou
+un jeton reconnaissable (passe 4) reste masqué même s'il valait un code, et un code n'est fait que
+de lettres et de `_`, sans chiffre ni préfixe de jeton : il ne peut pas coïncider avec un jeton
+réel. La liste est fermée : un code nouveau reste masqué tant qu'il n'y a pas été ajouté, source à
+l'appui.
+
+**Pas de champ structuré `error_code` ici — reporté à l'issue #46.** Ajouter un `error_code` à
+`auto_backup.upload_failed` serait un ajout au contrat public sans rupture : `error` resterait
+présent et inchangé. Il n'est pas retenu dans #48, pour trois raisons. Un code **stable** suppose
+que chaque `DestinationError` en porte un, attribué par le fournisseur au moment où il qualifie la
+réponse (quota, accès révoqué, limitation de débit, délai dépassé…), ce qui touche les deux
+fournisseurs, le socle des erreurs et le schéma documenté de l'événement : bien au-delà du
+masquage. Recopier le code brut du fournisseur (`expired_access_token`, `storageQuotaExceeded`)
+ne serait pas stable pour autant : deux fournisseurs nomment différemment la même cause, et une
+automatisation devrait les connaître tous. Enfin, l'issue #46 demande précisément ce champ
+`error_code`, avec la traduction des messages qu'il rend nécessaire : le texte de `error` y
+deviendra traduit, donc inutilisable comme clé de filtrage. La liste blanche de #48 suffit en
+attendant — les codes connus sont lisibles dans `error` — et le champ structuré sera défini une
+seule fois, avec son vocabulaire propre au fork, par #46.
 
 **`size` peut valoir `null`.** Sous Supervisor, la taille vient de l'en-tête `Content-Length` de
 `GET /backups/<slug>/download` ; s'il manque, la sauvegarde est téléversée quand même, mais sa
@@ -1626,14 +1654,14 @@ subsistent, chacun avec son test :
   françaises que la réserve ci-dessus protège justement. À revoir avec l'arrivée d'un fournisseur
   aux jetons courts ;
 - la passe 6 masque toute suite de vingt caractères ou plus qui mêle casses, chiffres ou `_+` :
-  un mot français à capitale initiale (« Anticonstitutionnellement »), cas théorique, mais aussi —
-  et c'est la portée réelle de la réserve — les **codes d'erreur techniques des fournisseurs**,
-  qui atteignent couramment cette longueur : `storageQuotaExceeded`, `userRateLimitExceeded`,
-  `expired_access_token`, `too_many_write_operations`. C'est assumé : les fournisseurs du fork
-  traduisent la cause principale en français et ne rejettent le code brut qu'en fin de message —
-  « (motif : …) » chez Google Drive, l'`error_summary` entre parenthèses ou après un deux-points
-  chez Dropbox —, si bien que la cause reste diagnosticable une fois le code masqué. La réserve
-  ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
+  un mot français à capitale initiale (« Anticonstitutionnellement »), cas théorique, ou un code
+  d'erreur de fournisseur **absent** de la liste blanche `CODES_D_ERREUR_CONNUS`. Les codes connus
+  (`storageQuotaExceeded`, `userRateLimitExceeded`, `expired_access_token`,
+  `too_many_write_operations`…) sont épargnés depuis l'issue #48, par comparaison exacte ; un code
+  nouveau reste masqué jusqu'à son ajout. La cause reste de toute façon diagnosticable : les
+  fournisseurs du fork la traduisent en français et ne rejettent le code brut qu'en fin de message
+  — « (motif : …) » chez Google Drive, l'`error_summary` entre parenthèses ou après un deux-points
+  chez Dropbox. La réserve ne porte que sur la cause, les noms passant par `masquer_un_nom()`.
 
 **Adoption par l'issue #16.** `assainir_le_message()` d'`entities.py` est l'enveloppe qui ramène
 `None` et une chaîne vide à `cause inconnue`, puis appelle
