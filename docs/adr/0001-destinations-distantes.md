@@ -1869,6 +1869,60 @@ utilisable, et son écouteur de mise à jour est enregistré par `async_setup_de
 donc **avant** celui d'une plateforme — il s'est déjà rechargé quand le coordinateur est
 prévenu.
 
+## Modification d'une destination existante (issue #51)
+
+Supprimer puis rajouter une destination pour en changer le nom, le dossier ou la rétention
+obligeait à refaire l'autorisation, et faisait perdre son identifiant — donc ses entités, son
+historique et son registre de sauvegardes déposées. L'entrée de menu `modifier_destination` mène
+à l'étape `parametres_destination`, qui ne touche que quatre champs de `DestinationConfig`
+(`name`, `folder`, `retention_days`, `retention_count`) et, à part, l'option commune
+`auto_purge`.
+
+### L'identifiant ne suit pas le nom
+
+`destination_id` est dérivé du nom **à l'ajout seulement** (`_identifiant_disponible()`). Il ne
+change jamais ensuite : c'est lui qui porte les `unique_id` des entités (#16), la clé du registre
+des sauvegardes déposées (#9), l'identifiant du problème de ré-autorisation et des notifications
+(#17), et la valeur acceptée par `upload_to`. Un renommage ne touche donc à aucun de ces liens ;
+seul le **nom affiché** doit suivre :
+
+- les entités relisent le nom dans le coordinateur quand il les prévient d'un renommage. Home
+  Assistant met le nom calculé en cache (`Entity.name`) et seule l'écriture de `_attr_name`
+  l'invalide : l'entité retire elle-même ce cache après avoir changé ses
+  `translation_placeholders`, comme le fait Home Assistant pour tout attribut `_attr_*`. Le
+  test des entités échoue si ce mécanisme cesse de fonctionner avec une version future ;
+- le problème de ré-autorisation, s'il existe, est recréé avec le nouveau nom, et sa
+  notification avec lui (`async_renommer_la_reauthentification()`). Une notification d'échec
+  de téléversement déjà affichée garde l'ancien nom jusqu'à la tentative suivante.
+
+### La modification s'applique à la configuration relue
+
+Le formulaire peut rester ouvert longtemps ; entre-temps, un rafraîchissement a pu écrire un
+nouveau jeton, ou Google Drive l'identifiant de son dossier. Les valeurs saisies sont donc
+appliquées par `dataclasses.replace()` à la configuration **relue au moment d'enregistrer**,
+jamais à la copie lue à l'ouverture : un jeton rafraîchi n'est pas écrasé par un jeton périmé.
+
+### Changer de dossier distant
+
+Le listage et la purge ne regardent que le dossier configuré : les sauvegardes de l'ancien
+dossier sortent du périmètre d'Auto Backup. L'étape `confirmer_changement_de_dossier` le dit
+avant d'écrire quoi que ce soit, sur le modèle du changement de compte ; refusée, rien n'est
+enregistré (`options.abort.changement_de_dossier_annule`).
+
+Un fournisseur peut mémoriser une donnée qui ne vaut que pour le dossier courant — l'identifiant
+du dossier cible de Google Drive (`folder_id`, #14). Il la déclare dans
+`RemoteDestination.CLES_LIEES_AU_DOSSIER`, et le flux la retire de `provider_data` quand le
+dossier change ; sans quoi Google Drive continuerait de déposer dans l'ancien dossier. Le flux
+reste ainsi ignorant des clés propres à chaque fournisseur. Un téléversement commencé avant le
+changement ne peut pas réécrire l'ancien identifiant : `async_persist_provider_data(...,
+dossier=...)` n'écrit que si la destination persistée pointe toujours vers le dossier pour
+lequel il a été résolu.
+
+Le registre des sauvegardes déposées est **conservé** tel quel, y compris quand le dossier
+change : ses entrées restent vraies (ces fichiers existent), et les effacer serait
+irréversible. Conséquence assumée : le capteur du nombre de sauvegardes distantes continue de
+compter les entrées de l'ancien dossier, faute de réconciliation du registre avec le listage.
+
 ## Points ouverts pour les issues suivantes
 
 Cette issue crée le socle ; plusieurs éléments sont volontairement différés :

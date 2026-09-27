@@ -111,8 +111,11 @@ propose deux champs facultatifs :
 
 Les deux valeurs sont des entiers strictement positifs. Réglées ensemble, elles se combinent :
 les sauvegardes trop anciennes partent d'abord, puis, s'il en reste plus que le nombre autorisé,
-les plus anciennes du lot restant, jusqu'à revenir sous la limite. La rétention n'est pas
-modifiable après l'ajout : pour la changer, supprimez puis ajoutez de nouveau la destination.
+les plus anciennes du lot restant, jusqu'à revenir sous la limite. Pour changer la rétention
+d'une destination existante, passez par **Configurer → Modifier une destination** : la nouvelle
+rétention s'applique dès la purge suivante, aux sauvegardes déjà déposées comme aux prochaines,
+sans nouvelle autorisation. Le même formulaire propose l'option commune **« Suppression
+automatique des sauvegardes expirées »** décrite ci-dessous.
 
 ### Quand la purge distante s'exécute
 

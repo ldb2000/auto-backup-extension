@@ -174,6 +174,9 @@ caractère près.
   ce qui a échoué à sa première requête (API Drive non activée, par exemple).
   L'issue #17 y ajoute l'étape `reglages_notifications` et son entrée de menu, l'étape
   `confirmer_changement_de_compte` et l'abandon `options.abort.changement_de_compte_annule`.
+  L'issue #51 y ajoute l'entrée de menu `modifier_destination`, les étapes
+  `modifier_destination`, `parametres_destination` et `confirmer_changement_de_dossier`, et
+  l'abandon `options.abort.changement_de_dossier_annule`.
   L'issue #16 ajoute enfin une section `entity` (clés
   `entity.sensor.destination_dernier_televersement`,
   `entity.sensor.destination_sauvegardes_distantes` et

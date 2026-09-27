@@ -158,7 +158,7 @@ entière en mémoire, ni recopiée sur le disque : elle part par fragments de 8 
 ### Où arrivent les fichiers
 
 Dans le **dossier distant** saisi au moment de l'ajout de la destination (`Sauvegardes/Home
-Assistant`, par exemple). Ce dossier est **créé par Auto Backup** au premier téléversement, puis
+Assistant`, par exemple), ou modifié depuis (voir « Modifier la destination »). Ce dossier est **créé par Auto Backup** au premier téléversement, puis
 réutilisé. C'est une conséquence directe de la portée `drive.file` : l'intégration ne voit que les
 fichiers qu'elle a créés elle-même.
 
@@ -312,6 +312,21 @@ nouveaux identifiants, en reprenant **le même dossier distant**. Si ces nouveau
 appartiennent à un **autre projet Google Cloud**, la portée `drive.file` ne lui laisse pas voir
 les fichiers déposés par l'ancien : les sauvegardes existantes ne seront plus ni listées ni
 purgées, retirez-les à la main (voir la [FAQ](../faq.md#home-assistant-me-demande-de-ré-autoriser-une-destination--que-faire-)).
+
+## Modifier la destination
+
+Depuis les options, **Modifier une destination** change le nom, le dossier distant et la
+rétention d'une destination Google Drive **sans nouvelle autorisation** : les identifiants et le
+jeton sont conservés, tout comme les entités de la destination et la liste des sauvegardes déjà
+déposées. Le nom affiché des entités suit le nouveau nom.
+
+Changer de **dossier distant** demande une confirmation. Auto Backup oublie alors l'identifiant
+de l'ancien dossier qu'il avait mémorisé : il cherche — ou crée — le nouveau au téléversement
+suivant. Les sauvegardes de l'ancien dossier restent sur Drive, mais ne sont plus ni listées ni
+purgées par Auto Backup : retirez-les à la main si vous le souhaitez.
+
+Elle ne touche pas aux identifiants de l'application : quand ceux-ci changent, la marche à
+suivre reste celle de « Durée de vie de l'autorisation », plus haut.
 
 ## Supprimer la destination
 
