@@ -512,6 +512,36 @@ async def test_un_consentement_refuse_est_explique_et_le_flux_relancable(
     assert resultat["step_id"] == "destination"
 
 
+async def test_le_detail_affiche_a_l_abandon_ne_montre_aucun_secret(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """#35 : le détail de `echec_fournisseur` est un texte de fournisseur, masqué.
+
+    Google recopie ici un jeton dans le motif de son refus ; l'abandon l'affiche
+    à l'utilisateur, qui le recopiera volontiers dans un ticket d'assistance.
+    """
+    jeton_renvoye = "ya29.a0AfH6FaCtIcE-0123456789abcdef"
+    aioclient_mock.post(URL_JETON, json=reponse_de_jeton())
+    aioclient_mock.get(
+        URL_ABOUT,
+        status=400,
+        json=erreur_google(400, f"access_token={jeton_renvoye}", "refus simulé"),
+    )
+
+    resultat = await _jusqu_a_l_autorisation(hass, entree, ouvrir_les_options)
+    resultat = await _retour_de_google(hass, resultat, code=CODE_AUTORISATION_FACTICE)
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "echec_fournisseur"
+    detail = resultat["description_placeholders"]["detail"]
+    assert "HTTP 400" in detail
+    assert "access_token=***" in detail
+    assert jeton_renvoye not in detail
+
+
 async def test_une_api_drive_desactivee_est_expliquee_et_le_flux_relancable(
     hass: HomeAssistant,
     entree: MockConfigEntry,

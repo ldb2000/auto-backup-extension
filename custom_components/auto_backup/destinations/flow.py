@@ -621,7 +621,9 @@ class GestionDesDestinationsMixin:
             )
             return self.async_abort(
                 reason="echec_fournisseur",
-                description_placeholders={"detail": str(err)},
+                # Le détail est affiché à l'utilisateur : texte de fournisseur,
+                # donc masqué comme toute cause d'échec affichée (#17, #35).
+                description_placeholders={"detail": masquer(str(err))},
             )
 
         if self._destination_id is not None:
