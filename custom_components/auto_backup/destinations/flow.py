@@ -131,8 +131,11 @@ CLES_IDENTIFIANTES_DU_COMPTE = ("account_id", "account_email", "email")
 CONF_CONFIRMER = "confirmer"
 
 # Comptes qu'aucune donnée de fournisseur ne décrit : affiché tel quel dans
-# l'étape de confirmation, qui doit bien nommer les deux côtés.
-COMPTE_INCONNU = "compte non identifié"
+# l'étape de confirmation, qui doit bien nommer les deux côtés. Le repli est un
+# simple tiret, neutre en toute langue (#18) : aucune chaîne destinée à
+# l'utilisateur ne s'écrit en dur dans le flux. Il n'est d'ailleurs jamais
+# atteint en pratique, `_changement_de_compte()` écartant les identités vides.
+COMPTE_INCONNU = "—"
 
 # Codes d'erreur OAuth2 (RFC 6749 §4.1.2.1) auxquels le fork sait répondre par un
 # message compréhensible plutôt que par le code brut. `access_denied` est celui
@@ -549,7 +552,11 @@ class GestionDesDestinationsMixin:
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Le fournisseur a refusé ou l'utilisateur a annulé l'autorisation."""
-        erreur = str((self._donnees_externes or {}).get("error", "inconnue"))
+        erreur = str((self._donnees_externes or {}).get("error") or "")
+        if not erreur:
+            # Refus sans code : le message dédié est traduit, plutôt que de
+            # citer un « inconnue » écrit en dur dans une seule langue (#18).
+            return self.async_abort(reason="autorisation_refusee_sans_motif")
         if (motif := MOTIFS_DE_REFUS.get(erreur)) is not None:
             return self.async_abort(reason=motif)
         return self.async_abort(
@@ -593,6 +600,20 @@ class GestionDesDestinationsMixin:
 
         try:
             await self._async_decrire_le_compte()
+        except (ClientError, TimeoutError) as err:
+            # Seul le type de l'exception est journalisé : son texte vient de la
+            # pile réseau et le message rendu à l'utilisateur est traduit (#18).
+            _LOGGER.error(
+                "Le fournisseur %s n'a pas répondu (%s)",
+                self._provider,
+                type(err).__name__,
+            )
+            return self.async_abort(
+                reason="fournisseur_injoignable",
+                description_placeholders={
+                    "fournisseur": self._libelle_du_fournisseur()
+                },
+            )
         except DestinationError as err:
             _LOGGER.error("Le fournisseur a refusé la première requête : %s", err)
             return self.async_abort(
@@ -719,7 +740,9 @@ class GestionDesDestinationsMixin:
         fonctionnerait pas davantage une fois créée, et l'utilisateur corrige
         immédiatement ce qu'un message d'abandon lui désigne. `UnknownProviderError`
         (fournisseur disparu du registre entre-temps) est une `DestinationError` :
-        elle suit le même chemin.
+        elle suit le même chemin. Une panne réseau que le fournisseur n'a pas
+        convertie (`ClientError`, `TimeoutError`) est propagée telle quelle :
+        l'appelant la rend par l'abandon traduit `fournisseur_injoignable`.
 
         La méthode est aussi jouée lors d'une ré-autorisation, pour rafraîchir
         les données du compte : elles peuvent désigner un autre compte qu'à
@@ -732,10 +755,6 @@ class GestionDesDestinationsMixin:
         try:
             nom = await destination.async_nom_par_defaut()
             donnees = await destination.async_donnees_du_fournisseur()
-        except (ClientError, TimeoutError) as err:
-            raise DestinationError(
-                f"le fournisseur « {self._provider} » n'a pas répondu : {err}"
-            ) from err
         finally:
             # Un accès refusé ici (portée oubliée, jeton déjà révoqué) signalerait
             # la destination **provisoire** à ré-autoriser : le problème créé
