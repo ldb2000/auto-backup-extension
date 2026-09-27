@@ -76,7 +76,7 @@ Ce qui se passe à l'appel :
 
 1. Les destinations demandées sont vérifiées **avant** la création de la sauvegarde : une
    destination inconnue, ou un nom porté par deux destinations, fait échouer l'appel avec un
-   message en français, et aucune sauvegarde n'est créée.
+   message affiché dans la langue de l'interface, et aucune sauvegarde n'est créée.
 2. La sauvegarde est créée localement, exactement comme sans `upload_to`.
 3. Elle est ensuite envoyée **en tâche de fond**, destination après destination. L'appel de
    service rend la main sans attendre la fin des envois.
@@ -161,18 +161,67 @@ lisent dans `trigger.event.data`.
 | `auto_backup.purged_backups` | des sauvegardes locales ont été supprimées | `backups` (liste des slugs) |
 | `auto_backup.upload_start` | l'envoi vers une destination commence | `name`, `slug`, `destination`, `destination_name` |
 | `auto_backup.upload_successful` | l'envoi vers une destination a réussi | `name`, `slug`, `destination`, `destination_name`, `size`, `remote_id` |
-| `auto_backup.upload_failed` | l'envoi vers une destination a échoué | `name`, `slug`, `destination`, `destination_name`, `error` |
+| `auto_backup.upload_failed` | l'envoi vers une destination a échoué | `name`, `slug`, `destination`, `destination_name`, `error`, `error_code` |
 | `auto_backup.remote_purge` | la purge d'une destination a supprimé au moins une sauvegarde | `destination`, `destination_name`, `remote_ids` |
 
-`destination` est l'identifiant de la destination et `destination_name` son nom lisible. Le
-champ `error` de `auto_backup.upload_failed` décrit la cause de l'échec en français ; elle est
-destinée à être affichée, et les secrets (jetons, identifiants d'application) en sont masqués. Les
-codes d'erreur connus des fournisseurs (`expired_access_token`, `userRateLimitExceeded`,
-`too_many_write_operations`…) y restent lisibles.
+`destination` est l'identifiant de la destination et `destination_name` son nom lisible.
+Dans `auto_backup.upload_failed`, deux champs décrivent la cause de l'échec :
+
+- `error_code` est un **code stable**, le même quelle que soit la langue et quel que soit le
+  fournisseur (voir [Codes d'erreur](#codes-derreur)) : c'est lui qu'une automatisation compare ;
+- `error` est un **message à afficher**, traduit dans la langue de Home Assistant au moment de
+  l'échec (français ou anglais, l'anglais pour toute autre langue). Il est écrit par Auto Backup :
+  il ne contient ni le texte renvoyé par le fournisseur ni aucun secret. Le détail technique de
+  l'échec (statut HTTP, motif du fournisseur, avec ses secrets masqués) est consigné dans le
+  journal de Home Assistant, et là seulement.
+
 `auto_backup.remote_purge` n'est pas émis quand rien n'a été supprimé.
 
 Un échec d'envoi déclenche aussi, par défaut, une notification persistante et allume l'entité
 « *Destination* : problème de téléversement » (voir le [README](../README.md#notifications)).
+
+## Codes d'erreur
+
+Valeurs possibles du champ `error_code` de `auto_backup.upload_failed`. Elles forment un contrat :
+de nouvelles valeurs peuvent apparaître, aucune n'est renommée ni retirée.
+
+| Code | Cause |
+| --- | --- |
+| `access_revoked` | l'accès a été révoqué ou a expiré : la destination attend une nouvelle autorisation |
+| `missing_scope` | l'autorisation accordée n'inclut pas toutes les permissions demandées |
+| `quota_exceeded` | l'espace de stockage du compte est plein |
+| `rate_limited` | le fournisseur limite temporairement le nombre de requêtes |
+| `timeout` | le délai imparti est dépassé (délai de téléversement ou d'une requête) |
+| `network_error` | le fournisseur est injoignable (coupure réseau) |
+| `provider_unavailable` | le fournisseur est en panne passagère (erreur serveur) |
+| `invalid_folder` | le dossier distant est invalide ou refusé par le fournisseur |
+| `api_disabled` | l'API Google Drive n'est pas activée sur le projet Google Cloud |
+| `not_found` | l'élément demandé n'existe pas (ou plus) chez le fournisseur |
+| `unknown_destination` | la destination a été supprimée depuis l'appel du service |
+| `local_backup_unreadable` | la sauvegarde locale n'a pas pu être lue pour être envoyée |
+| `invalid_config` | la configuration de la destination est invalide ou incomplète |
+| `unknown_provider` | le fournisseur de la destination n'est pas pris en charge |
+| `unknown` | cause non reconnue : le message est générique, le détail est dans le journal |
+
+Un même code vaut pour Dropbox et Google Drive : un espace plein est `quota_exceeded` chez l'un
+comme chez l'autre. Pour réagir à une cause précise, filtrez sur ce code :
+
+```yaml
+- id: destination_pleine
+  alias: Alerte quand une destination cloud est pleine
+  mode: queued
+  triggers:
+    - trigger: event
+      event_type: auto_backup.upload_failed
+      event_data:
+        error_code: quota_exceeded
+  actions:
+    - action: persistent_notification.create
+      data:
+        title: Destination cloud pleine
+        message: >-
+          {{ trigger.event.data.destination_name }} : {{ trigger.event.data.error }}
+```
 
 ## Exemple complet : sauvegarde quotidienne envoyée dans le cloud
 

@@ -65,7 +65,9 @@ manuellement, en particulier lors d'une resynchronisation upstream (voir [`ci.md
 | `tests/destinations_factices.py` | Fournisseurs de destination factices, en mémoire (aide, pas un module de tests). |
 | `tests/test_conformite_upstream.py` | Non-régression de l'import upstream (licence, README, manifeste, écarts documentés ; comparaison réseau). |
 | `tests/test_integration_packaging.py` | Validité des fichiers livrés (compilation, JSON, manifeste). |
-| `tests/test_traductions.py` | Traductions fr/en (issue #18) : chaque clé référencée par le code des flux, des entités, du problème de ré-autorisation et de `services.yaml` existe, aucune n'est orpheline, placeholders concordants et fournis par le code ; langues héritées sans clé cassée. |
+| `tests/test_traductions.py` | Traductions fr/en (issue #18) : chaque clé référencée par le code des flux, des entités, du problème de ré-autorisation et de `services.yaml` existe, aucune n'est orpheline, placeholders concordants et fournis par le code ; langues héritées sans clé cassée. Depuis #46 : un message par code d'erreur stable, sans placeholder et intact après `masquer()`, et chaque refus d'`upload_to` traduisible avec ses placeholders. |
+| `tests/test_erreurs_traduites.py` | Codes stables des erreurs de destination (issue #46) : code par défaut de chaque classe, code précisé au site de levée, clé de traduction portée par l'exception, message lu dans la langue de l'instance, replis (langue non traduite, code inconnu, chargement en échec). |
+| `tests/messages_attendus.py` | Messages traduits attendus des codes d'erreur, lus dans les fichiers de traduction (aide, pas un module de tests). |
 | `tests/test_project_tooling.py` | Cohérence de l'outillage Python déclaré dans `pyproject.toml`. |
 | `tests/test_compatibilite_python.py` | Le code livré reste analysable par le plancher Python des utilisateurs (voir « Compatibilité Python »). |
 | `tests/test_configuration_pytest.py` | Garde-fous sur la configuration `pytest` elle-même. |

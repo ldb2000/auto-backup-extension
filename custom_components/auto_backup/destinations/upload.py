@@ -79,6 +79,7 @@ from ..const import (
     ATTR_DESTINATION,
     ATTR_DESTINATION_NAME,
     ATTR_ERROR,
+    ATTR_ERROR_CODE,
     ATTR_REMOTE_ID,
     ATTR_SIZE,
     ATTR_SLUG,
@@ -86,6 +87,7 @@ from ..const import (
     DATA_AUTO_BACKUP,
     DATA_DESTINATIONS,
     DATA_UPLOADS,
+    DOMAIN,
     EVENT_BACKUP_FAILED,
     EVENT_BACKUP_START,
     EVENT_BACKUP_SUCCESSFUL,
@@ -96,8 +98,9 @@ from ..const import (
 from ..handlers import BackupHandler, HandlerBase, SupervisorHandler
 from .config_entry import delai_de_televersement
 from .destination import RemoteDestination
-from .errors import DestinationError
+from .errors import CodeErreur, DestinationError
 from .masquage import journaliser_une_exception, masquer
+from .traductions import async_message_d_erreur
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,6 +114,21 @@ TAILLE_MORCEAU = 64 * 1024
 # délai, une demande que la création n'a jamais réclamée est oubliée, au lieu
 # de rester à attendre une sauvegarde homonyme qui n'a rien à voir.
 DELAI_CONFIRMATION_DEMANDE = 30.0
+
+# Clés de traduction (section `exceptions`) des refus de l'option `upload_to`
+# (#46). Home Assistant les traduit lui-même dans la langue de l'utilisateur :
+# une `ServiceValidationError` porte son `translation_domain` et sa
+# `translation_key` jusqu'à l'interface.
+CLE_DESTINATION_INCONNUE = "destination_inconnue"
+CLE_DESTINATION_INCONNUE_SANS_DESTINATION = "destination_inconnue_sans_destination"
+CLE_DESTINATION_AMBIGUE = "destination_ambigue"
+CLE_TELEVERSEMENT_INDISPONIBLE = "televersement_indisponible"
+CLES_DE_TRADUCTION = (
+    CLE_DESTINATION_INCONNUE,
+    CLE_DESTINATION_INCONNUE_SANS_DESTINATION,
+    CLE_DESTINATION_AMBIGUE,
+    CLE_TELEVERSEMENT_INDISPONIBLE,
+)
 
 
 class ErreurLectureSauvegarde(HomeAssistantError):
@@ -539,11 +557,12 @@ class CoordinateurTeleversement:
         """
         destination = self._destination(destination_id)
         if destination is None:
-            self._async_signaler_echec(
+            await self._async_signaler_echec(
                 destination_id,
                 destination_id,
                 nom,
                 slug,
+                CodeErreur.DESTINATION_INCONNUE,
                 f"destination « {destination_id} » introuvable, elle a pu être "
                 "supprimée depuis l'appel du service",
             )
@@ -553,11 +572,12 @@ class CoordinateurTeleversement:
         # toute façon : l'échec est signalé sans ouvrir la sauvegarde ni joindre
         # le fournisseur, et les autres destinations restent traitées.
         if self._reauthentification_requise(destination_id):
-            self._async_signaler_echec(
+            await self._async_signaler_echec(
                 destination_id,
                 destination.name,
                 nom,
                 slug,
+                CodeErreur.ACCES_REVOQUE,
                 "ré-authentification requise : autorisez de nouveau la destination "
                 "depuis les options de l'intégration",
             )
@@ -582,16 +602,31 @@ class CoordinateurTeleversement:
             async with asyncio.timeout(delai):
                 distante, taille = await self._async_envoyer(destination, nom, slug)
         except TimeoutError:
-            self._async_signaler_echec(
+            await self._async_signaler_echec(
                 destination_id,
                 destination.name,
                 nom,
                 slug,
+                CodeErreur.DELAI_DEPASSE,
                 f"délai de téléversement dépassé ({delai:g} s)",
             )
-        except (ErreurLectureSauvegarde, DestinationError) as err:
-            self._async_signaler_echec(
-                destination_id, destination.name, nom, slug, str(err) or repr(err)
+        except ErreurLectureSauvegarde as err:
+            await self._async_signaler_echec(
+                destination_id,
+                destination.name,
+                nom,
+                slug,
+                CodeErreur.SAUVEGARDE_ILLISIBLE,
+                str(err) or repr(err),
+            )
+        except DestinationError as err:
+            await self._async_signaler_echec(
+                destination_id,
+                destination.name,
+                nom,
+                slug,
+                err.code,
+                str(err) or repr(err),
             )
         except Exception as err:  # l'échec d'une destination n'en bloque aucune autre
             # Pas de `_LOGGER.exception()` : sa trace recopierait le message brut
@@ -603,8 +638,13 @@ class CoordinateurTeleversement:
                 nom,
                 destination.name,
             )
-            self._async_signaler_echec(
-                destination_id, destination.name, nom, slug, str(err) or repr(err)
+            await self._async_signaler_echec(
+                destination_id,
+                destination.name,
+                nom,
+                slug,
+                CodeErreur.INCONNUE,
+                str(err) or repr(err),
             )
         else:
             taille_envoyee = distante.size if distante.size is not None else taille
@@ -669,35 +709,44 @@ class CoordinateurTeleversement:
             destination_id
         )
 
-    @callback
-    def _async_signaler_echec(
+    async def _async_signaler_echec(
         self,
         destination_id: str,
         destination_nom: str,
         nom: str,
         slug: str,
-        message: str,
+        code: CodeErreur,
+        detail: str,
     ) -> None:
         """Journalise l'échec d'un téléversement et émet l'événement dédié.
 
-        `message` est la cause relayée d'un fournisseur ou d'une exception : ni
-        le journal (#35) ni l'événement (#44) n'en reçoivent le texte brut, mais
-        sa version masquée par `masquer()`. L'événement est visible des outils
-        de développement, de toute automatisation qui l'écoute, et stocké par
-        l'enregistreur : une URI de session Google Drive et son `upload_id` n'y
-        ont pas leur place. Le schéma de l'événement est inchangé ; seul le
-        contenu de `error` l'est, et seulement quand il portait un motif masqué.
-        Les consommateurs internes (notifications #17, entités #16) le masquent
-        de nouveau à la lecture, sans effet : le masquage est idempotent.
+        Deux textes, deux destinataires (#46) :
+
+        - `detail` est la cause technique, relayée d'un fournisseur ou d'une
+          exception. Il ne va **qu'au journal**, masqué par `masquer()` (#35) :
+          une URI de session Google Drive et son `upload_id` n'ont leur place ni
+          dans l'événement — visible des outils de développement, de toute
+          automatisation qui l'écoute, stocké par l'enregistreur (#44) — ni dans
+          ce qu'il alimente (notifications #17, attribut `last_error` #16) ;
+        - l'événement porte le **code stable** (`error_code`), clé de filtrage
+          des automatisations, et, dans `error`, le message traduit de ce code
+          dans la langue de l'instance. Une cause que le fork ne sait pas
+          qualifier (`unknown`) y devient un message générique qui renvoie au
+          journal.
+
+        Le schéma de l'événement ne perd aucun champ : `error_code` s'ajoute aux
+        cinq champs d'origine. Les consommateurs internes masquent encore
+        `error` à la lecture, sans effet sur un texte écrit par le fork.
         """
-        cause = masquer(message)
         _LOGGER.error(
-            "Échec du téléversement de la sauvegarde « %s » (%s) vers « %s » : %s",
+            "Échec du téléversement de la sauvegarde « %s » (%s) vers « %s » [%s] : %s",
             nom,
             slug,
             destination_nom,
-            cause,
+            code,
+            masquer(detail),
         )
+        message = await async_message_d_erreur(self._hass, code)
         self._hass.bus.async_fire(
             EVENT_UPLOAD_FAILED,
             {
@@ -705,7 +754,8 @@ class CoordinateurTeleversement:
                 ATTR_SLUG: slug,
                 ATTR_DESTINATION: destination_id,
                 ATTR_DESTINATION_NAME: destination_nom,
-                ATTR_ERROR: cause,
+                ATTR_ERROR: message,
+                ATTR_ERROR_CODE: str(code),
             },
         )
 
@@ -735,9 +785,9 @@ def async_resoudre_destinations(
     """Traduit les valeurs d'`upload_to` en identifiants de destination.
 
     Chaque valeur est un identifiant ou un nom de destination. Lève
-    `ServiceValidationError` — message en français, présenté tel quel à
-    l'utilisateur — si une valeur ne désigne aucune destination, ou si un nom
-    est porté par plusieurs d'entre elles.
+    `ServiceValidationError` si une valeur ne désigne aucune destination, ou si
+    un nom est porté par plusieurs d'entre elles. L'erreur porte sa clé de
+    traduction (#46) : l'interface l'affiche dans la langue de l'utilisateur.
     """
     gestionnaire = hass.data.get(DATA_DESTINATIONS)
     disponibles: list[RemoteDestination] = (
@@ -772,24 +822,40 @@ def _resoudre_une_destination(
             sorted(destination.destination_id for destination in homonymes)
         )
         raise ServiceValidationError(
-            f"Plusieurs destinations portent le nom « {recherche} » : précisez "
-            f"son identifiant ({identifiants})."
+            translation_domain=DOMAIN,
+            translation_key=CLE_DESTINATION_AMBIGUE,
+            translation_placeholders={
+                "destination": recherche,
+                "identifiants": identifiants,
+            },
         )
 
+    if not disponibles:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key=CLE_DESTINATION_INCONNUE_SANS_DESTINATION,
+            translation_placeholders={"destination": demandee},
+        )
     raise ServiceValidationError(
-        f"Destination inconnue : « {demandee} ». {_libelle_disponibles(disponibles)}"
+        translation_domain=DOMAIN,
+        translation_key=CLE_DESTINATION_INCONNUE,
+        translation_placeholders={
+            "destination": demandee,
+            "disponibles": _liste_des_disponibles(disponibles),
+        },
     )
 
 
-def _libelle_disponibles(disponibles: list[RemoteDestination]) -> str:
-    """Phrase listant les destinations configurées, pour un message d'erreur."""
-    if not disponibles:
-        return "Aucune destination distante n'est configurée."
-    listage = ", ".join(
-        f"« {destination.name} » ({destination.destination_id})"
+def _liste_des_disponibles(disponibles: list[RemoteDestination]) -> str:
+    """Liste des destinations configurées, pour un message d'erreur.
+
+    Sans guillemets : leur forme dépend de la langue (« » en français, “ ” en
+    anglais), et la liste est insérée telle quelle dans les deux traductions.
+    """
+    return ", ".join(
+        f"{destination.name} ({destination.destination_id})"
         for destination in disponibles
     )
-    return f"Destinations configurées : {listage}."
 
 
 @callback
@@ -819,8 +885,8 @@ def async_prepare_upload(
     coordinateur = hass.data.get(DATA_UPLOADS)
     if coordinateur is None:
         raise ServiceValidationError(
-            "Le téléversement distant est indisponible : l'entrée Auto Backup "
-            "n'est pas chargée."
+            translation_domain=DOMAIN,
+            translation_key=CLE_TELEVERSEMENT_INDISPONIBLE,
         )
 
     identifiants = async_resoudre_destinations(hass, demandees)
@@ -859,7 +925,7 @@ def _nom_de_sauvegarde_par_defaut(hass: HomeAssistant) -> str:
     auto_backup = hass.data.get(DATA_AUTO_BACKUP)
     if auto_backup is None:
         raise ServiceValidationError(
-            "Le téléversement distant est indisponible : l'entrée Auto Backup "
-            "n'est pas chargée."
+            translation_domain=DOMAIN,
+            translation_key=CLE_TELEVERSEMENT_INDISPONIBLE,
         )
     return auto_backup.generate_backup_name()

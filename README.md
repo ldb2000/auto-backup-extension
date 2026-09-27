@@ -144,21 +144,17 @@ nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto
 - `auto_backup.upload_successful` : le téléversement a réussi (champs : `name`, `slug`,
   `destination`, `destination_name`, `size`, `remote_id`) ;
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
-  `destination`, `destination_name`, `error`).
+  `destination`, `destination_name`, `error`, `error_code`).
 
-Le champ `error` de `auto_backup.upload_failed` porte la cause de l'échec **masquée** : jetons,
-valeurs de clés sensibles (`access_token`, `upload_id`…), adresses électroniques et chemins de
-fichiers absolus y sont remplacés par `***`, comme dans le journal, les notifications et les
-entités. L'événement est en effet visible dans les outils de développement, transmis à toute
-automatisation qui l'écoute et conservé par l'enregistreur. Une cause sans secret (« quota
-dépassé », « délai de téléversement dépassé (1800 s) ») reste identique mot pour mot. Le masquage
-avale aussi, par prudence, toute suite de vingt caractères ou plus sans espace qui mêle chiffres,
-majuscules ou `_` : un nom de destination ou de sauvegarde sans espace cité dans la cause
-(« Dropbox-Compte-Familial ») y apparaît donc sous la forme `***`. Les codes d'erreur **connus**
-de Dropbox et de Google Drive restent en revanche lisibles (`expired_access_token`,
-`invalid_access_token`, `too_many_write_operations`, `userRateLimitExceeded`,
-`storageQuotaExceeded`…) : une automatisation peut filtrer dessus. Pour filtrer sur une
-destination, préférez les champs `destination` et `destination_name`, qui ne sont pas masqués.
+Dans `auto_backup.upload_failed`, `error_code` est un **code stable** de la cause
+(`access_revoked`, `quota_exceeded`, `timeout`, `unknown`…), le même pour Dropbox et Google
+Drive et dans toutes les langues : c'est sur lui qu'une automatisation filtre. `error` est le
+**message à afficher**, traduit dans la langue de Home Assistant (français ou anglais) ; il est
+écrit par Auto Backup et ne reprend jamais le texte du fournisseur. Une cause que l'intégration ne
+reconnaît pas donne le code `unknown` et un message générique. Le détail technique (statut HTTP,
+motif du fournisseur), dont les jetons, valeurs de clés sensibles, adresses électroniques et
+chemins absolus sont masqués, ne va que dans le journal de Home Assistant. La liste des codes est
+dans [la page des services](docs/services.md#codes-derreur).
 
 Chez **Dropbox**, la sauvegarde est déposée dans le dossier de la destination sous le nom
 `<nom de la sauvegarde> [<slug>].tar`. Un fichier de même nom n'est **jamais** remplacé : le
@@ -258,8 +254,9 @@ côte à côte dans un tableau de bord.
 | « *Destination* : problème de téléversement » | `binary_sensor`, `problem` | actif tant qu'aucun envoi n'a réussi depuis le dernier échec | `last_error`, `last_failed_slug`, `last_failed_at` |
 
 Un téléversement réussi horodate le capteur de succès, met à jour le compte et éteint le
-capteur de problème ; un échec l'allume et renseigne `last_error` avec un message lisible, dont
-les jetons, les secrets et les adresses électroniques sont masqués avant tout affichage. Le capteur de problème se prête
+capteur de problème ; un échec l'allume et renseigne `last_error` avec le même message que le
+champ `error` de l'événement : traduit dans la langue de Home Assistant au moment de l'échec, et
+sans secret. Le capteur de problème se prête
 directement à une automatisation — l'identifiant d'entité exact est construit à partir du nom de
 la destination, relevez-le dans les outils de développement :
 

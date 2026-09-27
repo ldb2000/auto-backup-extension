@@ -15,7 +15,8 @@
   [#15](https://github.com/ldb2000/auto-backup-extension/issues/15) (listage et suppression sur
   Google Drive) et
   [#17](https://github.com/ldb2000/auto-backup-extension/issues/17) (notifications et changement
-  de compte) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
+  de compte) et [#46](https://github.com/ldb2000/auto-backup-extension/issues/46) (codes
+  d'erreur stables et messages traduits) — epic [#1](https://github.com/ldb2000/auto-backup-extension/issues/1)
 
 ## Contexte
 
@@ -941,7 +942,12 @@ distincte de `DestinationError` : l'échec vient d'ici, pas du fournisseur dista
 | --- | --- |
 | `auto_backup.upload_start` | `name`, `slug`, `destination`, `destination_name` |
 | `auto_backup.upload_successful` | les précédents, plus `size` et `remote_id` |
-| `auto_backup.upload_failed` | les champs de `upload_start`, plus `error` |
+| `auto_backup.upload_failed` | les champs de `upload_start`, plus `error` et `error_code` (#46) |
+
+Depuis l'issue #46, `error` ne porte plus la cause relayée mais le **message traduit** du code
+stable `error_code` : voir « Codes d'erreur stables et messages traduits (issue #46) » ci-dessous.
+Les deux paragraphes qui suivent décrivent l'état de #44 et #48 ; le masquage qu'ils établissent
+s'applique désormais au **journal**, seul destinataire du détail.
 
 **`error` est masqué à l'émission (issue #44).** La cause d'un échec est souvent un texte de
 fournisseur ou le message d'une exception réseau, qui peut citer un jeton ou l'URI de session d'un
@@ -984,6 +990,72 @@ deviendra traduit, donc inutilisable comme clé de filtrage. La liste blanche de
 attendant — les codes connus sont lisibles dans `error` — et le champ structuré sera défini une
 seule fois, avec son vocabulaire propre au fork, par #46.
 
+### Codes d'erreur stables et messages traduits (issue #46)
+
+Le texte d'une `DestinationError` était une phrase en français, écrite par le fournisseur du fork
+ou relayée d'une API. Il atteignait l'utilisateur par cinq portes : le détail `{detail}` de
+l'abandon `echec_fournisseur`, le champ `error` de `auto_backup.upload_failed`, l'attribut
+`last_error` des entités, la cause des notifications et les refus de `upload_to`. Un utilisateur
+anglophone lisait donc du français, et une automatisation qui voulait distinguer un quota épuisé
+d'un accès révoqué devait comparer des phrases.
+
+**Un code porté par chaque erreur, attribué par le fork.** `destinations/errors.py` définit
+`CodeErreur`, une énumération de chaînes (`access_revoked`, `missing_scope`, `quota_exceeded`,
+`rate_limited`, `timeout`, `network_error`, `provider_unavailable`, `invalid_folder`,
+`api_disabled`, `not_found`, `unknown_destination`, `local_backup_unreadable`, `invalid_config`,
+`unknown_provider`, `unknown`). Chaque sous-classe fixe le code de sa cause
+(`DestinationAuthError` → `access_revoked`, `DestinationQuotaError` → `quota_exceeded`…) ; le site
+de levée le précise quand il en sait plus (`code=CodeErreur.PORTEE_MANQUANTE` pour un
+`missing_scope` Dropbox ou un `insufficientPermissions` Google). Le code est choisi **là où le
+fournisseur qualifie la réponse** — c'est le seul endroit qui sait qu'un 403 Google est un quota
+et un 409 Dropbox un chemin refusé —, et jamais recopié du fournisseur : les deux raisons de #48
+tiennent toujours (deux noms pour une même cause ; un code brut n'est pas un contrat du fork).
+Une erreur que rien ne qualifie reste `unknown`. Les valeurs sont un contrat public, documenté
+dans `docs/services.md` : on en ajoute, on n'en renomme ni n'en retire aucune.
+
+**Le texte de l'exception devient le détail, pour le journal seulement.** Le constructeur garde
+son premier argument comme message technique, masqué par `masquer()` à chaque journalisation
+comme avant (#35) : le journal est l'unique destinataire du statut HTTP, du motif du fournisseur
+et des codes de la liste blanche de #48. Tout ce qui est **affiché** est le message traduit du
+code, écrit par le fork, sans placeholder : il ne peut contenir ni secret ni texte de fournisseur,
+et une erreur `unknown` donne un message générique qui renvoie au journal. Le masquage n'est donc
+plus le dernier filet de l'affichage mais une ceinture de sécurité : `masquer()` reste appliqué
+à la lecture par les notifications et les entités, sans effet sur un texte du fork
+(`tests/test_traductions.py` vérifie que chaque message traverse `masquer()` intact).
+
+**Où vivent les messages, et dans quelle langue.** Dans la section `exceptions` de
+`translations/*.json`, sous `erreur_<code>` : la catégorie déjà retenue par #45, la seule que
+`hassfest` accepte pour un texte libre. `destinations/traductions.py` est désormais le **seul**
+mécanisme de lecture, partagé avec les notifications : cache de Home Assistant, chargement
+ponctuel s'il manque, repli sur l'anglais puis sur la clé si ce chargement échoue. Le texte
+affiché par le fork est dans la **langue de l'instance** (`hass.config.language`) au moment de
+l'échec — c'est la seule dont dispose un événement ou un attribut, qui n'ont pas de lecteur
+unique. Conséquences assumées : `last_error` garde la langue de l'échec après un changement de
+langue ; le `{detail}` d'un abandon suit la langue de l'instance, pas celle du navigateur.
+
+**L'événement : `error_code` pour filtrer, `error` pour afficher.** `error_code` s'ajoute aux cinq
+champs d'origine, qui restent tous présents sous le même nom : aucune automatisation qui lisait
+`error` ne casse. Mais le **contenu** de `error` change : c'est le message traduit, plus la cause
+relayée, et les codes connus des fournisseurs n'y figurent plus. Une automatisation qui comparait
+ce texte doit comparer `error_code` ; le CHANGELOG le signale comme un changement visible.
+L'alternative — garder la cause masquée dans `error` et ne traduire qu'ailleurs — a été écartée :
+le critère de #46 veut que le détail d'une erreur inconnue n'aille qu'au journal, et un même échec
+aurait affiché deux textes différents selon l'endroit.
+
+**Les refus de `upload_to` sont traduits par Home Assistant.** Les `ServiceValidationError` de
+`destinations/upload.py` portent `translation_domain`, `translation_key` et
+`translation_placeholders` (`destination_inconnue`, `destination_inconnue_sans_destination`,
+`destination_ambigue`, `televersement_indisponible`) : l'interface les affiche dans la langue de
+l'utilisateur, sans que le fork compose le texte. La liste des destinations disponibles est passée
+sans guillemets, leur forme dépendant de la langue. `DestinationError` pose de même sa clé de
+traduction sur l'exception : si l'une d'elles remontait telle quelle d'un appel de service,
+l'interface l'afficherait traduite.
+
+**Limites.** Le code n'est pas repris par les entités (`last_error` reste un texte) ; la purge
+distante ne l'émet nulle part, n'ayant pas d'événement d'échec. Le libellé de repli
+« cause inconnue » d'`entities.py`, réservé à un événement émis sans `error` par un tiers, reste
+en français.
+
 **`size` peut valoir `null`.** Sous Supervisor, la taille vient de l'en-tête `Content-Length` de
 `GET /backups/<slug>/download` ; s'il manque, la sauvegarde est téléversée quand même, mais sa
 taille reste inconnue, et le fournisseur n'en renvoie pas toujours une non plus. Une automatisation
@@ -992,7 +1064,7 @@ qui affiche ou additionne `size` doit donc tolérer l'absence de valeur (`{{ tri
 `unavailable` pour autant : « taille inconnue » n'est pas un échec de téléversement.
 
 Une destination inconnue est refusée **avant** la création de la sauvegarde, par une
-`ServiceValidationError` en français qui liste les destinations configurées : mieux vaut ne rien
+`ServiceValidationError` traduisible (#46) qui liste les destinations configurées : mieux vaut ne rien
 créer que créer une sauvegarde dont l'utilisateur croira, à tort, qu'elle est partie.
 `upload_to` accepte un identifiant ou un nom (comparé sans tenir compte de la casse ni des
 espaces de bordure) ; un nom porté par plusieurs destinations est refusé plutôt qu'arbitré, en
@@ -1668,9 +1740,10 @@ subsistent, chacun avec son test :
 `masquer(texte, longueur_max=LONGUEUR_MAX_ERREUR)`. Aucun motif ne reste dans `entities.py` —
 c'est précisément la divergence que ce module supprime.
 
-**Textes traduits (issue #45).** Une notification persistante n'a pas de catégorie de
-traduction propre côté Home Assistant, contrairement aux problèmes et aux étapes du flux
-d'options : ses libellés étaient d'abord écrits en français dans `notifications.py`. Ce n'était
+**Textes traduits (issue #45).** Le mécanisme décrit ici vit depuis #46 dans
+`destinations/traductions.py`, partagé avec les messages des codes d'erreur. Une notification
+persistante n'a pas de catégorie de traduction propre côté Home Assistant, contrairement aux
+problèmes et aux étapes du flux d'options : ses libellés étaient d'abord écrits en français dans `notifications.py`. Ce n'était
 pas une limite de la plateforme : `homeassistant.helpers.translation` expose les traductions
 de toute catégorie qu'une intégration déclare. Les textes vivent donc dans la section
 `exceptions` de `translations/*.json` (clés `notification_*`, chacune sous `message`), la seule

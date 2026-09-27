@@ -215,7 +215,9 @@ taille du téléchargement : la session d'envoi est alors utilisée par précaut
 | Nom déjà pris dans le dossier | Échec immédiat : rien n'est écrasé. |
 | Accès révoqué ou portée manquante | Échec, et la destination est signalée **à ré-autoriser** dans Réparations. |
 
-Un échec émet l'événement `auto_backup.upload_failed`, dont le champ `error` porte le message.
+Un échec émet l'événement `auto_backup.upload_failed`, dont le champ `error_code` porte le code
+stable de la cause (`quota_exceeded`, `rate_limited`…) et le champ `error` le message traduit
+(voir [les codes d'erreur](../services.md#codes-derreur)).
 **La sauvegarde locale n'est jamais supprimée ni altérée** par un échec de téléversement, et les
 autres destinations de la même sauvegarde sont traitées normalement.
 
@@ -286,8 +288,8 @@ pas une erreur : elle est simplement rayée du registre.
 | « Home Assistant n'a pas d'URL externe configurée » | L'URL Internet n'est pas renseignée dans Paramètres → Système → Réseau. |
 | « Le fournisseur a refusé le code d'autorisation » | Clé ou secret erroné, ou URI de redirection déclarée chez Dropbox différente de celle affichée par Auto Backup. |
 | « L'autorisation a été refusée ou annulée » | Vous avez cliqué sur *Cancel* dans la fenêtre Dropbox, ou fermé l'onglet. Rien n'a été créé : recommencez quand vous voulez. |
-| « Le fournisseur a refusé la première requête : … » | Juste après l'autorisation, Auto Backup demande à Dropbox qui est le compte connecté. Si cet appel échoue, **l'ajout s'arrête et rien n'est enregistré** : le message cite la cause renvoyée par Dropbox (portée manquante, service indisponible). Corrigez-la, puis relancez **Ajouter une destination** — vous n'avez rien à nettoyer. |
-| `missing_scope` dans le message ou le journal | Une portée n'a pas été cochée (ou l'a été après l'autorisation). Cochez-la dans l'onglet *Permissions*, puis recommencez l'ajout — ou, si la destination existe déjà, **Ré-autoriser une destination**. |
+| « Le fournisseur a refusé la première requête : … » | Juste après l'autorisation, Auto Backup demande à Dropbox qui est le compte connecté. Si cet appel échoue, **l'ajout s'arrête et rien n'est enregistré** : le message nomme la cause (permission manquante, panne passagère de Dropbox), et le détail renvoyé par Dropbox est consigné dans le journal de Home Assistant. Corrigez-la, puis relancez **Ajouter une destination** — vous n'avez rien à nettoyer. |
+| « il manque une permission » dans le message, ou `missing_scope` dans le journal | Une portée n'a pas été cochée (ou l'a été après l'autorisation). Cochez-la dans l'onglet *Permissions*, puis recommencez l'ajout — ou, si la destination existe déjà, **Ré-autoriser une destination**. |
 | Dropbox ouvre une page « invalid redirect_uri » | L'URI déclarée ne correspond pas exactement (protocole, port, `/` final). |
 | « un fichier nommé … existe déjà chez Dropbox » | Le dossier contient déjà une sauvegarde portant ce nom et ce slug. Auto Backup n'écrase rien : supprimez ou renommez le fichier chez Dropbox si vous voulez le remplacer. |
 | « l'espace de stockage Dropbox … est saturé » | Votre compte Dropbox est plein. Libérez de la place, ou réduisez la rétention distante de la destination. |

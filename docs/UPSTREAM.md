@@ -84,7 +84,8 @@ caractère près.
   `EVENT_UPLOAD_SUCCESSFUL`, `EVENT_UPLOAD_FAILED`, `EVENT_REMOTE_PURGE`. Le téléversement
   (#8) ajoute à la suite l'import de type `CoordinateurTeleversement`, la clé `DATA_UPLOADS`,
   l'option de service `ATTR_UPLOAD_TO`, les champs d'événement `ATTR_DESTINATION`,
-  `ATTR_DESTINATION_NAME`, `ATTR_SIZE`, `ATTR_REMOTE_ID`, `CONF_UPLOAD_TIMEOUT` et
+  `ATTR_DESTINATION_NAME`, `ATTR_SIZE`, `ATTR_REMOTE_ID` — suivi d'`ATTR_ERROR_CODE`, ajouté
+  par l'issue #46 à côté des champs d'événement qu'il complète —, `CONF_UPLOAD_TIMEOUT` et
   `DEFAULT_UPLOAD_TIMEOUT`, enfin `CLES_DU_FORK` — la liste des options d'entrée propres au
   fork, décrite plus bas. Viennent ensuite les constantes d'autorisation OAuth2 de l'issue #7
   (`OAUTH_CALLBACK_PATH`, `DATA_OAUTH_STATES`, `DATA_OAUTH_VIEW`, `OAUTH_STATE_TTL`,
@@ -203,6 +204,11 @@ caractère près.
   `sk`, `ur`) ne sont pas touchées : Home Assistant retombe sur l'anglais pour les clés
   absentes. Leur traduction n'est rattachée à aucune issue à ce jour ; les notifications,
   traduites depuis l'issue #45, y apparaissent donc en anglais.
+  L'issue #46 complète la section `exceptions`, après les clés de #45 : un message par code
+  d'erreur stable (`erreur_<code>`) et les refus traduisibles de l'option `upload_to`
+  (`destination_inconnue`, `destination_inconnue_sans_destination`, `destination_ambigue`,
+  `televersement_indisponible`). La section appartient au fork : aucune ligne upstream n'est
+  touchée.
 - Le fork enregistre une vue HTTP propre, `/auth/auto_backup/callback`, au moment où une
   autorisation OAuth2 démarre. Elle est nécessaire parce que la vue standard
   (`/auth/external/callback`) ne sait reprendre qu'un *config flow*, alors que les destinations

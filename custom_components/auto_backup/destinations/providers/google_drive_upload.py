@@ -74,7 +74,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 from multidict import CIMultiDict
 
-from ..errors import DestinationError, DestinationNotFoundError
+from ..errors import CodeErreur, DestinationError, DestinationNotFoundError
 from ..masquage import masquer
 from ..models import RemoteBackup
 from ..oauth import DestinationOAuth2Session
@@ -251,11 +251,13 @@ async def _async_requete(
                 charge = None
     except TimeoutError as err:
         raise _ErreurTransport(
-            f"Google Drive n'a pas répondu en moins de {delai} secondes ({etiquette})"
+            f"Google Drive n'a pas répondu en moins de {delai} secondes ({etiquette})",
+            code=CodeErreur.DELAI_DEPASSE,
         ) from err
     except ClientError as err:
         raise _ErreurTransport(
-            f"Google Drive est injoignable ({etiquette}) : {err}"
+            f"Google Drive est injoignable ({etiquette}) : {err}",
+            code=CodeErreur.RESEAU_INJOIGNABLE,
         ) from err
     return ReponseDrive(statut=statut, entetes=entetes_reponse, charge=charge)
 

@@ -23,10 +23,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+from homeassistant.components import persistent_notification
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -38,7 +40,9 @@ from custom_components.auto_backup.const import (
     ATTR_DESTINATION,
     ATTR_DESTINATION_NAME,
     ATTR_ERROR,
+    ATTR_ERROR_CODE,
     ATTR_EXCLUDE,
+    ATTR_LAST_ERROR,
     ATTR_SIZE,
     ATTR_SLUG,
     ATTR_UPLOAD_TO,
@@ -62,11 +66,22 @@ from custom_components.auto_backup.const import (
     SERVICE_BACKUP_PARTIAL,
 )
 from custom_components.auto_backup.destinations import (
+    DestinationAuthError,
     DestinationConfigError,
     DestinationError,
+    DestinationNotFoundError,
+    DestinationQuotaError,
 )
+from custom_components.auto_backup.destinations.entities import (
+    SUFFIXE_PROBLEME,
+    identifiant_unique,
+)
+from custom_components.auto_backup.destinations.errors import CodeErreur
 from custom_components.auto_backup.destinations.flow import _delai_de_televersement
 from custom_components.auto_backup.destinations.masquage import masquer
+from custom_components.auto_backup.destinations.notifications import (
+    identifiant_de_notification_d_echec,
+)
 from custom_components.auto_backup.destinations.providers.google_drive import (
     erreur_de_la_reponse,
 )
@@ -86,6 +101,7 @@ from custom_components.auto_backup.handlers import (
     SupervisorHandler,
 )
 from destinations_factices import DestinationEnMemoire, config_factice
+from messages_attendus import message_d_erreur
 
 # Signature de la fixture `ouvrir_les_options` (cf. `tests/conftest.py`).
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
@@ -356,8 +372,15 @@ async def test_un_nom_porte_par_plusieurs_destinations_est_refuse(
         ],
     )
 
-    with pytest.raises(ServiceValidationError, match="Plusieurs destinations"):
+    with pytest.raises(ServiceValidationError, match="Several destinations") as err:
         async_resoudre_destinations(hass, ["Destination de test"])
+
+    assert err.value.translation_domain == DOMAIN
+    assert err.value.translation_key == "destination_ambigue"
+    assert err.value.translation_placeholders == {
+        "destination": "Destination de test",
+        "identifiants": "destination_bis, destination_test",
+    }
 
 
 ### APPEL DE SERVICE ###
@@ -465,7 +488,12 @@ async def test_les_trois_services_de_sauvegarde_acceptent_upload_to(
 async def test_une_destination_inconnue_bloque_avant_la_creation(
     hass: HomeAssistant, instance: _Instance
 ) -> None:
-    """Une destination inconnue lève une erreur française, sans rien créer."""
+    """Une destination inconnue lève une erreur traduisible, sans rien créer.
+
+    L'erreur porte son domaine et sa clé de traduction (#46) : l'interface de
+    Home Assistant l'affiche dans la langue de l'utilisateur. Son texte brut,
+    lui, est l'anglais — `str()` d'une erreur traduisible.
+    """
     debuts = async_capture_events(hass, EVENT_UPLOAD_START)
 
     with pytest.raises(ServiceValidationError) as erreur:
@@ -476,10 +504,17 @@ async def test_une_destination_inconnue_bloque_avant_la_creation(
             blocking=True,
         )
 
-    assert "Destination inconnue" in str(erreur.value)
-    assert "dropbox_perso" in str(erreur.value)
+    assert erreur.value.translation_domain == DOMAIN
+    assert erreur.value.translation_key == "destination_inconnue"
     # Le message oriente l'utilisateur vers ce qui est réellement configuré.
-    assert "Destination de test" in str(erreur.value)
+    assert erreur.value.translation_placeholders == {
+        "destination": "dropbox_perso",
+        "disponibles": "Destination de test (destination_test)",
+    }
+    assert str(erreur.value) == (
+        "Unknown destination: “dropbox_perso”. Configured destinations: "
+        "Destination de test (destination_test)"
+    )
 
     instance.creation.assert_not_awaited()
     assert not debuts
@@ -494,10 +529,14 @@ async def test_sans_destination_configuree_le_message_le_dit(
     """Sans aucune destination, l'erreur le signale explicitement."""
     instance = await _demarrer(hass, fichier_de_sauvegarde, destinations=[])
 
-    with pytest.raises(ServiceValidationError, match="Aucune destination"):
+    with pytest.raises(ServiceValidationError, match="No remote destination") as err:
         await hass.services.async_call(
             DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "dropbox"}, blocking=True
         )
+
+    assert err.value.translation_domain == DOMAIN
+    assert err.value.translation_key == "destination_inconnue_sans_destination"
+    assert err.value.translation_placeholders == {"destination": "dropbox"}
 
     instance.creation.assert_not_awaited()
 
@@ -549,7 +588,10 @@ async def test_un_echec_de_televersement_laisse_la_sauvegarde_locale_intacte(
     assert len(echecs) == 1
     assert echecs[0].data[ATTR_SLUG] == SLUG
     assert echecs[0].data[ATTR_DESTINATION] == "destination_test"
-    assert echecs[0].data[ATTR_ERROR] == "réseau indisponible"
+    # Une erreur que le fork ne qualifie pas : message générique traduit, et le
+    # détail au journal seulement (#46).
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(CodeErreur.INCONNUE)
+    assert echecs[0].data[ATTR_ERROR_CODE] == "unknown"
 
     # L'échec est aussi journalisé, avec le slug et le message d'erreur.
     assert any(
@@ -646,7 +688,8 @@ async def test_un_televersement_trop_long_est_interrompu(
 
     assert not succes
     assert len(echecs) == 1
-    assert "délai" in echecs[0].data[ATTR_ERROR]
+    assert echecs[0].data[ATTR_ERROR_CODE] == "timeout"
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(CodeErreur.DELAI_DEPASSE)
     assert fichier_de_sauvegarde.read_bytes() == CONTENU_SAUVEGARDE
 
 
@@ -666,7 +709,10 @@ async def test_une_sauvegarde_illisible_est_signalee_sans_televersement(
     await hass.async_block_till_done(wait_background_tasks=True)
 
     assert len(echecs) == 1
-    assert "impossible" in echecs[0].data[ATTR_ERROR]
+    assert echecs[0].data[ATTR_ERROR_CODE] == "local_backup_unreadable"
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(
+        CodeErreur.SAUVEGARDE_ILLISIBLE
+    )
     assert instance.destination("destination_test").sauvegardes == {}
 
 
@@ -702,7 +748,10 @@ async def test_une_destination_supprimee_entre_temps_est_signalee(
 
     assert len(echecs) == 1
     assert echecs[0].data[ATTR_DESTINATION] == "disparue"
-    assert "introuvable" in echecs[0].data[ATTR_ERROR]
+    assert echecs[0].data[ATTR_ERROR_CODE] == "unknown_destination"
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(
+        CodeErreur.DESTINATION_INCONNUE
+    )
 
 
 async def test_une_destination_a_reautoriser_n_est_pas_jointe(
@@ -736,7 +785,8 @@ async def test_une_destination_a_reautoriser_n_est_pas_jointe(
     assert echecs[0].data[ATTR_SLUG] == SLUG
     assert echecs[0].data[ATTR_DESTINATION] == "destination_test"
     assert echecs[0].data[ATTR_DESTINATION_NAME] == "Destination de test"
-    assert "ré-authentification requise" in echecs[0].data[ATTR_ERROR]
+    assert echecs[0].data[ATTR_ERROR_CODE] == "access_revoked"
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(CodeErreur.ACCES_REVOQUE)
 
     # Ni le fournisseur ni la sauvegarde locale n'ont été sollicités.
     assert not destination.sauvegardes
@@ -847,7 +897,8 @@ async def test_une_erreur_inattendue_du_fournisseur_est_capturee(
     await hass.async_block_till_done(wait_background_tasks=True)
 
     assert len(echecs) == 1
-    assert echecs[0].data[ATTR_ERROR] == "panne interne du fournisseur"
+    assert echecs[0].data[ATTR_ERROR_CODE] == "unknown"
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(CodeErreur.INCONNUE)
 
 
 async def test_un_delai_illisible_retombe_sur_la_valeur_par_defaut(
@@ -1199,17 +1250,19 @@ async def test_une_chaine_unique_vaut_une_destination(
 async def test_sans_entree_chargee_le_televersement_est_refuse(
     hass: HomeAssistant, instance: _Instance
 ) -> None:
-    """`upload_to` est refusé, en français, si l'entrée n'est plus chargée."""
+    """`upload_to` est refusé, traduisible (#46), si l'entrée n'est plus chargée."""
     coordinateur = hass.data.pop(DATA_UPLOADS)
 
-    with pytest.raises(ServiceValidationError, match="n'est pas chargée"):
+    with pytest.raises(ServiceValidationError, match="is not loaded") as err:
         async_prepare_upload(hass, {ATTR_UPLOAD_TO: ["destination_test"]})
+    assert err.value.translation_key == "televersement_indisponible"
 
     hass.data[DATA_UPLOADS] = coordinateur
     hass.data.pop(DATA_AUTO_BACKUP)
 
-    with pytest.raises(ServiceValidationError, match="n'est pas chargée"):
+    with pytest.raises(ServiceValidationError, match="is not loaded") as err:
         async_prepare_upload(hass, {ATTR_UPLOAD_TO: ["destination_test"]})
+    assert err.value.translation_key == "televersement_indisponible"
 
 
 async def test_une_demande_sans_destination_ne_change_rien(
@@ -1566,11 +1619,19 @@ async def test_la_cause_d_une_creation_echouee_est_masquee_en_debug(
     assert not _fuites(caplog)
 
 
-### AUCUN SECRET DANS L'ÉVÉNEMENT `auto_backup.upload_failed` (#44) ###
+### AUCUN SECRET DANS L'ÉVÉNEMENT `auto_backup.upload_failed` (#44, #46) ###
 
-# Schéma public de l'événement (ADR 0001) : ni ajout, ni retrait, ni renommage.
+# Schéma public de l'événement (ADR 0001) : les cinq champs d'origine, plus le
+# code stable ajouté par #46. Ni retrait, ni renommage.
 CHAMPS_DE_L_EVENEMENT_D_ECHEC = frozenset(
-    {ATTR_NAME, ATTR_SLUG, ATTR_DESTINATION, ATTR_DESTINATION_NAME, ATTR_ERROR}
+    {
+        ATTR_NAME,
+        ATTR_SLUG,
+        ATTR_DESTINATION,
+        ATTR_DESTINATION_NAME,
+        ATTR_ERROR,
+        ATTR_ERROR_CODE,
+    }
 )
 
 
@@ -1594,6 +1655,9 @@ async def _declencher_un_echec(
     "erreur",
     [
         pytest.param(DestinationError(MESSAGE_AVEC_SECRETS), id="erreur-typee"),
+        pytest.param(
+            DestinationQuotaError(MESSAGE_AVEC_SECRETS), id="erreur-typee-connue"
+        ),
         pytest.param(RuntimeError(MESSAGE_AVEC_SECRETS), id="erreur-inattendue"),
         pytest.param(
             aiohttp.ClientConnectionError(
@@ -1604,59 +1668,74 @@ async def _declencher_un_echec(
     ],
 )
 async def test_l_evenement_d_echec_ne_transporte_aucun_secret(
-    hass: HomeAssistant, instance: _Instance, erreur: Exception
+    hass: HomeAssistant,
+    instance: _Instance,
+    erreur: Exception,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Critère 1 : `error` ne porte que la cause masquée par `masquer()`.
+    """Critère 1 de #44, renforcé par #46 : `error` ne porte plus aucun détail.
 
     L'événement est visible des outils de développement, de toute automatisation
-    qui l'écoute, et stocké par l'enregistreur : l'URI de session Google Drive
-    et son `upload_id` n'y ont pas leur place.
+    qui l'écoute, et stocké par l'enregistreur. Depuis #46, `error` est le
+    message traduit du code de l'échec : le texte du fournisseur n'y entre plus
+    du tout, même masqué, et ne va qu'au journal — masqué.
     """
-    echecs = await _declencher_un_echec(hass, instance, erreur)
+    with caplog.at_level(logging.ERROR):
+        echecs = await _declencher_un_echec(hass, instance, erreur)
 
     assert len(echecs) == 1
     cause = echecs[0].data[ATTR_ERROR]
     assert not [secret for secret in SECRETS_FACTICES if secret in cause]
-    assert cause == masquer(str(erreur))
-    assert "***" in cause
+    assert cause == message_d_erreur(echecs[0].data[ATTR_ERROR_CODE])
+    assert masquer(str(erreur)) in caplog.text
+    assert not _fuites(caplog)
 
 
 @pytest.mark.parametrize(
-    "message",
+    ("erreur", "code"),
     [
-        pytest.param("quota dépassé", id="quota-court"),
         pytest.param(
-            "l'espace de stockage du compte Google est épuisé : libérez de la "
-            "place dans Google Drive, puis réessayez",
-            id="quota-google",
+            DestinationAuthError("jeton refusé"), "access_revoked", id="acces-revoque"
         ),
         pytest.param(
-            "l'espace de stockage Dropbox de la destination « Dropbox perso » est "
-            "saturé : libérez de la place ou réduisez la rétention "
-            "(path/insufficient_space/..)",
-            id="quota-dropbox",
+            DestinationQuotaError("quota dépassé"), "quota_exceeded", id="quota"
         ),
         pytest.param(
-            "Google Drive a renvoyé une réponse inattendue (HTTP 500) : backendError",
-            id="panne-google",
+            DestinationNotFoundError("absente"), "not_found", id="introuvable"
         ),
-        pytest.param("délai de téléversement dépassé (1800 s)", id="delai"),
+        pytest.param(
+            DestinationConfigError("folder invalide", code=CodeErreur.DOSSIER_INVALIDE),
+            "invalid_folder",
+            id="dossier-invalide",
+        ),
+        pytest.param(
+            DestinationError("portée", code=CodeErreur.PORTEE_MANQUANTE),
+            "missing_scope",
+            id="portee-manquante",
+        ),
+        pytest.param(DestinationError("quota dépassé"), "unknown", id="non-qualifiee"),
     ],
 )
-async def test_une_cause_sans_secret_reste_identique_dans_l_evenement(
-    hass: HomeAssistant, instance: _Instance, message: str
+async def test_l_evenement_porte_le_code_stable_de_l_erreur(
+    hass: HomeAssistant, instance: _Instance, erreur: DestinationError, code: str
 ) -> None:
-    """Critère 2 : une automatisation qui filtre sur ce texte fonctionne encore."""
-    echecs = await _declencher_un_echec(hass, instance, DestinationError(message))
+    """Critère 3 de #46 : `error_code` est le code du fork, `error` sa traduction.
+
+    Une erreur que rien ne qualifie reste `unknown`, même si son texte parle de
+    quota : c'est le code, attribué là où l'échec est qualifié, qui fait foi.
+    """
+    echecs = await _declencher_un_echec(hass, instance, erreur)
 
     assert len(echecs) == 1
-    assert echecs[0].data[ATTR_ERROR] == message
+    assert echecs[0].data[ATTR_ERROR_CODE] == code
+    assert type(echecs[0].data[ATTR_ERROR_CODE]) is str
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(code)
 
 
-# Critère 2, avec les erreurs telles que les fournisseurs du fork les
-# construisent réellement (`google_drive.py::erreur_de_la_reponse`, corps
-# d'erreur de forme Google habituelle), plutôt qu'un texte retapé à la main :
-# c'est cette fonction de production qui décide du message final.
+# Les erreurs telles que les fournisseurs du fork les construisent réellement
+# (`google_drive.py::erreur_de_la_reponse`, corps d'erreur de forme Google
+# habituelle), plutôt qu'un texte retapé à la main : c'est cette fonction de
+# production qui décide du code.
 def _charge_google(raison: str) -> dict[str, Any]:
     """Corps d'erreur de l'API Google Drive, dans sa forme habituelle."""
     return {
@@ -1671,180 +1750,162 @@ def _charge_google(raison: str) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    ("erreur", "message_attendu"),
+    ("erreur", "code", "code_du_fournisseur"),
     [
-        # `rateLimitExceeded` (17 caractères) : sous le seuil de la passe 6 de
-        # `masquer()` (`LONGUEUR_MIN_SUITE_OPAQUE` = 20), le motif de limitation
-        # de débit passe intact.
         pytest.param(
             erreur_de_la_reponse(429, _charge_google("rateLimitExceeded")),
-            "Google Drive a renvoyé une réponse inattendue (HTTP 429) : "
+            "rate_limited",
             "rateLimitExceeded",
-            id="google-rate-limit-court",
+            id="google-limitation-429",
         ),
-        # `accessNotConfigured` : message-guide entièrement récrit en français,
-        # sans code brut embarqué.
+        pytest.param(
+            erreur_de_la_reponse(403, _charge_google("userRateLimitExceeded")),
+            "rate_limited",
+            "userRateLimitExceeded",
+            id="google-limitation-403",
+        ),
+        pytest.param(
+            erreur_de_la_reponse(403, _charge_google("insufficientPermissions")),
+            "missing_scope",
+            # Hors de la liste blanche de #48 : masqué au journal.
+            None,
+            id="google-portee-manquante",
+        ),
         pytest.param(
             erreur_de_la_reponse(403, _charge_google("accessNotConfigured")),
-            "l'API Google Drive n'est pas activée sur votre projet Google Cloud. "
-            "Ouvrez « API et services » > « Bibliothèque », activez « Google "
-            "Drive API », puis relancez l'ajout de la destination",
+            "api_disabled",
+            None,
             id="google-api-desactivee",
         ),
-        # `storageQuotaExceeded` (20 caractères, casse mixte) : masquable par la
-        # passe 6, mais la traduction dédiée du quota de stockage ne recopie
-        # jamais ce code brut dans son message.
         pytest.param(
             erreur_de_la_reponse(403, _charge_google("storageQuotaExceeded")),
-            "l'espace de stockage du compte Google est épuisé : libérez de la "
-            "place dans Google Drive, puis réessayez",
+            "quota_exceeded",
+            None,
             id="google-quota-stockage",
         ),
         pytest.param(
+            erreur_de_la_reponse(401, _charge_google("authError")),
+            "access_revoked",
+            None,
+            id="google-acces-revoque",
+        ),
+        pytest.param(
             erreur_de_la_reponse(404, _charge_google("notFound")),
-            "la ressource demandée n'existe pas (ou plus) sur Google Drive",
+            "not_found",
+            None,
             id="google-ressource-absente",
         ),
-        # Panne serveur Dropbox : `resume` porte l'`error_summary` réel
-        # (`internal_error/`, 15 caractères), sous le seuil de la passe 6.
         pytest.param(
-            DestinationError(
-                "Dropbox est en panne passagère (HTTP 500) et n'a pas accepté "
-                "« nuit.tar » pour la destination « Dropbox perso » après 5 "
-                "tentatives : internal_error/"
-            ),
-            "Dropbox est en panne passagère (HTTP 500) et n'a pas accepté "
-            "« nuit.tar » pour la destination « Dropbox perso » après 5 "
-            "tentatives : internal_error/",
-            id="dropbox-panne-serveur",
+            erreur_de_la_reponse(503, _charge_google("backendError")),
+            "provider_unavailable",
+            "backendError",
+            id="google-panne-serveur",
         ),
-    ],
-)
-async def test_des_erreurs_typees_reelles_restent_identiques_dans_l_evenement(
-    hass: HomeAssistant,
-    instance: _Instance,
-    erreur: DestinationError,
-    message_attendu: str,
-) -> None:
-    """Critère 2, avec les messages réellement produits par les fournisseurs.
-
-    `erreur_de_la_reponse()` (Google Drive) est le code de production, pas un
-    texte retapé : si son message change un jour, ce test le signale. Les
-    causes ci-dessus ne portent aucun secret et doivent rester identiques dans
-    l'événement, pour les automatisations qui filtrent dessus.
-    """
-    assert str(erreur) == message_attendu, "le message réel a changé sous le test"
-    echecs = await _declencher_un_echec(hass, instance, erreur)
-
-    assert len(echecs) == 1
-    assert echecs[0].data[ATTR_ERROR] == message_attendu
-
-
-@pytest.mark.parametrize(
-    ("erreur", "cause_reelle", "code"),
-    [
-        # `userRateLimitExceeded` (21 caractères, casse mixte) : même famille
-        # d'erreur que `rateLimitExceeded` ci-dessus (limitation de débit,
-        # réessayée jusqu'à épuisement des tentatives), assez long pour que la
-        # passe 6 le masque sans la liste blanche de #48.
-        pytest.param(
-            erreur_de_la_reponse(429, _charge_google("userRateLimitExceeded")),
-            "Google Drive a renvoyé une réponse inattendue (HTTP 429) : "
-            "userRateLimitExceeded",
-            "userRateLimitExceeded",
-            id="google-rate-limit-utilisateur",
-        ),
-        # `too_many_write_operations` (26 caractères, `_`) : code Dropbox
-        # (`RateLimitReason`, `WriteError`), éprouvé ici par le message
-        # générique d'un 403 Google non qualifié, qui recopie tout motif tel
-        # quel : la liste blanche ne dépend pas du fournisseur.
         pytest.param(
             erreur_de_la_reponse(403, _charge_google("too_many_write_operations")),
-            "Google Drive a refusé l'accès (403). Vérifiez que l'API Drive est "
-            "activée et que le compte autorisé est bien celui attendu (motif : "
-            "too_many_write_operations)",
+            "unknown",
             "too_many_write_operations",
-            id="google-quota-ecriture",
-        ),
-        # `expired_access_token` (20 caractères, `_`) : code Dropbox réel d'un
-        # jeton expiré, recopié par `_erreur_d_acces()` — pas un secret, juste
-        # le nom de la cause.
-        pytest.param(
-            DestinationError(
-                "Dropbox refuse l'accès de la destination « Dropbox perso » "
-                "(HTTP 401) : expired_access_token/"
-            ),
-            "Dropbox refuse l'accès de la destination « Dropbox perso » "
-            "(HTTP 401) : expired_access_token/",
-            "expired_access_token",
-            id="dropbox-jeton-expire",
+            id="google-403-non-qualifie",
         ),
     ],
 )
-async def test_les_codes_de_fournisseur_reels_ge_20_caracteres_restent_lisibles(
+async def test_les_erreurs_reelles_de_google_drive_portent_leur_code(
     hass: HomeAssistant,
     instance: _Instance,
+    caplog: pytest.LogCaptureFixture,
     erreur: DestinationError,
-    cause_reelle: str,
     code: str,
+    code_du_fournisseur: str | None,
 ) -> None:
-    """Critère 4 de #48 : les codes connus passent en clair dans `error`.
+    """Le code du fork, pas celui de Google ; le code de Google reste au journal.
 
-    Sous #44, ces trois codes de vingt caractères ou plus étaient réduits à
-    `***` par la passe 6 de `masquer()` (réserve assumée, arbitrage métier).
-    La liste blanche exacte de `destinations/masquage.py` les épargne
-    désormais : une automatisation peut filtrer sur le code. Le résultat vaut
-    toujours `masquer(cause_reelle)` — l'émission passe bien par le masquage —
-    et, la cause ne portant aucun secret, il est identique au message réel.
+    Avant #46, les codes connus des fournisseurs (liste blanche de #48) étaient
+    lisibles dans `error`. Ils le restent dans le journal, où l'événement
+    renvoie : une automatisation filtre désormais sur `error_code`.
     """
-    assert str(erreur) == cause_reelle, "le message réel a changé sous le test"
-    echecs = await _declencher_un_echec(hass, instance, erreur)
+    with caplog.at_level(logging.ERROR):
+        echecs = await _declencher_un_echec(hass, instance, erreur)
 
     assert len(echecs) == 1
-    cause = echecs[0].data[ATTR_ERROR]
-    assert cause == masquer(cause_reelle)
-    assert cause == cause_reelle
-    assert code in cause
-    assert "***" not in cause
+    assert echecs[0].data[ATTR_ERROR_CODE] == code
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(code)
+    assert f"[{code}]" in caplog.text
+    if code_du_fournisseur is not None:
+        assert code_du_fournisseur in caplog.text
+        assert code_du_fournisseur not in echecs[0].data[ATTR_ERROR]
 
 
-async def test_un_code_connu_reste_lisible_mais_le_secret_voisin_est_masque(
-    hass: HomeAssistant, instance: _Instance
+async def test_un_code_connu_reste_lisible_au_journal_mais_le_secret_voisin_non(
+    hass: HomeAssistant, instance: _Instance, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Critère 2 de #48, par l'événement : le code passe, le jeton non."""
+    """Critère 2 de #48, par le journal : le code passe, le jeton non."""
     jeton = "sl.B1a2C3FaCtIcE-0123456789abcdefghij"
-    erreur = DestinationError(
+    erreur = DestinationAuthError(
         f"Dropbox refuse l'accès (HTTP 401) : expired_access_token/ ({jeton})"
     )
 
-    echecs = await _declencher_un_echec(hass, instance, erreur)
+    with caplog.at_level(logging.ERROR):
+        echecs = await _declencher_un_echec(hass, instance, erreur)
 
     assert len(echecs) == 1
-    assert echecs[0].data[ATTR_ERROR] == (
-        "Dropbox refuse l'accès (HTTP 401) : expired_access_token/ (***)"
+    assert echecs[0].data[ATTR_ERROR_CODE] == "access_revoked"
+    assert "Dropbox refuse l'accès (HTTP 401) : expired_access_token/ (***)" in (
+        caplog.text
+    )
+    assert jeton not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("langue", "attendu"),
+    [
+        pytest.param("fr", "l'espace de stockage du compte est plein", id="fr"),
+        pytest.param("en", "the account's storage is full", id="en"),
+    ],
+)
+async def test_le_message_de_l_evenement_suit_la_langue_de_l_instance(
+    hass: HomeAssistant, instance: _Instance, langue: str, attendu: str
+) -> None:
+    """Critère 1 de #46 : `error` est traduit dans la langue de l'instance.
+
+    Le code, lui, ne change pas d'une langue à l'autre : c'est lui que les
+    automatisations comparent.
+    """
+    hass.config.language = langue
+
+    echecs = await _declencher_un_echec(
+        hass, instance, DestinationQuotaError("espace saturé")
     )
 
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_ERROR].startswith(attendu)
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur("quota_exceeded", langue)
+    assert echecs[0].data[ATTR_ERROR_CODE] == "quota_exceeded"
 
-async def test_le_delai_depasse_reste_identique_dans_l_evenement(
+
+async def test_le_delai_depasse_porte_son_code_par_le_vrai_chemin(
     hass: HomeAssistant,
     integration_backup: None,
     fournisseur_factice: str,
     fichier_de_sauvegarde: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Critère 2, par le vrai chemin du délai : le message du fork est intact."""
+    """Le délai du fork : code `timeout`, et sa durée au journal seulement."""
     instance = await _demarrer(
         hass, fichier_de_sauvegarde, options={CONF_UPLOAD_TIMEOUT: 0.01}
     )
     instance.destination("destination_test").attente_secondes = 30
     echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
 
-    await hass.services.async_call(
-        DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
-    )
-    await hass.async_block_till_done(wait_background_tasks=True)
+    with caplog.at_level(logging.ERROR):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert len(echecs) == 1
-    assert echecs[0].data[ATTR_ERROR] == "délai de téléversement dépassé (0.01 s)"
+    assert echecs[0].data[ATTR_ERROR_CODE] == "timeout"
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur("timeout")
+    assert "délai de téléversement dépassé (0.01 s)" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -1854,10 +1915,10 @@ async def test_le_delai_depasse_reste_identique_dans_l_evenement(
         pytest.param(DestinationError(MESSAGE_AVEC_SECRETS), id="avec-secrets"),
     ],
 )
-async def test_le_schema_de_l_evenement_d_echec_est_inchange(
+async def test_le_schema_de_l_evenement_d_echec_ne_perd_aucun_champ(
     hass: HomeAssistant, instance: _Instance, erreur: Exception
 ) -> None:
-    """Critère 4 : les cinq champs d'avant, avec les mêmes noms, et eux seuls."""
+    """Critère 3 de #46 : les cinq champs d'avant, mêmes noms, plus `error_code`."""
     echecs = await _declencher_un_echec(hass, instance, erreur)
 
     assert len(echecs) == 1
@@ -1869,3 +1930,95 @@ async def test_le_schema_de_l_evenement_d_echec_est_inchange(
     assert (
         donnees[ATTR_DESTINATION_NAME] == instance.destination("destination_test").name
     )
+    assert isinstance(donnees[ATTR_ERROR], str) and donnees[ATTR_ERROR]
+
+
+### CE QUE L'UTILISATEUR LIT, DE BOUT EN BOUT (#46) ###
+
+
+def _last_error(hass: HomeAssistant, instance: _Instance) -> str | None:
+    """Attribut `last_error` du capteur « problème » de la destination de test."""
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "binary_sensor",
+        DOMAIN,
+        identifiant_unique(
+            instance.entree.entry_id, "destination_test", SUFFIXE_PROBLEME
+        ),
+    )
+    assert entity_id is not None
+    etat = hass.states.get(entity_id)
+    assert etat is not None
+    return etat.attributes[ATTR_LAST_ERROR]
+
+
+def _notification_d_echec(hass: HomeAssistant) -> dict[str, Any]:
+    notification = persistent_notification._async_get_or_create_notifications(hass).get(
+        identifiant_de_notification_d_echec("destination_test")
+    )
+    assert notification is not None
+    return notification
+
+
+@pytest.mark.parametrize(
+    ("langue", "cause"),
+    [
+        pytest.param("fr", "**Cause** : ", id="fr"),
+        pytest.param("en", "**Cause**: ", id="en"),
+    ],
+)
+async def test_une_erreur_connue_est_affichee_traduite_partout(
+    hass: HomeAssistant, instance: _Instance, langue: str, cause: str
+) -> None:
+    """Critère 1 de #46 : événement, notification et `last_error` sont traduits.
+
+    Les trois affichent le même texte, celui du code dans la langue de
+    l'instance ; le texte du fournisseur (français, ici) n'apparaît nulle part.
+    """
+    hass.config.language = langue
+    message = message_d_erreur(CodeErreur.QUOTA_DEPASSE, langue)
+
+    echecs = await _declencher_un_echec(
+        hass, instance, DestinationQuotaError("espace Dropbox saturé (motif interne)")
+    )
+
+    assert echecs[0].data[ATTR_ERROR] == message
+    assert _last_error(hass, instance) == message
+    assert f"{cause}{message}" in _notification_d_echec(hass)["message"]
+    for affiche in (
+        echecs[0].data[ATTR_ERROR],
+        _last_error(hass, instance),
+        _notification_d_echec(hass)["message"],
+    ):
+        assert "motif interne" not in affiche
+
+
+async def test_une_erreur_inconnue_affiche_un_message_generique(
+    hass: HomeAssistant, instance: _Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Critère 4 de #46 : message générique traduit ; détail masqué, au journal.
+
+    Le détail porte un jeton et l'URI de session d'un envoi Google Drive : il
+    n'atteint ni l'événement, ni la notification, ni `last_error`, et le journal
+    ne le reçoit que masqué.
+    """
+    hass.config.language = "fr"
+
+    with caplog.at_level(logging.ERROR):
+        echecs = await _declencher_un_echec(
+            hass, instance, RuntimeError(MESSAGE_AVEC_SECRETS)
+        )
+
+    generique = message_d_erreur(CodeErreur.INCONNUE, "fr")
+    assert echecs[0].data[ATTR_ERROR_CODE] == "unknown"
+    assert echecs[0].data[ATTR_ERROR] == generique
+    assert _last_error(hass, instance) == generique
+    notification = _notification_d_echec(hass)["message"]
+    assert f"**Cause** : {generique}" in notification
+    for affiche in (
+        echecs[0].data[ATTR_ERROR],
+        _last_error(hass, instance),
+        notification,
+    ):
+        assert "envoi refusé" not in affiche
+    assert "[unknown] : " + masquer(MESSAGE_AVEC_SECRETS) in caplog.text
+    assert not _fuites(caplog)

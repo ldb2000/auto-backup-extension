@@ -64,6 +64,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from ..config_entry import async_persist_provider_data
 from ..destination import RemoteDestination
 from ..errors import (
+    CodeErreur,
     DestinationAuthError,
     DestinationError,
     DestinationNotFoundError,
@@ -115,6 +116,11 @@ DELAI_REQUETE = 30
 # fournisseur sait qualifier.
 RAISON_API_DESACTIVEE = "accessNotConfigured"
 RAISONS_DE_QUOTA = frozenset({"storageQuotaExceeded", "quotaExceeded"})
+# Limitation de débit (`403` ou `429`) et portée d'autorisation insuffisante
+# (`403`), d'après le guide « Resolve errors » de l'API Drive. Elles ne servent
+# qu'à choisir le code stable de l'erreur (#46) : le message reste le même.
+RAISONS_DE_LIMITATION = frozenset({"rateLimitExceeded", "userRateLimitExceeded"})
+RAISONS_DE_PORTEE = frozenset({"insufficientPermissions"})
 
 SPEC_OAUTH_GOOGLE_DRIVE = OAuth2ProviderSpec(
     authorize_url=URL_AUTORISATION,
@@ -188,7 +194,7 @@ def erreur_de_la_reponse(statut: int, charge: Any) -> DestinationError:
             "le projet Google Cloud a changé. Ré-autorisez la destination"
         )
     if statut == 403 and RAISON_API_DESACTIVEE in raisons:
-        return DestinationError(MESSAGE_API_DESACTIVEE)
+        return DestinationError(MESSAGE_API_DESACTIVEE, code=CodeErreur.API_DESACTIVEE)
     if statut == 403 and raisons & RAISONS_DE_QUOTA:
         return DestinationQuotaError(
             "l'espace de stockage du compte Google est épuisé : libérez de la "
@@ -198,7 +204,8 @@ def erreur_de_la_reponse(statut: int, charge: Any) -> DestinationError:
         return DestinationError(
             "Google Drive a refusé l'accès (403). Vérifiez que l'API Drive est "
             "activée et que le compte autorisé est bien celui attendu"
-            + (f" (motif : {', '.join(sorted(raisons))})" if raisons else "")
+            + (f" (motif : {', '.join(sorted(raisons))})" if raisons else ""),
+            code=_code_d_un_refus(raisons),
         )
     if statut == 404:
         return DestinationNotFoundError(
@@ -206,8 +213,27 @@ def erreur_de_la_reponse(statut: int, charge: Any) -> DestinationError:
         )
     return DestinationError(
         f"Google Drive a renvoyé une réponse inattendue (HTTP {statut})"
-        + (f" : {', '.join(sorted(raisons))}" if raisons else "")
+        + (f" : {', '.join(sorted(raisons))}" if raisons else ""),
+        code=_code_d_une_reponse_inattendue(statut, raisons),
     )
+
+
+def _code_d_un_refus(raisons: set[str]) -> CodeErreur:
+    """Code stable d'un `403` que ni l'API désactivée ni le quota n'expliquent."""
+    if raisons & RAISONS_DE_LIMITATION:
+        return CodeErreur.LIMITATION_DE_DEBIT
+    if raisons & RAISONS_DE_PORTEE:
+        return CodeErreur.PORTEE_MANQUANTE
+    return CodeErreur.INCONNUE
+
+
+def _code_d_une_reponse_inattendue(statut: int, raisons: set[str]) -> CodeErreur:
+    """Code stable d'une réponse en échec hors `401`, `403` et `404`."""
+    if statut == 429 or raisons & RAISONS_DE_LIMITATION:
+        return CodeErreur.LIMITATION_DE_DEBIT
+    if 500 <= statut < 600:
+        return CodeErreur.FOURNISSEUR_EN_PANNE
+    return CodeErreur.INCONNUE
 
 
 @callback
@@ -281,10 +307,13 @@ async def async_appel_drive(
                 charge = None
     except TimeoutError as err:
         raise DestinationError(
-            f"Google Drive n'a pas répondu en moins de {DELAI_REQUETE} secondes"
+            f"Google Drive n'a pas répondu en moins de {DELAI_REQUETE} secondes",
+            code=CodeErreur.DELAI_DEPASSE,
         ) from err
     except ClientError as err:
-        raise DestinationError(f"Google Drive est injoignable : {err}") from err
+        raise DestinationError(
+            f"Google Drive est injoignable : {err}", code=CodeErreur.RESEAU_INJOIGNABLE
+        ) from err
 
     if statut >= 400:
         signaler_si_acces_revoque(session, statut)

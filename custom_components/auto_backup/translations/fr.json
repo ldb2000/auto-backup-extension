@@ -183,6 +183,63 @@
         },
         "notification_cause_inconnue": {
             "message": "cause inconnue"
+        },
+        "erreur_access_revoked": {
+            "message": "l'accès à la destination a été révoqué ou a expiré : autorisez-la de nouveau depuis les options de l'intégration"
+        },
+        "erreur_missing_scope": {
+            "message": "il manque une permission à l'autorisation de la destination : autorisez-la de nouveau en accordant toutes les permissions demandées"
+        },
+        "erreur_quota_exceeded": {
+            "message": "l'espace de stockage du compte est plein : libérez de la place chez le fournisseur ou réduisez la rétention"
+        },
+        "erreur_rate_limited": {
+            "message": "le fournisseur limite temporairement le nombre de requêtes : réessayez plus tard"
+        },
+        "erreur_timeout": {
+            "message": "le délai imparti est dépassé : le fournisseur n'a pas répondu à temps ou l'envoi a pris trop longtemps"
+        },
+        "erreur_network_error": {
+            "message": "le fournisseur est injoignable : vérifiez la connexion Internet de Home Assistant"
+        },
+        "erreur_provider_unavailable": {
+            "message": "le fournisseur est en panne passagère : réessayez plus tard"
+        },
+        "erreur_invalid_folder": {
+            "message": "le dossier distant de la destination est invalide ou refusé par le fournisseur : vérifiez le dossier configuré"
+        },
+        "erreur_api_disabled": {
+            "message": "l'API Google Drive n'est pas activée sur votre projet Google Cloud : activez « Google Drive API » dans « API et services » > « Bibliothèque », puis réessayez"
+        },
+        "erreur_not_found": {
+            "message": "l'élément demandé n'existe pas (ou plus) chez le fournisseur"
+        },
+        "erreur_unknown_destination": {
+            "message": "la destination n'existe plus : elle a pu être supprimée depuis l'appel du service"
+        },
+        "erreur_local_backup_unreadable": {
+            "message": "la sauvegarde locale n'a pas pu être lue pour être envoyée : le détail est consigné dans le journal de Home Assistant"
+        },
+        "erreur_invalid_config": {
+            "message": "la configuration de la destination est invalide ou incomplète : le détail est consigné dans le journal de Home Assistant"
+        },
+        "erreur_unknown_provider": {
+            "message": "le fournisseur de la destination n'est pas pris en charge par cette version d'Auto Backup"
+        },
+        "erreur_unknown": {
+            "message": "erreur inattendue du fournisseur : le détail est consigné dans le journal de Home Assistant"
+        },
+        "destination_inconnue": {
+            "message": "Destination inconnue : « {destination} ». Destinations configurées : {disponibles}."
+        },
+        "destination_inconnue_sans_destination": {
+            "message": "Destination inconnue : « {destination} ». Aucune destination distante n'est configurée."
+        },
+        "destination_ambigue": {
+            "message": "Plusieurs destinations portent le nom « {destination} » : précisez son identifiant ({identifiants})."
+        },
+        "televersement_indisponible": {
+            "message": "Le téléversement distant est indisponible : l'entrée Auto Backup n'est pas chargée."
         }
     },
     "entity": {

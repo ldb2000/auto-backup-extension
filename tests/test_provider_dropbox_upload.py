@@ -54,7 +54,9 @@ from yarl import URL
 
 from custom_components.auto_backup.const import (
     ATTR_DESTINATION,
+    ATTR_DESTINATION_NAME,
     ATTR_ERROR,
+    ATTR_ERROR_CODE,
     ATTR_REMOTE_ID,
     ATTR_SIZE,
     ATTR_UPLOAD_TO,
@@ -80,6 +82,7 @@ from custom_components.auto_backup.destinations import (
     DestinationQuotaError,
     identifiant_du_probleme,
 )
+from custom_components.auto_backup.destinations.errors import CodeErreur
 from custom_components.auto_backup.destinations.providers.dropbox import (
     CLE_ACCOUNT_ID,
     MULTIPLE_FRAGMENT,
@@ -100,6 +103,7 @@ from custom_components.auto_backup.destinations.retention import (
     CLE_MARQUEUR,
     porte_le_marqueur,
 )
+from messages_attendus import message_d_erreur
 
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
@@ -910,11 +914,13 @@ async def test_un_refus_inattendu_reste_une_erreur_de_destination(
     """Un `400` ne remet pas l'autorisation en cause : rien à ré-autoriser."""
     simuler_le_dossier(aioclient_mock)
     aioclient_mock.post(
-        URL_ENVOI, status=400, json=erreur_dropbox("path/malformed_path/...")
+        URL_ENVOI, status=400, json=erreur_dropbox("path/restricted_content/...")
     )
 
-    with pytest.raises(DestinationError, match="HTTP 400"):
+    with pytest.raises(DestinationError, match="HTTP 400") as erreur:
         await televerser(destination)
+
+    assert erreur.value.code is CodeErreur.INCONNUE
 
     registre = ir.async_get(hass)
     assert not registre.async_get_issue(DOMAIN, identifiant_du_probleme(DESTINATION_ID))
@@ -1354,6 +1360,29 @@ async def test_le_service_backup_depose_la_sauvegarde_chez_dropbox(
     assert recu == [CONTENU]
 
 
+@pytest.mark.parametrize(
+    "resume", ["path/malformed_path/...", "path/disallowed_name/..."]
+)
+async def test_un_chemin_refuse_par_dropbox_est_un_dossier_invalide(
+    hass: HomeAssistant,
+    destination: DropboxDestination,
+    aioclient_mock: AiohttpClientMocker,
+    resume: str,
+) -> None:
+    """#46 : un chemin que Dropbox refuse porte le code `invalid_folder`.
+
+    Le nom du fichier est assaini par le fork : seul le dossier cible, choisi
+    par l'utilisateur, peut encore être en cause.
+    """
+    simuler_le_dossier(aioclient_mock)
+    aioclient_mock.post(URL_ENVOI, status=409, json=erreur_dropbox(resume))
+
+    with pytest.raises(DestinationError) as erreur:
+        await televerser(destination)
+
+    assert erreur.value.code is CodeErreur.DOSSIER_INVALIDE
+
+
 async def test_un_echec_de_depot_emet_un_message_comprehensible(
     hass: HomeAssistant,
     entree_dropbox: MockConfigEntry,
@@ -1381,9 +1410,11 @@ async def test_un_echec_de_depot_emet_un_message_comprehensible(
     await hass.async_block_till_done(wait_background_tasks=True)
 
     assert len(echecs) == 1
-    message = echecs[0].data[ATTR_ERROR]
-    assert "saturé" in message
-    assert NOM_DESTINATION in message
+    # Le message est celui du code stable, traduit (#46) : le même pour Dropbox
+    # et Google Drive, que l'automatisation filtre sur `error_code`.
+    assert echecs[0].data[ATTR_ERROR] == message_d_erreur(CodeErreur.QUOTA_DEPASSE)
+    assert echecs[0].data[ATTR_ERROR_CODE] == "quota_exceeded"
+    assert echecs[0].data[ATTR_DESTINATION_NAME] == NOM_DESTINATION
 
 
 ### Aucun secret dans le journal, même quand Dropbox en renvoie un (#35) ###

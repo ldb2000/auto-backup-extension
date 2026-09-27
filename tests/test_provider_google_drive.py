@@ -62,6 +62,7 @@ from custom_components.auto_backup.destinations import (
     spec_oauth_du_fournisseur,
 )
 from custom_components.auto_backup.destinations.destination import RemoteDestination
+from custom_components.auto_backup.destinations.errors import CodeErreur
 from custom_components.auto_backup.destinations.oauth import (
     implementation_de_la_destination,
 )
@@ -82,6 +83,7 @@ from custom_components.auto_backup.destinations.providers.google_drive_upload im
     URL_ENVOI,
     URL_FICHIERS,
 )
+from messages_attendus import message_d_erreur
 
 type OuvrirLesOptions = Callable[[str, str], Awaitable[dict[str, Any]]]
 
@@ -517,6 +519,7 @@ async def test_le_detail_affiche_a_l_abandon_ne_montre_aucun_secret(
     entree: MockConfigEntry,
     aioclient_mock: AiohttpClientMocker,
     ouvrir_les_options: OuvrirLesOptions,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """#35 : le détail de `echec_fournisseur` est un texte de fournisseur, masqué.
 
@@ -537,9 +540,12 @@ async def test_le_detail_affiche_a_l_abandon_ne_montre_aucun_secret(
     assert resultat["type"] is FlowResultType.ABORT
     assert resultat["reason"] == "echec_fournisseur"
     detail = resultat["description_placeholders"]["detail"]
-    assert "HTTP 400" in detail
-    assert "access_token=***" in detail
+    # Depuis #46, le détail affiché est le message générique traduit : le
+    # texte de Google ne va qu'au journal, masqué.
+    assert detail == message_d_erreur(CodeErreur.INCONNUE)
     assert jeton_renvoye not in detail
+    assert jeton_renvoye not in caplog.text
+    assert "access_token=***" in caplog.text
 
 
 async def test_une_api_drive_desactivee_est_expliquee_et_le_flux_relancable(
@@ -562,8 +568,8 @@ async def test_une_api_drive_desactivee_est_expliquee_et_le_flux_relancable(
     assert resultat["type"] is FlowResultType.ABORT
     assert resultat["reason"] == "echec_fournisseur"
     detail = resultat["description_placeholders"]["detail"]
-    assert "API Google Drive n'est pas activée" in detail
-    assert "Bibliothèque" in detail
+    assert detail == message_d_erreur(CodeErreur.API_DESACTIVEE)
+    assert "Google Drive API" in detail
     assert not entree.options.get(CONF_DESTINATIONS)
 
     # Une fois l'API activée dans la console Google Cloud, le flux aboutit.
@@ -721,29 +727,66 @@ async def test_la_verification_de_connexion_interroge_drive(
 
 
 @pytest.mark.parametrize(
-    ("statut", "corps", "erreur_attendue", "extrait"),
+    ("statut", "corps", "erreur_attendue", "extrait", "code"),
     [
-        (401, {"error": {"code": 401}}, DestinationAuthError, "révoquée"),
         (
-            403,
-            None,
-            DestinationError,
-            "refusé l'accès",
+            401,
+            {"error": {"code": 401}},
+            DestinationAuthError,
+            "révoquée",
+            CodeErreur.ACCES_REVOQUE,
         ),
+        (403, None, DestinationError, "refusé l'accès", CodeErreur.INCONNUE),
         (
             403,
             "accessNotConfigured",
             DestinationError,
             "API Google Drive n'est pas activée",
+            CodeErreur.API_DESACTIVEE,
         ),
         (
             403,
             "storageQuotaExceeded",
             DestinationQuotaError,
             "espace de stockage",
+            CodeErreur.QUOTA_DEPASSE,
         ),
-        (404, "notFound", DestinationNotFoundError, "n'existe pas"),
-        (500, "backendError", DestinationError, "HTTP 500"),
+        (
+            403,
+            "userRateLimitExceeded",
+            DestinationError,
+            "refusé l'accès",
+            CodeErreur.LIMITATION_DE_DEBIT,
+        ),
+        (
+            403,
+            "insufficientPermissions",
+            DestinationError,
+            "refusé l'accès",
+            CodeErreur.PORTEE_MANQUANTE,
+        ),
+        (
+            429,
+            "rateLimitExceeded",
+            DestinationError,
+            "HTTP 429",
+            CodeErreur.LIMITATION_DE_DEBIT,
+        ),
+        (
+            404,
+            "notFound",
+            DestinationNotFoundError,
+            "n'existe pas",
+            CodeErreur.INTROUVABLE,
+        ),
+        (
+            500,
+            "backendError",
+            DestinationError,
+            "HTTP 500",
+            CodeErreur.FOURNISSEUR_EN_PANNE,
+        ),
+        (400, "badRequest", DestinationError, "HTTP 400", CodeErreur.INCONNUE),
     ],
 )
 async def test_les_echecs_de_drive_sont_qualifies(
@@ -754,8 +797,13 @@ async def test_les_echecs_de_drive_sont_qualifies(
     corps: Any,
     erreur_attendue: type[DestinationError],
     extrait: str,
+    code: CodeErreur,
 ) -> None:
-    """Chaque échec devient l'erreur typée que le socle sait traiter."""
+    """Chaque échec devient l'erreur typée que le socle sait traiter.
+
+    Et porte le code stable du fork (#46) : c'est lui, pas le motif de Google,
+    qui choisit le message traduit et que lisent les automatisations.
+    """
     if isinstance(corps, str):
         corps = erreur_google(statut, corps)
     aioclient_mock.get(URL_ABOUT, status=statut, json=corps or {})
@@ -764,6 +812,7 @@ async def test_les_echecs_de_drive_sont_qualifies(
         await _destination(hass).async_check_connection()
 
     assert extrait in str(erreur.value)
+    assert erreur.value.code is code
 
 
 async def test_un_401_sur_un_jeton_valide_demande_une_reautorisation(
@@ -868,10 +917,10 @@ async def test_un_acces_refuse_pendant_l_ajout_ne_laisse_pas_de_probleme_orpheli
 
 
 @pytest.mark.parametrize(
-    ("exception", "extrait"),
+    ("exception", "extrait", "code"),
     [
-        (TimeoutError(), "n'a pas répondu"),
-        (ClientError("panne réseau"), "injoignable"),
+        (TimeoutError(), "n'a pas répondu", CodeErreur.DELAI_DEPASSE),
+        (ClientError("panne réseau"), "injoignable", CodeErreur.RESEAU_INJOIGNABLE),
     ],
 )
 async def test_une_panne_reseau_devient_une_erreur_de_destination(
@@ -880,6 +929,7 @@ async def test_une_panne_reseau_devient_une_erreur_de_destination(
     aioclient_mock: AiohttpClientMocker,
     exception: Exception,
     extrait: str,
+    code: CodeErreur,
 ) -> None:
     """Ni délai dépassé ni coupure réseau ne remontent bruts aux appelants."""
     aioclient_mock.get(URL_ABOUT, exc=exception)
@@ -888,6 +938,7 @@ async def test_une_panne_reseau_devient_une_erreur_de_destination(
         await _destination(hass).async_check_connection()
 
     assert extrait in str(erreur.value)
+    assert erreur.value.code is code
     assert not isinstance(erreur.value, DestinationAuthError)
 
 
