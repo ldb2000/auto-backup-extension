@@ -558,3 +558,69 @@ def test_le_changelog_decrit_en_francais_les_apports_de_cette_version() -> None:
         "notification",
     ):
         assert expression.casefold() in texte.casefold(), expression
+
+
+### Ré-autorisation et identifiants d'application (validation métier de #19) ###
+
+
+def _blocs_de_texte(chemin: Path) -> list[str]:
+    """Paragraphes, éléments de liste et lignes de tableau, chacun aplati."""
+    blocs: list[str] = []
+    for paragraphe in re.split(r"\n\s*\n", BLOC_DE_CODE.sub("", _lire(chemin))):
+        lignes = paragraphe.splitlines()
+        if lignes and all(ligne.lstrip().startswith("|") for ligne in lignes):
+            blocs.extend(lignes)
+        else:
+            blocs.extend(re.split(r"\n\s*(?:[-*]|\d+\.)\s", paragraphe))
+    return [" ".join(re.sub(r"(?m)^\s*>\s?", "", bloc).split()) for bloc in blocs]
+
+
+@pytest.mark.parametrize(
+    "page", [*GUIDES, DOC_FAQ], ids=lambda p: str(p.relative_to(RACINE_DEPOT))
+)
+def test_un_secret_regenere_renvoie_a_supprimer_puis_rajouter_la_destination(
+    page: Path,
+) -> None:
+    """`async_step_reautoriser_destination` réutilise l'identifiant et le secret.
+
+    Un secret régénéré ou une application supprimée ne se répare donc pas par
+    « Ré-autoriser une destination » : tout passage qui l'évoque doit indiquer
+    de supprimer puis d'ajouter de nouveau la destination.
+    """
+    fautifs = [
+        bloc
+        for bloc in _blocs_de_texte(page)
+        if "régénér" in bloc.casefold()
+        and not re.search(r"supprim\w*.{0,40}(ajout|rajout)", bloc.casefold())
+    ]
+    assert not fautifs, f"secret régénéré sans « supprimer puis ajouter » : {fautifs}"
+
+
+def test_la_reautorisation_reutilise_bien_les_identifiants_enregistres() -> None:
+    """Le comportement que documente le test précédent est bien celui du code."""
+    import inspect
+
+    from custom_components.auto_backup.destinations.flow import (
+        GestionDesDestinationsMixin,
+    )
+
+    source = inspect.getsource(
+        GestionDesDestinationsMixin.async_step_reautoriser_destination
+    )
+    assert "self._client_secret = config.client_secret" in source
+    assert "if not config.utilise_oauth" in source
+
+
+def test_la_corbeille_dropbox_n_est_pas_presentee_comme_consommant_le_quota() -> None:
+    texte = _aplati(GUIDES[0]).casefold() + _aplati(DOC_FAQ).casefold()
+    assert "continue d'y occuper de la place" not in texte
+
+
+def test_le_guide_google_drive_nomme_les_champs_du_formulaire() -> None:
+    traductions = _lire(
+        RACINE_DEPOT / "custom_components" / DOMAIN / "translations" / "fr.json"
+    )
+    texte = _aplati(GUIDES[1])
+    for libelle in ("Identifiant client", "Secret client"):
+        assert f'"{libelle}"' in traductions
+        assert f"**{libelle}**" in texte
