@@ -10,6 +10,7 @@ module complète sans le répéter.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -26,10 +27,12 @@ from custom_components.auto_backup.const import (
     CONF_DESTINATIONS,
     DOMAIN,
     EVENT_UPLOAD_FAILED,
+    EVENT_UPLOAD_SUCCESSFUL,
 )
 from custom_components.auto_backup.destinations import (
     DestinationConfig,
     async_signaler_la_reauthentification,
+    notifications,
 )
 from custom_components.auto_backup.destinations.models import VALEUR_MASQUEE
 from custom_components.auto_backup.destinations.notifications import (
@@ -196,6 +199,128 @@ async def test_un_changement_de_langue_s_applique_sans_redemarrage(
     notification = _notification_d_echec(hass)
     assert notification["title"] == TITRE_FRANCAIS
     assert "Échecs consécutifs vers cette destination : 2." in notification["message"]
+
+
+async def test_le_chargement_asynchrone_des_traductions_est_bien_emprunte(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preuve directe, indépendante de l'ordre des tests, que
+    `charger_puis_creer` (notifications.py ~180-186) s'exécute et traduit.
+
+    `pytest-cov` rapporte ces lignes comme non couvertes sur `uv run pytest`
+    (suite complète). La cause n'est pas les tâches `eager_start` de Python
+    3.14 : c'est `pytest_homeassistant_custom_component`, dont la fixture
+    `translations_once` (portée session) partage un seul cache de traductions
+    entre **tous** les tests, pour ne lire les fichiers qu'une fois.
+    `auto_backup` étant une intégration réelle (non simulée par un test), ce
+    cache n'est jamais purgé pour elle entre modules : dès qu'un test,
+    n'importe où dans la suite, a demandé une langue pour ce domaine, elle
+    reste chaude pour tous les tests suivants, qui empruntent alors le chemin
+    synchrone. Un test qui compterait sur un cache réellement froid serait
+    donc fragile face à l'ordre d'exécution — on le vérifie en le faisant
+    passer seul, où il passe, puis juste après
+    `test_un_changement_de_langue_s_applique_sans_redemarrage`, où le cache
+    déjà chaud le fait échouer.
+
+    Ce test contourne le problème en forçant l'absence de cache
+    (`_textes_en_cache` retourne toujours `None`) plutôt qu'en essayant de la
+    provoquer : le chemin asynchrone est pris de façon déterministe, quel que
+    soit l'état du cache partagé, et un espion sur `async_get_translations`
+    (son seul point d'entrée) en apporte la preuve observable.
+    """
+    monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
+
+    appels: list[tuple[Any, ...]] = []
+    original = notifications.async_get_translations
+
+    async def espion(*args: Any, **kwargs: Any) -> dict[str, str]:
+        appels.append(args)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(notifications, "async_get_translations", espion)
+
+    await _charger(hass, "fr", config_factice())
+    await _echec(hass)
+
+    assert appels == [(hass, "fr", notifications.CATEGORIE_DE_TRADUCTION, {DOMAIN})], (
+        "async_get_translations n'a pas été appelé : le chemin asynchrone n'a pas couru"
+    )
+    assert _notification_d_echec(hass)["title"] == TITRE_FRANCAIS
+
+
+### Limite connue : course pendant le chargement asynchrone ###
+
+
+async def test_un_succes_pendant_le_chargement_ne_supprime_pas_la_notification_recreee(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documente le comportement actuel d'une course signalée sur l'issue.
+
+    Quand le cache de traductions manque, `_async_creer_la_notification`
+    fige les valeurs à afficher (compteur, noms masqués) dans une fermeture
+    `composer`, puis lance une tâche qui charge les traductions et crée la
+    notification à la fin (notifications.py ~163-188). Si un téléversement
+    vers la **même** destination réussit pendant que cette tâche est encore en
+    vol, `async_televersement_reussi` s'exécute d'abord et ne trouve rien à
+    retirer ; la tâche, elle, ignore ce succès et recrée malgré tout la
+    notification d'échec avec les valeurs figées avant lui. La destination
+    finit donc avec une notification d'échec périmée alors que son dernier
+    téléversement a réussi.
+
+    Ce test ne prétend pas que ce soit le comportement souhaité — seulement
+    que c'est le comportement actuel, pour qu'un futur changement soit
+    délibéré plutôt que découvert en production.
+    """
+    monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
+
+    attente = asyncio.Event()
+    original = notifications.async_get_translations
+
+    async def chargement_retarde(*args: Any, **kwargs: Any) -> dict[str, str]:
+        await attente.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(notifications, "async_get_translations", chargement_retarde)
+
+    await _charger(hass, "fr", config_factice())
+
+    # L'échec programme le chargement des traductions, qui reste en attente :
+    # aucune notification n'existe encore.
+    hass.bus.async_fire(
+        EVENT_UPLOAD_FAILED,
+        {
+            ATTR_NAME: NOM_DE_LA_SAUVEGARDE,
+            ATTR_SLUG: "abcd1234",
+            ATTR_DESTINATION: DESTINATION,
+            ATTR_DESTINATION_NAME: NOM_DE_LA_DESTINATION,
+            ATTR_ERROR: "quota exceeded",
+        },
+    )
+    assert notifications.identifiant_de_notification_d_echec(
+        DESTINATION
+    ) not in persistent_notification._async_get_or_create_notifications(hass)
+
+    # Le téléversement suivant vers la même destination réussit, avant que le
+    # chargement des traductions de l'échec précédent ne se termine.
+    hass.bus.async_fire(EVENT_UPLOAD_SUCCESSFUL, {ATTR_DESTINATION: DESTINATION})
+    assert notifications.identifiant_de_notification_d_echec(
+        DESTINATION
+    ) not in persistent_notification._async_get_or_create_notifications(hass)
+
+    # Le chargement se termine : la notification d'échec est recréée avec les
+    # valeurs figées avant le succès, qui n'en tient donc aucun compte.
+    attente.set()
+    await hass.async_block_till_done()
+
+    notification = _notification_d_echec(hass)
+    assert notification["title"] == TITRE_FRANCAIS
+    assert "Échecs consécutifs vers cette destination : 1." in notification["message"]
 
 
 ### Ré-autorisation ###
