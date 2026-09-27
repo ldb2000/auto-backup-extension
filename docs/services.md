@@ -47,6 +47,11 @@ ajoute ses options de sélection. `auto_backup.purge` n'a aucune option.
 | `auto_backup.backup_partial` | `addons` | Modules complémentaires à inclure (nom ou slug). |
 | `auto_backup.backup_partial` | `folders` | Dossiers à inclure. |
 
+Dans l'éditeur d'actions, les dossiers s'affichent sous un libellé traduit (en français :
+« Configuration », « Dossier partagé (share) », « SSL », « Médias », « Modules complémentaires
+locaux »), mais la valeur envoyée à l'action reste l'identifiant technique (`config`, `share`,
+`ssl`, `media`, `addons`) : c'est lui qu'il faut écrire dans une automatisation en YAML.
+
 Les modules complémentaires et les dossiers n'existent que sur une installation supervisée
 (Home Assistant OS ou Supervised), de même que `location` et `compressed`. Sur Home Assistant
 Container ou Core, la sauvegarde contient toujours la configuration de Home Assistant, et les
