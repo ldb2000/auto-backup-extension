@@ -2,7 +2,42 @@
 
 [![CI](https://github.com/ldb2000/auto-backup-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/ldb2000/auto-backup-extension/actions/workflows/ci.yml)
 
-Objectif : reprendre le projet https://github.com/jcwillox/hass-auto-backup et rajouter la possibilité de sauvegarder directement sur Dropbox et Google Drive. 
+Intégration Home Assistant **Auto Backup** (domaine `auto_backup`) qui crée des sauvegardes
+planifiées de votre instance, les conserve le temps voulu, et les **envoie directement sur
+Dropbox et Google Drive**.
+
+Objectif du fork : reprendre le projet [jcwillox/hass-auto-backup](https://github.com/jcwillox/hass-auto-backup)
+et lui ajouter la sauvegarde directe vers le cloud, avec une rétention propre à chaque
+destination, des entités de suivi et des notifications en cas d'échec.
+
+## Installation via HACS
+
+Le dépôt s'ajoute à HACS comme **dépôt personnalisé**. Il faut Home Assistant **2026.3.0** ou
+plus récent.
+
+1. Si l'intégration Auto Backup d'origine (jcwillox/hass-auto-backup) est installée, supprimez-la
+   d'abord : les deux partagent le domaine `auto_backup` et ne peuvent pas cohabiter. Vos
+   sauvegardes locales ne sont pas touchées.
+2. Dans HACS, ouvrez le menu **⋮ → Dépôts personnalisés**, saisissez
+   `https://github.com/ldb2000/auto-backup-extension`, choisissez le type **Intégration**, puis
+   **Ajouter**.
+3. Recherchez **Auto Backup** dans HACS, ouvrez-le, puis **Télécharger**.
+4. Redémarrez Home Assistant.
+5. **Paramètres → Appareils et services → Ajouter une intégration**, puis **Auto Backup**.
+
+Pour envoyer les sauvegardes dans le cloud, connectez ensuite un compte en suivant le guide
+[Dropbox](docs/destinations/dropbox.md) ou [Google Drive](docs/destinations/google-drive.md),
+puis ajoutez l'option `upload_to` à votre automatisation de sauvegarde.
+
+## Documentation
+
+| Page | Contenu |
+| --- | --- |
+| [Connecter un compte Dropbox](docs/destinations/dropbox.md) | Création de l'application Dropbox, portées, URI de redirection, ajout de la destination, rétention. |
+| [Connecter Google Drive](docs/destinations/google-drive.md) | Projet Google Cloud, écran de consentement, identifiants OAuth, ajout de la destination, rétention. |
+| [Services, options et rétention distante](docs/services.md) | Toutes les options des services (dont `upload_to`), rétentions locale et distante, événements, **automatisation complète** de sauvegarde quotidienne envoyée dans le cloud. |
+| [Questions fréquentes](docs/faq.md) | Taille des sauvegardes et quotas, chiffrement, portées OAuth et stockage des jetons, ré-authentification, plusieurs instances. |
+| [Index de la documentation](docs/README.md) | Toutes les pages, y compris l'architecture et la maintenance. |
 
 ## Fork et licence
 
@@ -82,7 +117,9 @@ data:
 L'option `upload_to` accepte une liste d'identifiants ou de noms de destinations. La sauvegarde
 est créée localement en premier, puis envoyée en tâche de fond, destination après destination.
 Un échec de téléversement n'empêche pas les autres destinations d'être traitées et ne supprime
-jamais la sauvegarde locale.
+jamais la sauvegarde locale. Toutes les options des services et une automatisation complète
+(sauvegarde quotidienne chiffrée, envoyée dans le cloud, avec rétention locale et distante) sont
+dans [`docs/services.md`](docs/services.md).
 
 Le **délai maximum d'un téléversement** est configurable par l'entrée « Réglages du
 téléversement » du menu d'options de l'intégration (délai par défaut : 1800 secondes, soit
@@ -222,10 +259,10 @@ crée ses entités sans redémarrage, en supprimer une retire les siennes. Le de
 nombre de sauvegardes distantes et la dernière erreur sont retrouvés après un redémarrage de
 Home Assistant — et une erreur résolue juste avant le redémarrage ne réapparaît pas.
 
-Le nombre de sauvegardes distantes est lu dans l'inventaire tenu par la rétention distante
-(issue #9), qui connaît les sauvegardes réellement déposées chez le fournisseur. Tant que cette
-fonction n'est pas livrée, le capteur suit les téléversements réussis et les purges annoncées
-par l'événement `auto_backup.remote_purge`.
+Le nombre de sauvegardes distantes est lu dans l'inventaire tenu par la rétention distante,
+qui connaît les sauvegardes réellement déposées chez le fournisseur. Si cet inventaire ne peut
+pas être lu, le capteur suit à défaut les téléversements réussis et les purges annoncées par
+l'événement `auto_backup.remote_purge`.
 
 ## Développement
 
