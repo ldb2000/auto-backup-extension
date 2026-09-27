@@ -295,7 +295,7 @@ def decrire_l_exception(erreur: BaseException) -> str:
     Le nom de la classe est du code, pas un texte de fournisseur : il reste
     lisible. Une exception sans message (`TimeoutError()`) se réduit à son type.
     """
-    nom = type(erreur).__qualname__
+    nom = type(erreur).__name__
     try:
         message = str(erreur)
     except Exception:  # un `__str__` défaillant ne doit rien casser

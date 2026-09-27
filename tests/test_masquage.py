@@ -14,12 +14,17 @@ qu'ils n'apparaissent **pas** en sortie.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from custom_components.auto_backup.destinations.masquage import (
     LONGUEUR_MIN_SUITE_OPAQUE,
+    decrire_l_exception,
+    journaliser_une_exception,
     masquer,
     masquer_un_nom,
+    trace_masquee,
 )
 from custom_components.auto_backup.destinations.models import VALEUR_MASQUEE
 
@@ -439,3 +444,161 @@ def test_un_texte_plus_court_que_la_borne_est_rendu_tel_quel() -> None:
 def test_un_texte_vide_reste_vide() -> None:
     """Aucune passe ne fabrique de contenu à partir de rien."""
     assert masquer("") == ""
+
+
+### Exceptions et journal (#35) ###
+
+URL_DE_SESSION = (
+    "https://www.googleapis.invalid/upload/drive/v3/files"
+    f"?uploadType=resumable&upload_id={IDENTIFIANT_DE_SESSION}"
+)
+JOURNAL_DE_TEST = "custom_components.auto_backup.destinations.test_masquage"
+
+
+def _leve(erreur: BaseException) -> BaseException:
+    """Lève puis rattrape l'erreur, pour qu'elle porte une vraie trace de pile."""
+    try:
+        raise erreur
+    except BaseException as rattrapee:
+        return rattrapee
+
+
+def _chaine_avec_secrets() -> BaseException:
+    """Erreur réseau portant l'URI de session, cause d'une erreur de plus haut."""
+    try:
+        try:
+            raise ConnectionError(f"connexion perdue vers {URL_DE_SESSION}")
+        except ConnectionError as cause:
+            raise RuntimeError(f"envoi interrompu, jeton {JETON_GOOGLE}") from cause
+    except RuntimeError as erreur:
+        return erreur
+
+
+def test_la_description_d_une_exception_garde_le_type_et_masque_le_message() -> None:
+    """Le type reste lisible, le message passe par `masquer()`."""
+    description = decrire_l_exception(
+        ConnectionError(f"connexion perdue vers {URL_DE_SESSION}")
+    )
+
+    assert description.startswith("ConnectionError: connexion perdue vers ")
+    assert IDENTIFIANT_DE_SESSION not in description
+
+
+def test_une_exception_sans_message_se_reduit_a_son_type() -> None:
+    """`TimeoutError()` n'a pas de message : son type suffit."""
+    assert decrire_l_exception(TimeoutError()) == "TimeoutError"
+
+
+def test_un_message_illisible_ne_fait_pas_echouer_la_description() -> None:
+    """Un `__str__` défaillant ne doit pas faire échouer la journalisation."""
+
+    class ErreurIllisible(Exception):
+        def __str__(self) -> str:
+            raise ValueError("illisible")
+
+    assert decrire_l_exception(ErreurIllisible()) == (
+        "ErreurIllisible: <message illisible>"
+    )
+
+
+def test_la_trace_masquee_ne_contient_aucun_secret_de_la_chaine() -> None:
+    """Cause et conséquence sont masquées, les cadres restent intacts."""
+    erreur = _chaine_avec_secrets()
+    erreur.add_note(f"note du fournisseur : Bearer {JETON_DROPBOX}")
+
+    trace = trace_masquee(erreur)
+
+    for secret in (IDENTIFIANT_DE_SESSION, JETON_GOOGLE, JETON_DROPBOX):
+        assert secret not in trace
+    # Le diagnostic reste possible : types, lien de causalité, fonction et fichier.
+    assert trace.startswith("Traceback (most recent call last):")
+    assert "ConnectionError: connexion perdue vers" in trace
+    assert "direct cause of the following exception" in trace
+    assert "RuntimeError: envoi interrompu" in trace
+    assert "_chaine_avec_secrets" in trace
+    assert "test_masquage.py" in trace
+    assert "note du fournisseur : Bearer ***" in trace
+
+
+def _contexte_implicite(*, supprime: bool) -> BaseException:
+    """Erreur levée pendant la gestion d'une autre, lien gardé ou supprimé."""
+    try:
+        try:
+            raise KeyError(f"refresh_token={RAFRAICHISSEMENT_GOOGLE}")
+        except KeyError:
+            if supprime:
+                raise ValueError("second échec") from None
+            raise ValueError("second échec")  # noqa: B904 — contexte voulu
+    except ValueError as erreur:
+        return erreur
+
+
+def test_la_trace_masquee_suit_aussi_le_contexte_implicite() -> None:
+    """Une erreur levée pendant la gestion d'une autre garde ce lien, masqué."""
+    trace = trace_masquee(_contexte_implicite(supprime=False))
+
+    assert "During handling of the above exception" in trace
+    assert "KeyError" in trace
+    assert "ValueError: second échec" in trace
+    assert RAFRAICHISSEMENT_GOOGLE not in trace
+
+
+def test_un_contexte_supprime_n_apparait_pas_dans_la_trace() -> None:
+    """`raise … from None` masque le contexte, comme la trace standard."""
+    trace = trace_masquee(_contexte_implicite(supprime=True))
+
+    assert "KeyError" not in trace
+    assert "ValueError: second échec" in trace
+
+
+def test_une_exception_jamais_levee_se_reduit_a_sa_description() -> None:
+    """Sans trace de pile, seule la description masquée subsiste."""
+    erreur = RuntimeError(f"jeton {JETON_DROPBOX}")
+
+    assert trace_masquee(erreur) == decrire_l_exception(erreur)
+
+
+def test_une_chaine_circulaire_ne_boucle_pas() -> None:
+    """Une cause qui se désigne elle-même ne fait pas tourner la trace sans fin."""
+    erreur = _leve(RuntimeError("boucle"))
+    erreur.__cause__ = erreur
+
+    assert trace_masquee(erreur).count("RuntimeError: boucle") == 1
+
+
+def test_journaliser_une_exception_masque_le_message_au_niveau_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """En `error` : le message du fork, puis le type et le message masqués."""
+    journal = logging.getLogger(JOURNAL_DE_TEST)
+
+    with caplog.at_level(logging.INFO, logger=JOURNAL_DE_TEST):
+        journaliser_une_exception(
+            journal, _chaine_avec_secrets(), "Échec vers « %s »", "Mon Drive"
+        )
+
+    (enregistrement,) = caplog.records
+    assert enregistrement.levelno == logging.ERROR
+    assert enregistrement.exc_info is None
+    assert enregistrement.getMessage().startswith(
+        "Échec vers « Mon Drive » : RuntimeError: envoi interrompu"
+    )
+    assert JETON_GOOGLE not in caplog.text
+
+
+def test_journaliser_une_exception_ne_donne_la_trace_qu_en_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """En `debug` : la trace suit, masquée, sans aucun secret de la chaîne."""
+    journal = logging.getLogger(JOURNAL_DE_TEST)
+
+    with caplog.at_level(logging.DEBUG, logger=JOURNAL_DE_TEST):
+        journaliser_une_exception(journal, _chaine_avec_secrets(), "Échec")
+
+    niveaux = [enregistrement.levelno for enregistrement in caplog.records]
+    assert niveaux == [logging.ERROR, logging.DEBUG]
+    assert "Traceback (most recent call last):" in caplog.text
+    assert "ConnectionError" in caplog.text
+    for secret in (IDENTIFIANT_DE_SESSION, JETON_GOOGLE):
+        assert secret not in caplog.text
+    assert all(enregistrement.exc_info is None for enregistrement in caplog.records)
