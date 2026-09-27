@@ -44,6 +44,14 @@ Deux garanties structurent tout le module :
    `RemoteDestination` demande à chaque fournisseur de borner lui-même ses
    appels, bien plus finement.
 
+3. **Le registre se lit dossier par dossier.** Chaque entrée retient le dossier
+   distant où la sauvegarde a été déposée (issue #58). Quand le dossier d'une
+   destination change (#51), les entrées de l'ancien dossier restent au registre
+   — les fichiers existent toujours chez le fournisseur — mais ne sont plus ni
+   comptées par le capteur, ni candidates à la purge, ni reconnues au listage :
+   seul compte le dossier configuré. Revenir à l'ancien dossier les rend de
+   nouveau comptées et purgeables, puisque rien n'a été effacé.
+
 La purge se déclenche à deux moments :
 
 - après chaque téléversement réussi, si l'option upstream `auto_purge` est active
@@ -62,6 +70,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
@@ -72,26 +81,33 @@ from ..const import (
     ATTR_CREATED_AT,
     ATTR_DESTINATION,
     ATTR_DESTINATION_NAME,
+    ATTR_FOLDER,
     ATTR_REMOTE_ID,
     ATTR_REMOTE_IDS,
     ATTR_SIZE,
     ATTR_SLUG,
     CONF_AUTO_PURGE,
+    CONF_DESTINATION_ID,
+    CONF_DESTINATIONS,
+    CONF_FOLDER,
     DATA_DESTINATIONS,
     DATA_REMOTE_BACKUPS,
     DATA_REMOTE_PURGE,
+    DEFAULT_DESTINATION_FOLDER,
     DEFAULT_PURGE_TIMEOUT,
     DOMAIN,
     EVENT_REMOTE_PURGE,
     EVENT_UPLOAD_SUCCESSFUL,
     SERVICE_PURGE,
     STORAGE_KEY_REMOTE_BACKUPS,
+    STORAGE_MINOR_VERSION_REMOTE_BACKUPS,
     STORAGE_VERSION_REMOTE_BACKUPS,
 )
 from .destination import RemoteDestination
 from .errors import DestinationError, DestinationNotFoundError
 from .masquage import journaliser_une_exception, masquer
 from .models import RemoteBackup
+from .schema import chemin_de_dossier
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,6 +173,19 @@ def _date_utc(valeur: Any) -> datetime | None:
     return None
 
 
+def _dossier(valeur: Any) -> str | None:
+    """Renvoie un dossier distant normalisé, ou `None` s'il est inexploitable.
+
+    La normalisation est celle de la configuration (`chemin_de_dossier()`) :
+    un dossier enregistré au registre se compare ainsi à l'identique au
+    dossier configuré, `Sauvegardes/HA` et sa variante pleine chasse compris.
+    """
+    try:
+        return chemin_de_dossier(valeur)
+    except vol.Invalid:
+        return None
+
+
 def _taille(valeur: Any) -> int | None:
     """Renvoie une taille en octets exploitable, ou `None`."""
     if isinstance(valeur, bool) or not isinstance(valeur, int) or valeur < 0:
@@ -171,6 +200,13 @@ class EntreeRegistre:
     C'est la preuve de provenance qui autorise la purge à supprimer le fichier
     correspondant : ce qui n'est pas ici (et ne porte pas le marqueur) n'est
     jamais touché.
+
+    `folder` est le dossier distant où la sauvegarde a été déposée, normalisé
+    comme le dossier d'une destination (issue #58). Il vaut `None` quand il est
+    inconnu — entrée d'une destination déjà supprimée lors de la migration, ou
+    dossier illisible dans un fichier modifié à la main : l'entrée est alors
+    conservée, mais n'appartient à aucun dossier, donc n'est ni comptée ni
+    purgeable par le registre.
     """
 
     remote_id: str
@@ -178,6 +214,7 @@ class EntreeRegistre:
     slug: str | None = None
     created_at: datetime | None = None
     size: int | None = None
+    folder: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Représentation JSON, telle qu'elle est persistée par le `Store`."""
@@ -189,6 +226,7 @@ class EntreeRegistre:
                 self.created_at.isoformat() if self.created_at is not None else None
             ),
             ATTR_SIZE: self.size,
+            ATTR_FOLDER: self.folder,
         }
 
     @classmethod
@@ -209,7 +247,79 @@ class EntreeRegistre:
             slug=slug if isinstance(slug, str) and slug.strip() else None,
             created_at=_date_utc(donnees.get(ATTR_CREATED_AT)),
             size=_taille(donnees.get(ATTR_SIZE)),
+            folder=_dossier(donnees.get(ATTR_FOLDER)),
         )
+
+
+type ResolveurDeDossiers = Callable[[], Mapping[str, str]]
+
+
+class _StockageRegistre(Store[dict[str, list[dict[str, Any]]]]):
+    """`Store` du registre, doté de sa migration de version (issue #58).
+
+    La version 1.1 ne retenait pas le dossier distant des entrées. La
+    migration vers la 1.2 rattache chaque entrée **sans dossier** au dossier
+    configuré, au moment de la migration, pour sa destination : c'est là que
+    le fork a déposé toutes ses sauvegardes tant que le dossier ne pouvait pas
+    changer (avant #51), et l'hypothèse la plus sûre sinon.
+
+    La migration est **sans perte** : aucune entrée n'est retirée, un contenu
+    inattendu est rendu tel quel (le chargement l'écarte ensuite, comme
+    avant). Elle est **idempotente** : une entrée qui a déjà un dossier le
+    garde. Une entrée dont la destination n'est plus configurée garde un
+    dossier inconnu (`None`) : on ne devine pas où elle a été déposée, et elle
+    ne sera ni comptée ni purgée par le registre — la destination n'existant
+    plus, rien ne la compterait ni ne la purgerait de toute façon.
+    """
+
+    def __init__(self, hass: HomeAssistant, resolveur: ResolveurDeDossiers) -> None:
+        """Prépare le stockage ; `resolveur` donne le dossier par destination."""
+        super().__init__(
+            hass,
+            STORAGE_VERSION_REMOTE_BACKUPS,
+            f"{DOMAIN}.{STORAGE_KEY_REMOTE_BACKUPS}",
+            minor_version=STORAGE_MINOR_VERSION_REMOTE_BACKUPS,
+        )
+        self._resolveur = resolveur
+
+    async def _async_migrate_func(
+        self,
+        old_major_version: int,
+        old_minor_version: int,
+        old_data: Any,
+    ) -> Any:
+        """Rattache les entrées sans dossier au dossier configuré."""
+        if old_major_version > STORAGE_VERSION_REMOTE_BACKUPS:
+            # Home Assistant refuse déjà de lire une version majeure future ;
+            # garde-fou si ce comportement changeait.
+            raise NotImplementedError
+        return migrer_le_registre(old_data, self._resolveur())
+
+
+def migrer_le_registre(donnees: Any, dossiers: Mapping[str, str]) -> Any:
+    """Associe un dossier aux entrées du registre qui n'en ont pas (issue #58).
+
+    `dossiers` associe à chaque destination configurée son dossier distant
+    normalisé. Fonction pure, sans effet de bord : voir `_StockageRegistre`
+    pour les garanties (sans perte, idempotente, destination absente).
+    """
+    if not isinstance(donnees, Mapping):
+        return donnees
+    migrees: dict[Any, Any] = {}
+    for destination_id, brutes in donnees.items():
+        if not isinstance(brutes, list):
+            migrees[destination_id] = brutes
+            continue
+        dossier = (
+            dossiers.get(destination_id) if isinstance(destination_id, str) else None
+        )
+        migrees[destination_id] = [
+            {**brute, ATTR_FOLDER: dossier}
+            if isinstance(brute, Mapping) and brute.get(ATTR_FOLDER) is None
+            else brute
+            for brute in brutes
+        ]
+    return migrees
 
 
 class RegistreSauvegardesDistantes:
@@ -221,16 +331,19 @@ class RegistreSauvegardesDistantes:
     **distantes**.
 
     Le contenu est volontairement pauvre — identifiant distant, nom, slug, date,
-    taille — et ne porte aucun secret : ni jeton, ni identifiant de compte.
+    taille, dossier distant — et ne porte aucun secret : ni jeton, ni
+    identifiant de compte.
+
+    `resolveur` ne sert qu'à la migration du stockage (issue #58) : il donne,
+    par destination, le dossier distant configuré. Sans lui, une entrée sans
+    dossier garde un dossier inconnu.
     """
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(
+        self, hass: HomeAssistant, resolveur: ResolveurDeDossiers | None = None
+    ) -> None:
         """Prépare un registre vide adossé au stockage de Home Assistant."""
-        self._store: Store[dict[str, list[dict[str, Any]]]] = Store(
-            hass,
-            STORAGE_VERSION_REMOTE_BACKUPS,
-            f"{DOMAIN}.{STORAGE_KEY_REMOTE_BACKUPS}",
-        )
+        self._store = _StockageRegistre(hass, resolveur or dict)
         self._entrees: dict[str, dict[str, EntreeRegistre]] = {}
 
     async def async_load(self) -> None:
@@ -267,8 +380,27 @@ class RegistreSauvegardesDistantes:
         )
 
     def entrees(self, destination_id: str) -> list[EntreeRegistre]:
-        """Entrées connues pour cette destination, dans l'ordre d'ajout."""
+        """Entrées connues pour cette destination, tous dossiers confondus."""
         return list(self._entrees.get(destination_id, {}).values())
+
+    def entrees_du_dossier(
+        self, destination_id: str, dossier: str
+    ) -> list[EntreeRegistre]:
+        """Entrées de cette destination déposées dans ce dossier (issue #58).
+
+        C'est la vue qui compte pour le capteur et la purge : après un
+        changement de dossier, seules les sauvegardes du dossier configuré sont
+        gérées. Le dossier est comparé une fois normalisé, comme à la
+        configuration ; un dossier inexploitable ne désigne aucune entrée.
+        """
+        normalise = _dossier(dossier)
+        if normalise is None:
+            return []
+        return [
+            entree
+            for entree in self._entrees.get(destination_id, {}).values()
+            if entree.folder == normalise
+        ]
 
     def entree(self, destination_id: str, remote_id: str) -> EntreeRegistre | None:
         """Entrée d'une sauvegarde distante, ou `None` si elle est inconnue."""
@@ -303,9 +435,13 @@ class RegistreSauvegardesDistantes:
 
 @callback
 def entrees_du_registre(
-    hass: HomeAssistant, destination_id: str
+    hass: HomeAssistant, destination_id: str, dossier: str
 ) -> list[EntreeRegistre]:
-    """Entrées du registre persistant pour cette destination, vide si absent.
+    """Entrées du registre pour cette destination et ce dossier, vide si absent.
+
+    Seules les entrées déposées dans `dossier` — le dossier configuré de la
+    destination — sont renvoyées (issue #58) : celles d'un ancien dossier ne
+    doivent pas servir de preuve de provenance dans le nouveau.
 
     C'est la porte d'entrée des **fournisseurs** dans le registre : celui qui ne
     peut pas attacher le marqueur `auto_backup` au fichier distant — Dropbox, à
@@ -321,7 +457,7 @@ def entrees_du_registre(
     registre = hass.data.get(DATA_REMOTE_BACKUPS)
     if not isinstance(registre, RegistreSauvegardesDistantes):
         return []
-    return registre.entrees(destination_id)
+    return registre.entrees_du_dossier(destination_id, dossier)
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,6 +544,7 @@ class CoordinateurPurgeDistante:
                 # le fournisseur ne date pas ses fichiers.
                 created_at=dt_util.utcnow(),
                 size=_taille(donnees.get(ATTR_SIZE)),
+                folder=self._dossier_du_depot(destination_id, donnees),
             ),
         )
 
@@ -421,6 +558,22 @@ class CoordinateurPurgeDistante:
             return
 
         await self.async_purger_destination(destination_id)
+
+    def _dossier_du_depot(
+        self, destination_id: str, donnees: Mapping[str, Any]
+    ) -> str | None:
+        """Dossier distant où la sauvegarde vient d'être déposée (issue #58).
+
+        L'événement l'annonce (`folder`) : c'est le dossier réellement utilisé
+        par le téléversement, même si la destination a été modifiée pendant
+        l'envoi. À défaut — émetteur plus ancien —, le dossier configuré de la
+        destination en tient lieu.
+        """
+        dossier = _dossier(donnees.get(ATTR_FOLDER))
+        if dossier is not None:
+            return dossier
+        destination = self._destination(destination_id)
+        return destination.folder if destination is not None else None
 
     async def async_purger_toutes(self) -> dict[str, list[str]]:
         """Purge chaque destination configurée, l'une après l'autre.
@@ -478,7 +631,7 @@ class CoordinateurPurgeDistante:
         if distantes is None:
             return []
 
-        candidats = self._candidats(destination_id, distantes)
+        candidats = self._candidats(destination, distantes)
         a_supprimer = self._a_supprimer(destination, candidats)
         if not a_supprimer:
             _LOGGER.debug(
@@ -544,18 +697,30 @@ class CoordinateurPurgeDistante:
         return None
 
     def _candidats(
-        self, destination_id: str, distantes: Sequence[RemoteBackup]
+        self, destination: RemoteDestination, distantes: Sequence[RemoteBackup]
     ) -> list[CandidatPurge]:
         """Ne retient que les sauvegardes dont le fork est l'auteur.
 
-        Une sauvegarde est retenue si elle figure au registre **ou** si elle
-        porte le marqueur du fork. Toute autre — un fichier déposé par
-        l'utilisateur, la sauvegarde d'un autre outil — est ignorée : elle ne
-        peut donc jamais être supprimée, quelle que soit la rétention.
+        Une sauvegarde est retenue si elle figure au registre **pour le dossier
+        configuré** ou si elle porte le marqueur du fork. Toute autre — un
+        fichier déposé par l'utilisateur, la sauvegarde d'un autre outil — est
+        ignorée : elle ne peut donc jamais être supprimée, quelle que soit la
+        rétention.
+
+        Une entrée du registre inscrite pour un autre dossier (issue #58) n'est
+        pas une preuve de provenance ici : le listage ne porte que sur le
+        dossier configuré, et seules ses sauvegardes entrent dans la rétention,
+        `retention_count` compris.
         """
+        inscrites = {
+            entree.remote_id: entree
+            for entree in self._registre.entrees_du_dossier(
+                destination.destination_id, destination.folder
+            )
+        }
         candidats: list[CandidatPurge] = []
         for distante in distantes:
-            entree = self._registre.entree(destination_id, distante.remote_id)
+            entree = inscrites.get(distante.remote_id)
             if entree is None and not porte_le_marqueur(distante):
                 _LOGGER.debug(
                     "Sauvegarde distante « %s » ignorée par la purge : elle n'a pas "
@@ -718,7 +883,26 @@ async def async_setup_remote_purge(
     localement n'aurait alors purgé aucune destination —, et modifier
     `manager.py` aurait touché du code upstream, ce que le fork s'interdit.
     """
-    registre = RegistreSauvegardesDistantes(hass)
+
+    @callback
+    def dossiers_configures() -> dict[str, str]:
+        """Dossier distant normalisé de chaque destination des options.
+
+        Les options brutes sont lues plutôt que le gestionnaire : une
+        destination momentanément écartée (fournisseur inconnu, autre champ
+        invalide) garde ainsi le rattachement de ses entrées à la migration.
+        """
+        dossiers: dict[str, str] = {}
+        for brute in entry.options.get(CONF_DESTINATIONS, []):
+            if not isinstance(brute, Mapping):
+                continue
+            destination_id = brute.get(CONF_DESTINATION_ID)
+            dossier = _dossier(brute.get(CONF_FOLDER, DEFAULT_DESTINATION_FOLDER))
+            if isinstance(destination_id, str) and dossier is not None:
+                dossiers.setdefault(destination_id, dossier)
+        return dossiers
+
+    registre = RegistreSauvegardesDistantes(hass, dossiers_configures)
     await registre.async_load()
     hass.data[DATA_REMOTE_BACKUPS] = registre
 

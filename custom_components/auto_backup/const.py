@@ -175,11 +175,15 @@ CONF_PROVIDER_DATA = "provider_data"
 # `destinations/retention.py` ; `manager.py` n'est pas touché.
 
 # Registre persistant des sauvegardes déposées par le fork chez un fournisseur :
-# destination -> liste d'entrées {remote_id, slug, name, created_at, size}. C'est
-# lui qui rend une sauvegarde distante purgeable : un fichier que l'utilisateur a
-# déposé lui-même n'y figure pas, donc n'est jamais supprimé (cf. l'ADR).
+# destination -> liste d'entrées {remote_id, slug, name, created_at, size,
+# folder}. C'est lui qui rend une sauvegarde distante purgeable : un fichier que
+# l'utilisateur a déposé lui-même n'y figure pas, donc n'est jamais supprimé
+# (cf. l'ADR). La version mineure 2 (issue #58) ajoute à chaque entrée le dossier
+# distant où elle a été déposée ; les entrées de la version 1.1 y sont rattachées
+# au dossier configuré lors de la migration (cf. `retention.py`).
 STORAGE_KEY_REMOTE_BACKUPS = "remote_backups"
 STORAGE_VERSION_REMOTE_BACKUPS = 1
+STORAGE_MINOR_VERSION_REMOTE_BACKUPS = 2
 
 DATA_REMOTE_BACKUPS: HassKey[RegistreSauvegardesDistantes] = HassKey(
     f"{DOMAIN}_remote_backups"
@@ -193,6 +197,9 @@ DATA_REMOTE_PURGE: HassKey[CoordinateurPurgeDistante] = HassKey(
 # ATTR_SIZE, ATTR_SLUG et ATTR_NAME ci-dessus.
 ATTR_CREATED_AT = "created_at"
 ATTR_REMOTE_IDS = "remote_ids"
+# Dossier distant où une sauvegarde a été déposée (issue #58) : champ des entrées
+# du registre et de l'événement `auto_backup.upload_successful`.
+ATTR_FOLDER = "folder"
 
 # Délai maximum, en secondes, d'un appel réseau du coordinateur de purge : un
 # listage de destination, une suppression de sauvegarde. C'est un **filet de

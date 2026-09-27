@@ -303,6 +303,7 @@ async def _inscrire(
             slug=slug,
             created_at=dt_util.utcnow() - timedelta(days=age_en_jours),
             size=TAILLE,
+            folder=DOSSIER,
         ),
     )
 

@@ -142,7 +142,8 @@ nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto
 **Événements** : trois événements sont émis pendant le téléversement :
 - `auto_backup.upload_start` : le téléversement vers une destination commence ;
 - `auto_backup.upload_successful` : le téléversement a réussi (champs : `name`, `slug`,
-  `destination`, `destination_name`, `size`, `remote_id`) ;
+  `destination`, `destination_name`, `size`, `remote_id`, `folder` — le dossier distant
+  utilisé) ;
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`, `error_code`).
 

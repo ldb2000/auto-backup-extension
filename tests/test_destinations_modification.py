@@ -675,7 +675,9 @@ async def test_le_registre_est_conserve_et_la_nouvelle_retention_s_applique(
     for index in range(3):
         await registre.async_enregistrer(
             DESTINATION_TEST,
-            EntreeRegistre(remote_id=f"s{index}", name=f"s{index}"),
+            EntreeRegistre(
+                remote_id=f"s{index}", name=f"s{index}", folder="Sauvegardes"
+            ),
         )
 
     resultat = await _formulaire(hass, entree, ouvrir_les_options, DESTINATION_TEST)

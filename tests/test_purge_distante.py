@@ -170,6 +170,7 @@ async def _deposer(
                 slug=sauvegarde.slug,
                 created_at=date,
                 size=sauvegarde.size,
+                folder=destination.folder,
             ),
         )
     return sauvegarde
@@ -663,6 +664,7 @@ async def test_le_registre_survit_au_redemarrage(
             "created_at"
         ],
         ATTR_SIZE: 42,
+        "folder": "Sauvegardes",
     }
 
     assert await hass.config_entries.async_reload(entree.entry_id)
@@ -673,6 +675,7 @@ async def test_le_registre_survit_au_redemarrage(
     assert relue.slug == SLUG
     assert relue.size == 42
     assert relue.created_at is not None
+    assert relue.folder == "Sauvegardes"
 
 
 async def test_un_registre_illisible_ne_bloque_pas_le_demarrage(

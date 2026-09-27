@@ -160,11 +160,13 @@ lisent dans `trigger.event.data`.
 | `auto_backup.backup_failed` | la création d'une sauvegarde échoue | `name`, `error` |
 | `auto_backup.purged_backups` | des sauvegardes locales ont été supprimées | `backups` (liste des slugs) |
 | `auto_backup.upload_start` | l'envoi vers une destination commence | `name`, `slug`, `destination`, `destination_name` |
-| `auto_backup.upload_successful` | l'envoi vers une destination a réussi | `name`, `slug`, `destination`, `destination_name`, `size`, `remote_id` |
+| `auto_backup.upload_successful` | l'envoi vers une destination a réussi | `name`, `slug`, `destination`, `destination_name`, `size`, `remote_id`, `folder` |
 | `auto_backup.upload_failed` | l'envoi vers une destination a échoué | `name`, `slug`, `destination`, `destination_name`, `error`, `error_code` |
 | `auto_backup.remote_purge` | la purge d'une destination a supprimé au moins une sauvegarde | `destination`, `destination_name`, `remote_ids` |
 
 `destination` est l'identifiant de la destination et `destination_name` son nom lisible.
+Dans `auto_backup.upload_successful`, `folder` est le dossier distant où la sauvegarde a été
+déposée.
 Dans `auto_backup.upload_failed`, deux champs décrivent la cause de l'échec :
 
 - `error_code` est un **code stable**, le même quelle que soit la langue et quel que soit le
