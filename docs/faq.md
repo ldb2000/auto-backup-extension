@@ -37,8 +37,9 @@ Libérez de la place, ou réduisez la rétention de la destination.
 
 Gardez en tête que l'offre gratuite des fournisseurs est modeste (à la date de rédaction :
 2 Go chez Dropbox Basic, 15 Go chez Google, partagés avec Gmail et Google Photos). Les
-sauvegardes supprimées par la rétention libèrent l'espace **immédiatement chez Google Drive**
-(suppression définitive, sans corbeille) ; chez Dropbox, elles passent par la corbeille Dropbox.
+sauvegardes supprimées par la rétention libèrent l'espace de votre compte chez les deux
+fournisseurs. Chez Google Drive, la suppression est définitive (sans corbeille) ; chez Dropbox,
+les fichiers supprimés restent récupérables pendant la durée prévue par votre offre.
 
 ### Y a-t-il une taille maximale de sauvegarde ?
 

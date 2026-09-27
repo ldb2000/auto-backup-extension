@@ -113,7 +113,9 @@ chaque semaine.
    Home Assistant vous affiche l'adresse exacte à l'étape « Identifiants de votre application »
    du flux d'ajout : le plus sûr est de la copier depuis là.
 5. Validez : Google affiche l'**ID client** et le **code secret du client**. Gardez-les sous la
-   main, le secret n'est plus affiché ensuite (vous pourrez en régénérer un).
+   main, le secret n'est plus affiché ensuite. Vous pourrez en régénérer un, mais une
+   régénération impose de **supprimer puis ajouter de nouveau** la destination dans Home
+   Assistant (voir [Durée de vie de l'autorisation](#durée-de-vie-de-lautorisation)).
 
 Laissez le champ **Origines JavaScript autorisées** vide : Auto Backup n'en utilise pas.
 
@@ -121,7 +123,8 @@ Laissez le champ **Origines JavaScript autorisées** vide : Auto Backup n'en uti
 
 1. **Paramètres > Appareils et services > Auto Backup > Configurer**.
 2. Choisissez **Ajouter une destination**, puis **Google Drive**.
-3. Collez l'**ID client** et le **code secret du client**. Le secret est masqué à la saisie,
+3. Collez l'**ID client** de Google dans le champ **Identifiant client**, et le **code secret du
+   client** dans le champ **Secret client**. Le secret est masqué à la saisie,
    conservé dans votre entrée de configuration et n'apparaît dans aucun journal.
 4. Une fenêtre s'ouvre sur l'écran de consentement Google : choisissez le compte, puis
    autorisez.
@@ -289,17 +292,26 @@ nécessaire.
 Le jeton d'accès de Google expire au bout d'une heure ; Auto Backup le renouvelle tout seul
 avec le jeton de rafraîchissement, avant chaque opération. Vous n'avez rien à faire.
 
-L'accès peut malgré tout être révoqué :
+L'accès peut malgré tout être perdu. Home Assistant crée alors un **problème** nommant la
+destination concernée — qu'il ait constaté le refus en renouvelant le jeton ou que Drive ait
+rejeté un jeton pourtant valide (HTTP 401) ; les autres destinations continuent de fonctionner.
+La façon de la remettre en service dépend de la cause.
 
-- vous l'avez retiré depuis [votre compte Google](https://myaccount.google.com/permissions) ;
-- l'application est restée en mode « Test » et les 7 jours sont écoulés ;
-- le secret client a été régénéré, ou l'application supprimée du projet.
+**L'autorisation seule est à renouveler** quand :
 
-Home Assistant crée alors un **problème** nommant la destination concernée — qu'il ait
-constaté le refus en renouvelant le jeton ou que Drive ait rejeté un jeton pourtant valide
-(HTTP 401) ; les autres destinations continuent de fonctionner. Pour la remettre en service : options d'Auto Backup,
-**Ré-autoriser une destination**, puis la destination en question. Ses réglages (nom, dossier,
-rétention) sont conservés, seul l'accès est renouvelé.
+- vous avez retiré l'accès depuis [votre compte Google](https://myaccount.google.com/permissions) ;
+- l'application est restée en mode « Test » et les 7 jours sont écoulés.
+
+Dans ces deux cas : options d'Auto Backup, **Ré-autoriser une destination**, puis la destination
+en question. Ses réglages (nom, dossier, rétention) sont conservés, seul l'accès est renouvelé.
+
+**Les identifiants de l'application ont changé** quand le secret client a été régénéré, ou que
+l'ID client a été supprimé du projet. La ré-autorisation réutilise l'ID client et le secret
+enregistrés : elle échouerait. **Supprimez la destination, puis ajoutez-la de nouveau** avec les
+nouveaux identifiants, en reprenant **le même dossier distant**. Si ces nouveaux identifiants
+appartiennent à un **autre projet Google Cloud**, la portée `drive.file` ne lui laisse pas voir
+les fichiers déposés par l'ancien : les sauvegardes existantes ne seront plus ni listées ni
+purgées, retirez-les à la main (voir la [FAQ](../faq.md#home-assistant-me-demande-de-ré-autoriser-une-destination--que-faire-)).
 
 ## Supprimer la destination
 

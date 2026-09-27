@@ -136,12 +136,14 @@ Auto Backup demande à Dropbox un **accès hors-ligne**
 jeton de rafraîchissement. Votre instance renouvelle donc l'accès toute seule, indéfiniment,
 sans que vous ayez à revenir ici.
 
-Si vous révoquez l'accès depuis
-[les applications connectées de votre compte Dropbox](https://www.dropbox.com/account/connected_apps),
-ou si vous supprimez l'application dans la console développeur, Home Assistant s'en aperçoit
-au premier appel : un problème apparaît dans **Paramètres → Système → Réparations**, nommant
-la destination concernée. Les autres destinations continuent de fonctionner. Pour la remettre
-en service : **Configurer → Ré-autoriser une destination**.
+Si l'accès est perdu, Home Assistant s'en aperçoit au premier appel : un problème apparaît dans
+**Paramètres → Système → Réparations**, nommant la destination concernée. Les autres
+destinations continuent de fonctionner. La façon de la remettre en service dépend de la cause :
+
+| Cause | Que faire |
+| --- | --- |
+| Vous avez révoqué l'accès depuis [les applications connectées de votre compte Dropbox](https://www.dropbox.com/account/connected_apps) | **Configurer → Ré-autoriser une destination** : l'application et son secret sont inchangés, seule l'autorisation est à renouveler. |
+| Vous avez **supprimé l'application** dans la console développeur, ou **régénéré son secret** | La ré-autorisation réutilise la clé et le secret enregistrés : elle échouerait. **Supprimez la destination, puis ajoutez-la de nouveau** avec la clé et le secret de l'application (nouvelle ou actuelle), en reprenant **le même dossier distant** : les sauvegardes déjà déposées restent reconnues à leur nom et soumises à la rétention. |
 
 ## Téléverser une sauvegarde
 
@@ -333,9 +335,8 @@ un clic — que diagnostiquer plus tard une destination muette.
   garantit pas l'ordre du listage d'un appel à l'autre. Aucune sauvegarde n'est supprimée par
   erreur : l'algorithme de purge ne supprime que ce qu'il a lui-même reconnu. Recommandation :
   faites du ménage si le message revient.
-- **La corbeille Dropbox n'est pas vidée** : un fichier supprimé par la rétention y reste le
-  temps que votre offre Dropbox prévoit, et continue d'y occuper de la place. C'est à vous de la
-  vider si besoin.
+- **La corbeille Dropbox n'est pas vidée** : un fichier supprimé par la rétention reste
+  récupérable depuis les fichiers supprimés de Dropbox pendant la durée prévue par votre offre.
 - **Restaurer une sauvegarde depuis Dropbox n'est pas possible** depuis Home Assistant :
   téléchargez le fichier `.tar` depuis Dropbox, puis utilisez la restauration habituelle. Auto
   Backup ne demande d'ailleurs pas la permission de relire vos fichiers.
