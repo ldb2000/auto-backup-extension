@@ -397,6 +397,53 @@ def test_reserve_un_mot_interminable_a_capitale_est_masque() -> None:
     assert masquer_un_nom(mot) == mot
 
 
+# Homoglyphe cyrillique U+0430 (petite lettre a cyrillique), écrit par son
+# échappement : à l'œil, il ne se distingue pas du « a » latin, et c'est
+# justement ce qui en fait un séparateur invisible pour la passe 6.
+HOMOGLYPHE_CYRILLIQUE = "\u0430"
+
+
+@pytest.mark.parametrize(
+    ("brut", "avant", "apres"),
+    [
+        pytest.param(
+            f"refus du fournisseur : FaCtIcE01234{HOMOGLYPHE_CYRILLIQUE}56789FaCtIcE",
+            "FaCtIcE01234",
+            "56789FaCtIcE",
+            id="homoglyphe-au-milieu",
+        ),
+        pytest.param(
+            f"refus : FaCtIcE0123456789{HOMOGLYPHE_CYRILLIQUE}bcdefghijkl",
+            "FaCtIcE0123456789",
+            "bcdefghijkl",
+            id="homoglyphe-decale",
+        ),
+    ],
+)
+def test_reserve_une_suite_coupee_par_un_caractere_non_ascii_sort_intacte(
+    brut: str, avant: str, apres: str
+) -> None:
+    """Angle mort documenté (#54) : un caractère non ASCII coupe la suite opaque.
+
+    La passe 6 ne reconnaît une suite que sur `[A-Za-z0-9_+-]`. Un caractère non
+    ASCII — ici un homoglyphe cyrillique — la découpe en deux morceaux de moins
+    de `LONGUEUR_MIN_SUITE_OPAQUE` caractères chacun, que le dernier filet ne
+    voit plus : la suite entière sort intacte. Accepté : les jetons des
+    fournisseurs intégrés sont en ASCII et reconnus par leur forme (passe 4),
+    aucun secret n'est fabriqué par un tiers, et élargir la passe à l'Unicode
+    masquerait les mots français accentués.
+    """
+    suite = f"{avant}{HOMOGLYPHE_CYRILLIQUE}{apres}"
+    assert suite in brut
+    assert len(suite) >= LONGUEUR_MIN_SUITE_OPAQUE
+    assert len(avant) < LONGUEUR_MIN_SUITE_OPAQUE
+    assert len(apres) < LONGUEUR_MIN_SUITE_OPAQUE
+    # Sans l'homoglyphe, la même suite est bien masquée par la passe 6.
+    assert masquer(f"{avant}a{apres}") == VALEUR_MASQUEE
+
+    assert masquer(brut) == brut
+
+
 ### Codes d'erreur connus des fournisseurs (#48) ###
 
 # Codes que la passe 6 masquait avant #48, faute de liste blanche : c'est pour
@@ -795,6 +842,8 @@ def test_les_vecteurs_sont_bien_rassembles() -> None:
     """Garde-fou : une collecte vide rendrait le test suivant trivialement vert."""
     assert len(ENTREES_DES_VECTEURS) >= 40
     assert f"invalid access token {JETON_DROPBOX}" in ENTREES_DES_VECTEURS
+    # Réserve de #54 : une entrée non ASCII est éprouvée elle aussi.
+    assert any(HOMOGLYPHE_CYRILLIQUE in entree for entree in ENTREES_DES_VECTEURS)
 
 
 @pytest.mark.parametrize("brut", ENTREES_DES_VECTEURS)
