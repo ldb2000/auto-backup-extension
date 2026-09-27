@@ -1679,7 +1679,16 @@ entité, un flux ou un problème. Le module lit le **cache** de traductions de H
 (`async_get_cached_translations`), rempli au chargement de l'intégration et à chaque changement
 de langue : aucune notification ne relit les fichiers. Si ce cache n'est pas encore prêt pour la
 langue courante — langue changée à l'instant —, les traductions sont chargées une fois
-(`async_get_translations`) avant la création de la notification. Une langue sans traduction,
+(`async_get_translations`) avant la création de la notification. Deux garanties encadrent ce
+chargement. D'abord, la panne est **re-vérifiée** une fois les traductions chargées : la
+notification d'échec n'est créée que si le compteur d'échecs de la destination n'a pas bougé
+(un succès l'a remis à zéro ; un échec plus récent crée sa propre notification), et celle de
+ré-autorisation que si la destination attend toujours une nouvelle autorisation. Sans cette
+vérification, une notification créée après la résolution de la panne resterait affichée sans
+que plus rien ne la retire. Ensuite, un chargement en **échec** ne fait pas perdre la
+notification : le type de l'exception est journalisé (jamais son message), puis la
+notification est créée avec les textes anglais déjà en cache, ou à défaut avec les clés de
+traduction elles-mêmes, sous son identifiant stable. Une langue sans traduction,
 héritée de l'upstream ou inconnue, retombe sur l'anglais par le mécanisme ordinaire de Home
 Assistant. Le masquage ne change pas : `masquer()` et `masquer_un_nom()` s'appliquent aux
 **valeurs** des placeholders (cause, noms), jamais au texte traduit ; les valeurs de repli
