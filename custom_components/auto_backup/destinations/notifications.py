@@ -34,19 +34,30 @@ L'option `notify_on_failure` (vraie par défaut, réglable dans les options de
 l'intégration) coupe les notifications persistantes, et elles seules : les
 événements, les journaux d'erreur et le problème Home Assistant restent émis.
 
-Les textes sont écrits en français directement ici : une notification
-persistante n'a pas de clé de traduction côté Home Assistant, contrairement aux
-problèmes et aux étapes du flux d'options.
+Les textes sont traduits (#45) : titres et messages vivent dans la section
+`exceptions` de `translations/*.json`, sous les clés `notification_*`, et sont
+lus dans la langue de Home Assistant au moment de la notification. Une
+notification persistante n'a pas de catégorie de traduction propre ; la section
+`exceptions` est la seule que `hassfest` accepte pour un texte libre avec
+placeholders (`{destination}`), et le cache de traductions de Home Assistant y
+donne accès sans relire les fichiers. Une langue sans traduction retombe sur
+l'anglais, comme partout ailleurs dans Home Assistant. Le masquage s'applique
+aux **valeurs** des placeholders, jamais au texte traduit.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers.translation import (
+    async_get_cached_translations,
+    async_get_translations,
+)
 
 from ..const import (
     ATTR_DESTINATION,
@@ -57,6 +68,7 @@ from ..const import (
     DATA_DESTINATIONS,
     DATA_NOTIFICATIONS,
     DEFAULT_NOTIFY_ON_FAILURE,
+    DOMAIN,
     EVENT_UPLOAD_FAILED,
     EVENT_UPLOAD_SUCCESSFUL,
     IDENTIFIANT_PROVISOIRE,
@@ -87,30 +99,101 @@ def identifiant_de_notification_de_reauthentification(destination_id: str) -> st
 
 ### Textes ###
 
-TITRE_ECHEC = "Auto Backup : échec d'envoi vers « {destination} »"
+# Catégorie de traduction des textes de notification : voir l'en-tête du module.
+CATEGORIE_DE_TRADUCTION = "exceptions"
 
-MESSAGE_ECHEC = (
-    "La sauvegarde « {sauvegarde} » n'a pas pu être envoyée vers la destination "
-    "« {destination} ».\n\n"
-    "**Cause** : {cause}\n\n"
-    "Échecs consécutifs vers cette destination : {echecs}.\n\n"
-    "La sauvegarde locale, elle, est intacte. Cette notification disparaîtra "
-    "d'elle-même dès qu'un envoi vers cette destination aboutira."
+CLE_TITRE_ECHEC = "notification_echec_titre"
+CLE_MESSAGE_ECHEC = "notification_echec_message"
+CLE_TITRE_REAUTH = "notification_reauth_titre"
+CLE_MESSAGE_REAUTH = "notification_reauth_message"
+CLE_SAUVEGARDE_SANS_NOM = "notification_sauvegarde_sans_nom"
+CLE_CAUSE_INCONNUE = "notification_cause_inconnue"
+
+CLES_DE_TRADUCTION = (
+    CLE_TITRE_ECHEC,
+    CLE_MESSAGE_ECHEC,
+    CLE_TITRE_REAUTH,
+    CLE_MESSAGE_REAUTH,
+    CLE_SAUVEGARDE_SANS_NOM,
+    CLE_CAUSE_INCONNUE,
 )
 
-TITRE_REAUTH = "Auto Backup : la destination « {destination} » doit être ré-autorisée"
 
-MESSAGE_REAUTH = (
-    "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la "
-    "destination « {destination} » : l'autorisation a expiré ou a été révoquée. "
-    "Plus aucune sauvegarde ne lui sera envoyée ; les autres destinations "
-    "continuent de fonctionner.\n\n"
-    "Pour la remettre en service, ouvrez les options de l'intégration Auto Backup, "
-    "choisissez « Ré-autoriser une destination », puis « {destination} ».\n\n"
-    "Cette notification et le problème signalé dans l'interface des intégrations "
-    "disparaîtront ensemble, à la ré-autorisation comme à la suppression de la "
-    "destination."
-)
+def _chemin(cle: str) -> str:
+    """Clé aplatie d'un texte dans le cache de traductions de Home Assistant."""
+    return f"component.{DOMAIN}.{CATEGORIE_DE_TRADUCTION}.{cle}.message"
+
+
+def _textes_complets(textes: dict[str, str]) -> bool:
+    """Indique si toutes les clés de notification sont présentes."""
+    return all(_chemin(cle) in textes for cle in CLES_DE_TRADUCTION)
+
+
+@callback
+def _textes_en_cache(hass: HomeAssistant) -> dict[str, str] | None:
+    """Textes déjà chargés pour la langue courante, ou `None` s'ils manquent.
+
+    Home Assistant charge les traductions d'une intégration à son installation,
+    puis à chaque changement de langue : le cache suffit presque toujours, et
+    aucune notification ne relit les fichiers.
+    """
+    textes = async_get_cached_translations(
+        hass, hass.config.language, CATEGORIE_DE_TRADUCTION, DOMAIN
+    )
+    return textes if _textes_complets(textes) else None
+
+
+def _texte(textes: dict[str, str], cle: str, **placeholders: object) -> str:
+    """Texte traduit d'une clé, placeholders remplacés.
+
+    Un texte introuvable (fichier de traduction abîmé) affiche sa clé plutôt
+    que de faire échouer la notification.
+    """
+    modele = textes.get(_chemin(cle))
+    if modele is None:
+        _LOGGER.warning("Traduction « %s » introuvable", cle)
+        return cle
+    try:
+        return modele.format(**placeholders)
+    except KeyError, IndexError, ValueError:
+        _LOGGER.warning("Placeholders invalides dans la traduction « %s »", cle)
+        return modele
+
+
+@callback
+def _async_creer_la_notification(
+    hass: HomeAssistant,
+    notification_id: str,
+    composer: Callable[[dict[str, str]], tuple[str, str]],
+) -> None:
+    """Crée une notification dont `composer` écrit le titre et le message.
+
+    Cas courant : les textes sont en cache, la notification est créée
+    immédiatement. Sinon (langue changée à l'instant, cache pas encore
+    rechargé), les traductions sont chargées une fois — avec repli anglais —
+    puis la notification est créée. Les valeurs affichées (compteur, noms
+    masqués) sont figées avant ce chargement : l'attente ne change pas ce que
+    la notification dit.
+    """
+    if (textes := _textes_en_cache(hass)) is not None:
+        _creer(hass, notification_id, composer(textes))
+        return
+
+    async def charger_puis_creer() -> None:
+        textes = await async_get_translations(
+            hass, hass.config.language, CATEGORIE_DE_TRADUCTION, {DOMAIN}
+        )
+        _creer(hass, notification_id, composer(textes))
+
+    hass.async_create_task(charger_puis_creer(), eager_start=True)
+
+
+def _creer(hass: HomeAssistant, notification_id: str, textes: tuple[str, str]) -> None:
+    """Crée ou met à jour la notification persistante d'identifiant donné."""
+    titre, message = textes
+    persistent_notification.async_create(
+        hass, message, title=titre, notification_id=notification_id
+    )
 
 
 def _libelle_du_fournisseur(provider: str) -> str:
@@ -197,25 +280,33 @@ class GestionnaireDeNotifications:
         # Les noms gardent leurs passes 1 à 5 mais pas le dernier filet : ce
         # sont des noms du fork, et l'utilisateur doit pouvoir les lire pour
         # savoir quelle destination a lâché. Seule la cause, texte du
-        # fournisseur, traverse le masquage entier.
+        # fournisseur, traverse le masquage entier. Le masquage porte sur les
+        # valeurs des placeholders, jamais sur le texte traduit.
         destination = masquer_un_nom(
             str(event.data.get(ATTR_DESTINATION_NAME) or destination_id)
         )
-        sauvegarde = masquer_un_nom(
-            str(event.data.get(ATTR_NAME) or event.data.get(ATTR_SLUG) or "sans nom")
-        )
-        cause = masquer(str(event.data.get(ATTR_ERROR) or "cause inconnue"))
+        nom_de_sauvegarde = event.data.get(ATTR_NAME) or event.data.get(ATTR_SLUG)
+        erreur = event.data.get(ATTR_ERROR)
 
-        persistent_notification.async_create(
-            self._hass,
-            MESSAGE_ECHEC.format(
-                sauvegarde=sauvegarde,
-                destination=destination,
-                cause=cause,
-                echecs=echecs,
-            ),
-            title=TITRE_ECHEC.format(destination=destination),
-            notification_id=identifiant_de_notification_d_echec(destination_id),
+        def composer(textes: dict[str, str]) -> tuple[str, str]:
+            sauvegarde = masquer_un_nom(
+                str(nom_de_sauvegarde or _texte(textes, CLE_SAUVEGARDE_SANS_NOM))
+            )
+            cause = masquer(str(erreur or _texte(textes, CLE_CAUSE_INCONNUE)))
+            return (
+                _texte(textes, CLE_TITRE_ECHEC, destination=destination),
+                _texte(
+                    textes,
+                    CLE_MESSAGE_ECHEC,
+                    sauvegarde=sauvegarde,
+                    destination=destination,
+                    cause=cause,
+                    echecs=echecs,
+                ),
+            )
+
+        _async_creer_la_notification(
+            self._hass, identifiant_de_notification_d_echec(destination_id), composer
         )
 
     @callback
@@ -322,16 +413,23 @@ def async_notifier_la_reauthentification(
     # (`destinations/reauth.py`) : la notification ne gagnerait rien à le réduire
     # à `***`, elle perdrait seulement de l'information.
     destination = masquer_un_nom(config.name)
-    persistent_notification.async_create(
+    fournisseur = _libelle_du_fournisseur(config.provider)
+
+    def composer(textes: dict[str, str]) -> tuple[str, str]:
+        return (
+            _texte(textes, CLE_TITRE_REAUTH, destination=destination),
+            _texte(
+                textes,
+                CLE_MESSAGE_REAUTH,
+                destination=destination,
+                fournisseur=fournisseur,
+            ),
+        )
+
+    _async_creer_la_notification(
         hass,
-        MESSAGE_REAUTH.format(
-            destination=destination,
-            fournisseur=_libelle_du_fournisseur(config.provider),
-        ),
-        title=TITRE_REAUTH.format(destination=destination),
-        notification_id=identifiant_de_notification_de_reauthentification(
-            config.destination_id
-        ),
+        identifiant_de_notification_de_reauthentification(config.destination_id),
+        composer,
     )
 
 

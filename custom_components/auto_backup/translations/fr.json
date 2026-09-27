@@ -165,6 +165,26 @@
             "description": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {nom} » : l'autorisation a expiré ou a été révoquée. Les autres destinations continuent de fonctionner.\n\nPour la remettre en service, ouvrez les options de l'intégration Auto Backup, choisissez « Ré-autoriser une destination » puis « {nom} »."
         }
     },
+    "exceptions": {
+        "notification_echec_titre": {
+            "message": "Auto Backup : échec d'envoi vers « {destination} »"
+        },
+        "notification_echec_message": {
+            "message": "La sauvegarde « {sauvegarde} » n'a pas pu être envoyée vers la destination « {destination} ».\n\n**Cause** : {cause}\n\nÉchecs consécutifs vers cette destination : {echecs}.\n\nLa sauvegarde locale, elle, est intacte. Cette notification disparaîtra d'elle-même dès qu'un envoi vers cette destination aboutira."
+        },
+        "notification_reauth_titre": {
+            "message": "Auto Backup : la destination « {destination} » doit être ré-autorisée"
+        },
+        "notification_reauth_message": {
+            "message": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {destination} » : l'autorisation a expiré ou a été révoquée. Plus aucune sauvegarde ne lui sera envoyée ; les autres destinations continuent de fonctionner.\n\nPour la remettre en service, ouvrez les options de l'intégration Auto Backup, choisissez « Ré-autoriser une destination », puis « {destination} ».\n\nCette notification et le problème signalé dans l'interface des intégrations disparaîtront ensemble, à la ré-autorisation comme à la suppression de la destination."
+        },
+        "notification_sauvegarde_sans_nom": {
+            "message": "sans nom"
+        },
+        "notification_cause_inconnue": {
+            "message": "cause inconnue"
+        }
+    },
     "entity": {
         "sensor": {
             "destination_dernier_televersement": {
