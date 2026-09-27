@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from test_conformite_upstream import FICHIERS_UPSTREAM_REQUIS
 RACINE_DEPOT = Path(__file__).resolve().parent.parent
 REPERTOIRE_INTEGRATION = RACINE_DEPOT / "custom_components" / "auto_backup"
 MODULE_DE_MASQUAGE = REPERTOIRE_INTEGRATION / "destinations" / "masquage.py"
+DOC_UPSTREAM = RACINE_DEPOT / "docs" / "UPSTREAM.md"
 
 # Modules upstream, hors d'atteinte du fork (cf. `docs/UPSTREAM.md`).
 MODULES_UPSTREAM = frozenset(
@@ -317,3 +319,63 @@ def test_toute_exception_relayee_au_journal_est_masquee() -> None:
     ]
 
     assert not fautes, "\n".join(fautes)
+
+
+def test_la_garde_echoue_vraiment_sur_un_module_synthetique_hors_masquage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Critère 3, à la lettre : la garde échoue sur un vrai fichier scanné.
+
+    `test_la_garde_reconnait_un_masquage_artisanal` prouve que le détecteur
+    reconnaît un motif de masquage dans une chaîne isolée ; cela ne prouve pas
+    encore que **la garde elle-même**
+    (`test_aucun_masquage_artisanal_hors_du_point_unique`) échoue quand un tel
+    motif atteint un vrai fichier du périmètre scanné. Un module synthétique,
+    hors de `masquage.py`, est glissé dans `modules_du_fork()` : la garde doit
+    alors lever, avec un message qui désigne le fichier fautif.
+    """
+    module_fautif = tmp_path / "faux_module_du_fork.py"
+    module_fautif.write_text(
+        'import re\n\nMOTIF_ARTISANAL = re.compile(r"upload_id=[^&]+")\n',
+        encoding="utf-8",
+    )
+    # Le détecteur doit reconnaître ce fichier synthétique comme les chaînes
+    # isolées de `test_la_garde_reconnait_un_masquage_artisanal`.
+    assert motifs_de_masquage(module_fautif.read_text(encoding="utf-8"))
+
+    module_de_test = sys.modules[__name__]
+    monkeypatch.setattr(
+        module_de_test, "modules_du_fork", lambda: iter([module_fautif])
+    )
+    # `_relatif()` suppose un fichier sous `RACINE_DEPOT`, ce qu'un fichier de
+    # `tmp_path` n'est pas : seul le nom importe ici, pour composer le message.
+    monkeypatch.setattr(module_de_test, "_relatif", lambda chemin: chemin.name)
+
+    with pytest.raises(AssertionError, match=re.escape("faux_module_du_fork.py")):
+        test_aucun_masquage_artisanal_hors_du_point_unique()
+
+
+### Documentation de l'écart assumé avec `sensor.py` (critère 4) ###
+
+
+def test_la_doc_upstream_documente_le_message_non_masque_de_sensor_py() -> None:
+    """Critère 4 : `docs/UPSTREAM.md` dit que `sensor.py` n'est pas masqué.
+
+    `sensor.py` est un module upstream (cf. `FICHIERS_UPSTREAM_ETENDUS` de
+    `test_conformite_upstream.py`), hors du périmètre de cette garde : son
+    capteur `AutoBackupLastFailureSensor` recopie donc un message d'erreur sans
+    passer par `masquer()`. La documentation doit dire noir sur blanc que
+    c'est une conséquence assumée de l'import à l'identique, pas un trou
+    oublié — `sensor.py` est déjà cité plus haut dans le document à propos des
+    entités ajoutées par #16, d'où la nécessité d'isoler le bon passage.
+    """
+    texte = DOC_UPSTREAM.read_text(encoding="utf-8")
+
+    titre = "Ce que le fork ne masque pas"
+    assert titre in texte, f"section dédiée absente de docs/UPSTREAM.md : {titre!r}"
+
+    section = texte.split(titre, 1)[1]
+    assert "sensor.py" in section
+    assert "AutoBackupLastFailureSensor" in section
+    assert "masqu" in section.casefold()
+    assert "assum" in section.casefold() or "conséquence" in section.casefold()
