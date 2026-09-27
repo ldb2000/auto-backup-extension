@@ -7,6 +7,32 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 
 ## [Non publié]
 
+### Résumé de la version
+
+Première version du fork **auto-backup-extension** de
+[jcwillox/hass-auto-backup](https://github.com/jcwillox/hass-auto-backup) (licence MIT) : les
+sauvegardes créées par Auto Backup peuvent désormais partir **directement dans le cloud**.
+
+- **Destinations cloud** : Dropbox et Google Drive se connectent depuis les options de
+  l'intégration, avec votre propre application OAuth2 ; l'option `upload_to` des services
+  `auto_backup.backup`, `backup_full` et `backup_partial` envoie la sauvegarde créée vers une ou
+  plusieurs destinations, en tâche de fond, sans jamais toucher à la sauvegarde locale.
+- **Rétention distante** : chaque destination conserve ses sauvegardes selon sa propre durée
+  (`retention_days`) et son propre nombre maximum (`retention_count`) ; la purge ne supprime que
+  ce qu'Auto Backup a lui-même déposé, après chaque envoi réussi et à chaque appel de
+  `auto_backup.purge`.
+- **Entités** : trois entités par destination (dernier envoi réussi, nombre de sauvegardes
+  distantes, problème de téléversement) pour suivre chaque destination dans un tableau de bord ou
+  une automatisation.
+- **Notifications** : une notification persistante par destination signale un envoi en échec
+  ou un accès à ré-autoriser, et disparaît d'elle-même une fois le problème résolu ; les
+  événements `auto_backup.upload_start`, `upload_successful`, `upload_failed` et `remote_purge`
+  permettent de bâtir ses propres alertes.
+- **Documentation** : installation via HACS, guides Dropbox et Google Drive, page des services et
+  de la rétention distante avec une automatisation complète, et FAQ.
+
+Le détail des changements, issue par issue, suit.
+
 ### Ajouté
 
 - Import de l'intégration `auto_backup` depuis le fork upstream jcwillox/hass-auto-backup (SHA 809295d2737b9613cf6d5f5d15a53ae5a861658d). Refs #2
@@ -131,6 +157,9 @@ et ce projet adhère à la [Versioning Sémantique](https://semver.org/spec/v2.0
 - Suivi à chaud des destinations : une destination ajoutée depuis les options reçoit ses entités sans redémarrage, une destination supprimée voit les siennes retirées du registre d'entités. Refs #16
 - Nombre de sauvegardes distantes lu dans le registre persistant de la rétention distante (issue #9), `hass.data[DATA_REMOTE_BACKUPS]`, par `entrees(destination_id)` : c'est lui qui fait autorité, et les événements ne sont plus que des déclencheurs de relecture. `auto_backup.remote_purge` n'émettant ni `deleted` ni `remaining` (un nombre restant serait structurellement faux, l'événement n'étant émis qu'après une suppression réelle), aucun compteur incrémental ne pilote plus le capteur. La lecture est défensive : registre absent ou défaillant, le capteur retombe sur un compteur interne alimenté par les événements (`remote_ids`, `deleted`, `remaining`) et restauré au redémarrage. Refs #16
 - Tests des entités de destination (`tests/test_entites_destinations.py`, 52 cas) : création, nommage, rattachement au device, succès, échec, masquage des secrets (clé et valeur, en-tête, jeton nu, URL de session reprenable, adresse électronique, et messages français laissés intacts), compte lu dans le registre de #9 et ses replis, deux destinations indépendantes, restauration après redémarrage, non-régression des deux états périmés réinstallés par la restauration, ajout et suppression à chaud, déchargement de l'entrée. Refs #16
+
+- Documentation utilisateur de bout en bout : `README.md` présente le fork, son installation via HACS (dépôt personnalisé) et renvoie à la documentation détaillée ; nouvelle page `docs/services.md` (services, options dont `upload_to`, rétentions locale et distante, événements, automatisation YAML complète de sauvegarde quotidienne chiffrée envoyée dans le cloud) et nouvelle FAQ `docs/faq.md` (taille et quotas, chiffrement, portées OAuth et stockage des jetons, ré-authentification, un dossier distant par instance). Le guide Google Drive recommande lui aussi un dossier distant par instance Home Assistant. Refs #19
+- Tests de la documentation (`tests/test_doc_utilisateur.py`) : liens internes et ancres valides dans le `README.md` et `docs/`, services, options et événements cités conformes au code, automatisations YAML d'exemple analysables et limitées aux services et options réellement déclarés. Refs #19
 
 ### Modifié
 

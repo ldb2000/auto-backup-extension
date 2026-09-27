@@ -22,6 +22,16 @@ Cette section centralise la documentation du projet au-delà du `README.md` raci
   URI de redirection et prérequis d'URL externe publique, portée `drive.file` et ses
   conséquences.
 
+## Utilisation
+
+- **[Services, options et rétention distante](services.md)** : services `auto_backup.*` et
+  toutes leurs options (dont `upload_to`), rétention locale (`keep_days`) et rétention distante
+  par destination, événements émis, et une automatisation YAML complète de sauvegarde
+  quotidienne envoyée dans le cloud.
+- **[Questions fréquentes](faq.md)** : taille des sauvegardes et quotas cloud, chiffrement et
+  mot de passe, portées OAuth et stockage des jetons, ré-authentification, un dossier distant
+  par instance Home Assistant.
+
 ## Maintenance
 
 - **[Suivi de l'upstream](UPSTREAM.md)** : Révision importée de jcwillox/hass-auto-backup,
