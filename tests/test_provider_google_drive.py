@@ -597,7 +597,7 @@ async def test_un_acces_revoque_demande_une_reautorisation(
     assert probleme is not None
     assert probleme.translation_placeholders == {
         "nom": "Mon Drive",
-        "fournisseur": PROVIDER_GOOGLE_DRIVE,
+        "fournisseur": LIBELLE_GOOGLE_DRIVE,
     }
 
 
@@ -768,7 +768,7 @@ async def test_un_401_sur_un_jeton_valide_demande_une_reautorisation(
     assert probleme is not None
     assert probleme.translation_placeholders == {
         "nom": "Mon Drive",
-        "fournisseur": PROVIDER_GOOGLE_DRIVE,
+        "fournisseur": LIBELLE_GOOGLE_DRIVE,
     }
 
 
