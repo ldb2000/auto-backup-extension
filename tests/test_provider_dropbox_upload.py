@@ -1384,3 +1384,61 @@ async def test_un_echec_de_depot_emet_un_message_comprehensible(
     message = echecs[0].data[ATTR_ERROR]
     assert "saturé" in message
     assert NOM_DESTINATION in message
+
+
+### Aucun secret dans le journal, même quand Dropbox en renvoie un (#35) ###
+
+JETON_DROPBOX_RENVOYE = "sl.B1a2C3FaCtIcE-0123456789abcdefghij"
+
+
+async def test_un_refus_qui_cite_un_jeton_ne_le_journalise_jamais(
+    hass: HomeAssistant,
+    entree_dropbox: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    sauvegarde_locale: Path,
+    sommeil: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Critère 1 de #35 : Dropbox recopie le jeton dans sa réponse d'erreur.
+
+    La première réponse porte un `Retry-After` illisible qui n'est autre que le
+    jeton (journalisé en `debug` comme valeur inexploitable), la seconde un
+    résumé d'erreur qui le recopie : ni l'un ni l'autre n'atteint le journal.
+    """
+    handler = hass.data[DATA_AUTO_BACKUP]._handler
+    handler._manager = _faux_backup_manager(sauvegarde_locale)
+    handler.create_backup = AsyncMock(return_value={"slug": SLUG})
+    aioclient_mock.post(
+        URL_CREATION_DOSSIER,
+        side_effect=servir(
+            reponse(
+                URL_CREATION_DOSSIER,
+                status=429,
+                entetes={"Retry-After": JETON_DROPBOX_RENVOYE},
+            ),
+            reponse(
+                URL_CREATION_DOSSIER,
+                status=400,
+                charge=erreur_dropbox(
+                    f"invalid_access_token/Bearer {ACCES} {JETON_DROPBOX_RENVOYE}"
+                ),
+            ),
+        ),
+    )
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+
+    with caplog.at_level(logging.DEBUG):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_BACKUP,
+            {ATTR_NAME: NOM_SAUVEGARDE, ATTR_UPLOAD_TO: DESTINATION_ID},
+            blocking=True,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    journal = caplog.text
+    assert "Retry-After inexploitable" in journal
+    assert "Échec du téléversement" in journal
+    for secret in (JETON_DROPBOX_RENVOYE, *SECRETS_A_NE_PAS_JOURNALISER):
+        assert secret not in journal, secret

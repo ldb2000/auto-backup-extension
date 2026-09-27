@@ -31,6 +31,7 @@ from ..const import (
 )
 from .errors import DestinationConfigError, DestinationNotFoundError
 from .manager import DestinationManager
+from .masquage import masquer
 from .models import DestinationConfig
 from .providers import enregistrer_les_fournisseurs
 from .schema import DESTINATIONS_SCHEMA, donnees_de_fournisseur
@@ -77,7 +78,7 @@ def delai_de_televersement(entry: ConfigEntry) -> float:
         _LOGGER.warning(
             "Option « %s » inexploitable (%s) : délai par défaut de %s s retenu",
             CONF_UPLOAD_TIMEOUT,
-            err,
+            masquer(str(err)),
             DEFAULT_UPLOAD_TIMEOUT,
         )
         return float(DEFAULT_UPLOAD_TIMEOUT)

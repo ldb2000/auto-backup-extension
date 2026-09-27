@@ -102,7 +102,7 @@ from ..const import (
     EVENT_UPLOAD_SUCCESSFUL,
 )
 from ..helpers import get_device_info
-from .masquage import masquer
+from .masquage import journaliser_une_exception, masquer
 from .models import DestinationConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -304,8 +304,10 @@ class CoordinateurEntitesDestinations:
             return None
         try:
             return max(len(registre.entrees(destination_id)), 0)
-        except Exception:  # un registre défaillant ne casse pas le capteur
-            _LOGGER.exception(
+        except Exception as err:  # un registre défaillant ne casse pas le capteur
+            journaliser_une_exception(
+                _LOGGER,
+                err,
                 "Le registre des sauvegardes distantes n'a pas su répondre pour "
                 "« %s » : repli sur le compteur interne",
                 destination_id,

@@ -76,6 +76,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..errors import DestinationError
+from ..masquage import masquer
 from ..models import RemoteBackup
 from ..oauth import DestinationOAuth2Session
 from ..retention import VALEURS_DU_MARQUEUR
@@ -285,7 +286,7 @@ async def async_lister_les_sauvegardes(
                 _LOGGER.warning(
                     "Fichier Drive ignoré par le listage du dossier « %s » : %s",
                     dossier,
-                    err,
+                    masquer(str(err)),
                 )
                 continue
             if distante.remote_id in vues:

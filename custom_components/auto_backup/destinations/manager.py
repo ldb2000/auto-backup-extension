@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from ..const import CONF_DESTINATIONS
 from .destination import RemoteDestination
 from .errors import DestinationConfigError, DestinationNotFoundError
+from .masquage import masquer
 from .models import DestinationConfig
 from .registry import create_destination
 
@@ -59,13 +60,17 @@ class DestinationManager:
         try:
             config = DestinationConfig.from_dict(raw_config)
         except DestinationConfigError as err:
-            _LOGGER.warning("Destination ignorée, configuration invalide : %s", err)
+            _LOGGER.warning(
+                "Destination ignorée, configuration invalide : %s", masquer(str(err))
+            )
             return None
         try:
             return create_destination(self._hass, config)
         except DestinationConfigError as err:
             _LOGGER.warning(
-                "Destination « %s » ignorée : %s", config.destination_id, err
+                "Destination « %s » ignorée : %s",
+                config.destination_id,
+                masquer(str(err)),
             )
             return None
 

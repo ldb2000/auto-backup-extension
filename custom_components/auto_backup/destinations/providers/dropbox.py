@@ -66,6 +66,7 @@ from ..errors import (
     DestinationNotFoundError,
     DestinationQuotaError,
 )
+from ..masquage import masquer
 from ..models import DestinationConfig, RemoteBackup
 from ..oauth import OAuth2ProviderSpec, async_session_de_la_destination
 from ..reauth import async_signaler_la_reauthentification
@@ -417,7 +418,11 @@ def _attente_demandee(entetes: Mapping[str, str]) -> float | None:
     except (TypeError, ValueError) as err:
         # Les parenthèses sont obligatoires : sans elles, `ruff format` écrirait
         # la forme PEP 758, indisponible avant Python 3.14 (cf. `docs/tests.md`).
-        _LOGGER.debug("En-tête Retry-After inexploitable (%r) : %s", brut, err)
+        _LOGGER.debug(
+            "En-tête Retry-After inexploitable (%s) : %s",
+            masquer(repr(brut)),
+            masquer(str(err)),
+        )
         return None
     return attente if attente >= 0 else None
 
@@ -1212,7 +1217,7 @@ class DropboxDestination(RemoteDestination):
                 "Appel Dropbox %s pour la destination « %s » : %s",
                 url,
                 self.name,
-                argument_json or corps_json or "sans argument",
+                masquer(argument_json or corps_json or "sans argument"),
             )
             reponse = await self._async_requete(
                 url,
@@ -1431,8 +1436,8 @@ class DropboxDestination(RemoteDestination):
         identifiant = _texte(entree.get("id"))
         if not identifiant or not nom:
             _LOGGER.debug(
-                "Entrée Dropbox ignorée : identifiant ou nom inexploitable (%r)",
-                entree.get("id"),
+                "Entrée Dropbox ignorée : identifiant ou nom inexploitable (%s)",
+                masquer(repr(entree.get("id"))),
             )
             return None
 

@@ -94,6 +94,7 @@ from .config_entry import (
     options_avec_reglage,
 )
 from .errors import DestinationConfigError, DestinationError, UnknownProviderError
+from .masquage import masquer
 from .models import DestinationConfig
 from .oauth import (
     DestinationOAuth2Implementation,
@@ -295,7 +296,7 @@ class GestionDesDestinationsMixin:
                 _LOGGER.warning(
                     "Destination ignorée par le flux d'options, "
                     "configuration invalide : %s",
-                    err,
+                    masquer(str(err)),
                 )
         return configurations
 
@@ -317,7 +318,7 @@ class GestionDesDestinationsMixin:
         try:
             options = options_avec_destinations(self.config_entry, configurations)
         except DestinationConfigError as err:
-            _LOGGER.error("Destinations non enregistrées : %s", err)
+            _LOGGER.error("Destinations non enregistrées : %s", masquer(str(err)))
             return self.async_abort(reason="configuration_invalide")
         return self.async_create_entry(data=options)
 
@@ -355,7 +356,7 @@ class GestionDesDestinationsMixin:
             try:
                 secondes = _delai_de_televersement(user_input.get(CONF_UPLOAD_TIMEOUT))
             except DestinationConfigError as err:
-                _LOGGER.debug("Délai de téléversement refusé : %s", err)
+                _LOGGER.debug("Délai de téléversement refusé : %s", masquer(str(err)))
                 erreurs[CONF_UPLOAD_TIMEOUT] = "delai_invalide"
                 propose = user_input.get(CONF_UPLOAD_TIMEOUT, propose)
             else:
@@ -535,7 +536,7 @@ class GestionDesDestinationsMixin:
         try:
             implementation = self._implementation()
         except (DestinationConfigError, UnknownProviderError) as err:
-            _LOGGER.error("Autorisation impossible : %s", err)
+            _LOGGER.error("Autorisation impossible : %s", masquer(str(err)))
             return self.async_abort(reason="fournisseur_invalide")
 
         try:
@@ -575,7 +576,7 @@ class GestionDesDestinationsMixin:
         try:
             implementation = self._implementation()
         except (DestinationConfigError, UnknownProviderError) as err:
-            _LOGGER.error("Échange du code impossible : %s", err)
+            _LOGGER.error("Échange du code impossible : %s", masquer(str(err)))
             return self.async_abort(reason="fournisseur_invalide")
 
         try:
@@ -589,13 +590,13 @@ class GestionDesDestinationsMixin:
             _LOGGER.error("Le fournisseur a refusé le code d'autorisation")
             return self.async_abort(reason="autorisation_non_accordee")
         except (OAuth2TokenRequestError, ClientError) as err:
-            _LOGGER.error("Échec de l'obtention du jeton : %s", err)
+            _LOGGER.error("Échec de l'obtention du jeton : %s", masquer(str(err)))
             return self.async_abort(reason="echec_jeton")
 
         try:
             self._token = normaliser_le_jeton(brut)
         except DestinationConfigError as err:
-            _LOGGER.error("Jeton inexploitable : %s", err)
+            _LOGGER.error("Jeton inexploitable : %s", masquer(str(err)))
             return self.async_abort(reason="jeton_invalide")
 
         try:
@@ -615,10 +616,14 @@ class GestionDesDestinationsMixin:
                 },
             )
         except DestinationError as err:
-            _LOGGER.error("Le fournisseur a refusé la première requête : %s", err)
+            _LOGGER.error(
+                "Le fournisseur a refusé la première requête : %s", masquer(str(err))
+            )
             return self.async_abort(
                 reason="echec_fournisseur",
-                description_placeholders={"detail": str(err)},
+                # Le détail est affiché à l'utilisateur : texte de fournisseur,
+                # donc masqué comme toute cause d'échec affichée (#17, #35).
+                description_placeholders={"detail": masquer(str(err))},
             )
 
         if self._destination_id is not None:
@@ -648,14 +653,14 @@ class GestionDesDestinationsMixin:
             try:
                 chemin_de_dossier(dossier)
             except vol.Invalid as err:
-                _LOGGER.debug("Dossier distant refusé : %s", err)
+                _LOGGER.debug("Dossier distant refusé : %s", masquer(str(err)))
                 erreurs[CONF_FOLDER] = "dossier_invalide"
 
             if not erreurs:
                 try:
                     nouvelle = self._construire(nom, user_input, configurations)
                 except DestinationConfigError as err:
-                    _LOGGER.debug("Destination refusée : %s", err)
+                    _LOGGER.debug("Destination refusée : %s", masquer(str(err)))
                     erreurs["base"] = "destination_invalide"
                 else:
                     return self._enregistrer([*configurations, nouvelle])
