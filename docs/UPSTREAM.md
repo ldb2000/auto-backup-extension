@@ -37,10 +37,11 @@ typées, registre de fournisseurs et gestionnaire de destinations (issue #6), pu
 OAuth2 (`oauth.py`), signalement des destinations à ré-autoriser (`reauth.py`) et étapes
 d'interface du flux d'options (`flow.py`, issue #7), l'orchestration du téléversement
 après création (`destinations/upload.py`, issue #8), la rétention et la purge distantes
-(`destinations/retention.py`, issue #9) et, depuis l'issue #17, les notifications persistantes
+(`destinations/retention.py`, issue #9), depuis l'issue #17, les notifications persistantes
 des échecs et des accès révoqués (`destinations/notifications.py`) ainsi que le point unique de
 masquage des secrets du fork (`destinations/masquage.py`), que doit appeler tout code affichant
-un texte venu d'un fournisseur. Les fournisseurs réellement livrés vivent
+un texte venu d'un fournisseur, et enfin les entités d'état d'une destination
+(`destinations/entities.py`, issue #16). Les fournisseurs réellement livrés vivent
 dans le sous-paquet `destinations/providers/` — Dropbox depuis l'issue #10, Google Drive depuis
 l'issue #13 — et sont enregistrés en un point unique, `enregistrer_les_fournisseurs()`, appelé
 par `async_setup_destinations()` : aucun code upstream n'est touché pour ajouter un fournisseur.
@@ -89,18 +90,25 @@ caractère près.
   (`OAUTH_CALLBACK_PATH`, `DATA_OAUTH_STATES`, `DATA_OAUTH_VIEW`, `OAUTH_STATE_TTL`,
   `OAUTH_AUTHORIZE_URL_TIMEOUT`, `OAUTH_TOKEN_TIMEOUT`, `ISSUE_REAUTH_PREFIX`) — dont
   `IDENTIFIANT_PROVISOIRE`, partagé par le flux d'ajout et le signalement de
-  ré-authentification —, puis `CONF_PROVIDER_DATA` (issues #10 et #13) et, à la fin du bloc, les
+  ré-authentification —, puis `CONF_PROVIDER_DATA` (issues #10 et #13) et les
   constantes de la rétention distante (issue #9) : l'import de type des deux classes de
   `destinations/retention.py`, `STORAGE_KEY_REMOTE_BACKUPS`, `STORAGE_VERSION_REMOTE_BACKUPS`,
   `DATA_REMOTE_BACKUPS`, `DATA_REMOTE_PURGE`, `ATTR_CREATED_AT`, `ATTR_REMOTE_IDS` et
   `DEFAULT_PURGE_TIMEOUT` — ce dernier borne les appels réseau de la purge et n'est
   **pas** inscrit dans `CLES_DU_FORK` : ce n'est pas une option d'entrée, rien ne le persiste.
-  L'issue #17 ferme le bloc avec les notifications persistantes : l'import de type
+  L'issue #17 apporte ensuite les notifications persistantes : l'import de type
   `GestionnaireDeNotifications`, `DATA_NOTIFICATIONS`, `NOTIFICATION_UPLOAD_PREFIX`,
   `NOTIFICATION_REAUTH_PREFIX`, `CONF_NOTIFY_ON_FAILURE`, `DEFAULT_NOTIFY_ON_FAILURE`, et la
   seule réécriture de `CLES_DU_FORK` du fichier — `CLES_DU_FORK = (*CLES_DU_FORK,
   CONF_NOTIFY_ON_FAILURE)`, faite sur place plutôt qu'en remontant modifier la définition de #8.
-  L'ordre du fichier est donc : #6, #8, #7, #10/#13, #9, puis #17.
+  L'issue #16 ferme le bloc avec les entités d'état : l'import de type
+  `CoordinateurEntitesDestinations`, la clé `DATA_DESTINATION_ENTITIES`, les attributs
+  `ATTR_LAST_ERROR`, `ATTR_LAST_FAILED_SLUG` et `ATTR_LAST_FAILED_AT`, enfin `ATTR_DELETED` et
+  `ATTR_REMAINING`, lus dans l'événement `auto_backup.remote_purge` par le seul repli du capteur
+  de comptage. Elle ne redéfinit ni `DATA_REMOTE_BACKUPS` ni `ATTR_REMOTE_IDS` : ces deux
+  constantes appartiennent à #9, et le capteur lit le registre typé qu'elles désignent. Elle
+  n'ajoute rien non plus à `CLES_DU_FORK` : les entités n'ont aucune option.
+  L'ordre du fichier est donc : #6, #8, #7, #10/#13, #9, #17, puis #16.
   Aucune constante upstream n'est renommée ni modifiée, et les noms d'événements suivent la
   convention upstream `<domaine>.<événement>`.
 - `custom_components/auto_backup/__init__.py` : deux lignes ajoutées par #6 — l'import de
@@ -120,6 +128,15 @@ caractère près.
   d'`async_setup_notifications()` et son appel dans `async_setup_entry`, qui branche les
   notifications persistantes sur les événements de téléversement. Tout cela est ajouté, à une
   ré-indentation près, décrite juste en dessous.
+- `custom_components/auto_backup/sensor.py` et
+  `custom_components/auto_backup/binary_sensor.py` : trois lignes ajoutées par l'issue #16 à
+  chacun — l'import d'`async_setup_destination_sensors()` (respectivement
+  `async_setup_destination_binary_sensors()`) et son appel **à la fin** de leur
+  `async_setup_entry()`, après `async_add_entities([...])`. Les entités upstream sont créées
+  en premier, celles du fork ensuite ; aucune ligne upstream n'est supprimée, modifiée ni
+  ré-indentée, et aucune classe upstream n'est touchée. Toute la logique — état par
+  destination, écoute des événements distants, création et retrait des entités quand les
+  options changent — vit dans `destinations/entities.py`.
 - `custom_components/auto_backup/services.yaml` : un champ `upload_to` ajouté aux services
   `backup`, `backup_full` et `backup_partial` (défini une fois avec l'ancre YAML `&upload_to`,
   référencé deux fois), à la fin de la liste des champs de chacun. Aucun champ upstream n'est
@@ -155,6 +172,13 @@ caractère près.
   ce qui a échoué à sa première requête (API Drive non activée, par exemple).
   L'issue #17 y ajoute l'étape `reglages_notifications` et son entrée de menu, l'étape
   `confirmer_changement_de_compte` et l'abandon `options.abort.changement_de_compte_annule`.
+  L'issue #16 ajoute enfin une section `entity` (clés
+  `entity.sensor.destination_dernier_televersement`,
+  `entity.sensor.destination_sauvegardes_distantes` et
+  `entity.binary_sensor.destination_probleme`), insérée elle aussi **avant** les clés
+  upstream. Chacun de ces noms porte le marqueur `{destination}`, remplacé à l'exécution par
+  le nom de la destination (`Entity.translation_placeholders`) : c'est ce qui distingue les
+  entités de deux destinations partageant le même device.
   Toutes les clés upstream sont conservées telles quelles, et les ajouts sont insérés **avant**
   les clés existantes : leurs virgules de fin de ligne ne changent pas, donc aucune ligne
   upstream n'est modifiée. Les autres langues livrées par l'upstream (`cs`, `de`, `pt_PT`,
@@ -264,9 +288,9 @@ L'option `notify_on_failure` de l'issue #17 suit exactement ce modèle : sa prop
 
 - les fichiers réécrits (`manifest.json`) sortent de la comparaison ligne à ligne mais sont
   contrôlés par leurs propres tests ;
-- les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `services.yaml`,
-  `translations/fr.json`, `translations/en.json`) sont comparés à l'upstream : le test échoue
-  si une ligne upstream y a été supprimée ou modifiée ;
+- les fichiers upstream étendus (`__init__.py`, `const.py`, `config_flow.py`, `sensor.py`,
+  `binary_sensor.py`, `services.yaml`, `translations/fr.json`, `translations/en.json`) sont
+  comparés à l'upstream : le test échoue si une ligne upstream y a été supprimée ou modifiée ;
 - les seules divergences tolérées dans ces fichiers sont les ré-indentations énumérées dans
   `REINDENTATIONS_TOLEREES` (aujourd'hui la seule ligne ci-dessus) : la ligne doit se retrouver
   telle quelle dans le fichier du fork, au décalage d'indentation près, et être citée mot pour

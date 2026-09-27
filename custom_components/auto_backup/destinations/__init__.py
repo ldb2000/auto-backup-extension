@@ -10,7 +10,9 @@ destinations à ré-autoriser (`reauth`) et les étapes d'interface qui étenden
 le flux d'options upstream (`flow`). L'issue #17 y ajoute les notifications
 persistantes d'échec et de ré-authentification (`notifications`) et le point
 unique de masquage des secrets du fork (`masquage`), que doit appeler tout code
-affichant un texte venu d'un fournisseur.
+affichant un texte venu d'un fournisseur. L'issue #16 y ajoute enfin les entités
+d'état de chaque destination (`entities`), qui délèguent leur masquage à ce
+module commun.
 
 Les fournisseurs concrets vivent dans le sous-paquet `providers` — Google Drive
 depuis l'issue #13 — et sont chargés par `enregistrer_les_fournisseurs()` au
@@ -32,6 +34,14 @@ from .config_entry import (
     preserve_fork_options,
 )
 from .destination import RemoteDestination
+from .entities import (
+    CoordinateurEntitesDestinations,
+    EtatDestination,
+    assainir_le_message,
+    async_coordinateur_des_destinations,
+    async_setup_destination_binary_sensors,
+    async_setup_destination_sensors,
+)
 from .errors import (
     DestinationAuthError,
     DestinationConfigError,
@@ -87,6 +97,7 @@ __all__ = [
     "DESTINATION_SCHEMA",
     "TOKEN_SCHEMA",
     "VALEUR_MASQUEE",
+    "CoordinateurEntitesDestinations",
     "DestinationAuthError",
     "DestinationConfig",
     "DestinationConfigError",
@@ -98,11 +109,14 @@ __all__ = [
     "DestinationOAuth2Session",
     "DestinationQuotaError",
     "DuplicateProviderError",
+    "EtatDestination",
     "GestionnaireDeNotifications",
     "OAuth2ProviderSpec",
     "RemoteBackup",
     "RemoteDestination",
     "UnknownProviderError",
+    "assainir_le_message",
+    "async_coordinateur_des_destinations",
     "async_destination_configs",
     "async_effacer_la_reauthentification",
     "async_effacer_les_notifications",
@@ -113,6 +127,8 @@ __all__ = [
     "async_persist_provider_data",
     "async_persist_token",
     "async_session_de_la_destination",
+    "async_setup_destination_binary_sensors",
+    "async_setup_destination_sensors",
     "async_setup_destinations",
     "async_setup_notifications",
     "async_signaler_la_reauthentification",
