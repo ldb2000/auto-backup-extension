@@ -227,6 +227,11 @@ Le détail des changements, issue par issue, suit.
 - Le détail `{detail}` de l'abandon `echec_fournisseur` (ajout d'une destination) est le message traduit du code de l'erreur, dans la langue de Home Assistant, au lieu du texte du fournisseur. Refs #46
 - Les refus de l'option `upload_to` (destination inconnue, nom ambigu, téléversement indisponible) sont des `ServiceValidationError` traduisibles (`translation_domain`, `translation_key`, `translation_placeholders`) : l'interface les affiche dans la langue de l'utilisateur. Refs #46
 
+- La notification et le problème de ré-autorisation renvoient à l'écran où Home Assistant affiche ce problème, **Paramètres → Système → Réparations** (« Settings → System → Repairs »), en plus de l'action « Ré-autoriser une destination » des options de l'intégration ; la mention d'une « interface des intégrations » inexistante disparaît aussi du README, de l'ADR et des commentaires. Refs #55
+- Les textes anglais du fork suivent l'orthographe américaine de Home Assistant (« authorize », « authorization », « Re-authorize a destination ») ; les clés de traduction sont inchangées. Refs #55
+- Le message du code `unknown` n'attribue plus l'erreur au fournisseur (« erreur inattendue : le détail est consigné dans le journal de Home Assistant » / « unexpected error: details are in the Home Assistant log ») : ce code couvre aussi les erreurs internes. Refs #55
+- Dans les refus de l'option `upload_to`, la valeur demandée répétée dans le message est tronquée à 100 caractères (terminés par « … ») : un appel de service portant une chaîne très longue ne la recopie plus en entier. Refs #55
+
 ### Sécurité
 
 - Le dossier distant (`folder`) d'une destination est validé comme chemin relatif POSIX par `chemin_de_dossier()`, appelé par le schéma voluptuous comme par `DestinationConfig` : traversée (`..`), chemin absolu, lettre de lecteur, séparateur Windows, segment vide, espace de bordure et caractère de contrôle sont refusés avant d'atteindre un fournisseur. Refs #6
