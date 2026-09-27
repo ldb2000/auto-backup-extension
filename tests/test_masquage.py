@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from custom_components.auto_backup.destinations.masquage import (
+    CODES_D_ERREUR_CONNUS,
     LONGUEUR_MIN_SUITE_OPAQUE,
     decrire_l_exception,
     journaliser_une_exception,
@@ -382,33 +383,190 @@ def test_reserve_un_secret_court_hors_de_portee_d_un_mot_cle_sort_intact() -> No
     assert masquer("secret is court-factice") == "secret is court-factice"
 
 
+def test_reserve_un_mot_interminable_a_capitale_est_masque() -> None:
+    """La passe 6 avale un mot français à capitale initiale : cas théorique.
+
+    Il mêle deux casses, comme un jeton : la passe ne sait pas l'en distinguer.
+    La réserve ne porte que sur la cause : les noms passent par
+    `masquer_un_nom()`.
+    """
+    mot = "Anticonstitutionnellement"
+    assert len(mot) >= LONGUEUR_MIN_SUITE_OPAQUE
+
+    assert masquer(mot) == VALEUR_MASQUEE
+    assert masquer_un_nom(mot) == mot
+
+
+### Codes d'erreur connus des fournisseurs (#48) ###
+
+# Codes que la passe 6 masquait avant #48, faute de liste blanche : c'est pour
+# eux que la liste existe. Ils doivent tous y figurer.
+CODES_LONGS_EXIGES = (
+    "expired_access_token",
+    "userRateLimitExceeded",
+    "too_many_write_operations",
+    "storageQuotaExceeded",
+)
+
+
+def test_la_liste_blanche_contient_les_codes_exiges_par_l_issue() -> None:
+    """Critère 1 : les cinq codes nommés par l'issue sont dans la liste."""
+    for code in (*CODES_LONGS_EXIGES, "insufficient_space"):
+        assert code in CODES_D_ERREUR_CONNUS
+
+
+@pytest.mark.parametrize("code", sorted(CODES_D_ERREUR_CONNUS))
+def test_chaque_code_est_justifie_par_sa_source(code: str) -> None:
+    """Critère 1 : chaque code cite la documentation de son fournisseur."""
+    source = CODES_D_ERREUR_CONNUS[code]
+    assert source.startswith(("Dropbox API v2", "Google Drive API"))
+
+
+@pytest.mark.parametrize("code", sorted(CODES_D_ERREUR_CONNUS))
+def test_aucun_code_ne_peut_coincider_avec_un_jeton(code: str) -> None:
+    """Critère 5 : un code est un identifiant de mots, pas une valeur aléatoire.
+
+    Un jeton réel porte des chiffres ou un préfixe reconnu (`sl.`, `ya29.`,
+    `1//`) ; un code de la liste n'est fait que de lettres et de `_`. Et il ne
+    doit contenir aucun des caractères qui coupent une suite opaque, sans quoi
+    la comparaison exacte ne pourrait jamais le reconnaître.
+    """
+    assert code.replace("_", "").isalpha()
+    assert code.isascii()
+    assert not code.startswith(("sl", "ya29", "1//"))
+
+
+@pytest.mark.parametrize("code", sorted(CODES_D_ERREUR_CONNUS))
+def test_un_code_connu_reste_intact_a_cote_d_un_secret_masque(code: str) -> None:
+    """Critère 2 : le code reste lisible, le reste est masqué comme avant."""
+    brut = (
+        f"échec (motif : {code}) avec access_token={IDENTIFIANT_DE_SESSION} "
+        f"et {SUITE_BASE64URL}"
+    )
+
+    masque = masquer(brut)
+
+    assert masque == (
+        f"échec (motif : {code}) avec access_token={VALEUR_MASQUEE} et {VALEUR_MASQUEE}"
+    )
+    assert masquer(masque) == masque
+
+
+@pytest.mark.parametrize("code", CODES_LONGS_EXIGES)
+def test_un_code_long_seul_reste_intact(code: str) -> None:
+    """Critère 2 : ces codes, que la passe 6 masquait avant #48, passent."""
+    assert len(code) >= LONGUEUR_MIN_SUITE_OPAQUE
+
+    assert masquer(code) == code
+
+
+@pytest.mark.parametrize(
+    ("brut", "attendu"),
+    [
+        # `error_summary` Dropbox tel que le fournisseur le recopie : le code
+        # est borné par `/`, qui coupe la suite opaque.
+        pytest.param(
+            "(HTTP 401) : expired_access_token/",
+            "(HTTP 401) : expired_access_token/",
+            id="dropbox-jeton-expire-barre",
+        ),
+        pytest.param(
+            "(HTTP 401) : expired_access_token/..",
+            "(HTTP 401) : expired_access_token/..",
+            id="dropbox-jeton-expire-points",
+        ),
+        pytest.param(
+            "(HTTP 409) : path/insufficient_space/..",
+            "(HTTP 409) : path/insufficient_space/..",
+            id="dropbox-espace-sature",
+        ),
+        pytest.param(
+            "(HTTP 429) : too_many_write_operations/...",
+            "(HTTP 429) : too_many_write_operations/...",
+            id="dropbox-ecritures",
+        ),
+        pytest.param(
+            "(HTTP 409) : path/too_many_write_operations/.",
+            "(HTTP 409) : path/too_many_write_operations/.",
+            id="dropbox-ecritures-sous-champ",
+        ),
+        # Motifs Google, séparés par une virgule par `erreur_de_la_reponse()`.
+        pytest.param(
+            "(motif : storageQuotaExceeded, userRateLimitExceeded)",
+            "(motif : storageQuotaExceeded, userRateLimitExceeded)",
+            id="google-deux-motifs",
+        ),
+    ],
+)
+def test_un_code_connu_est_reconnu_dans_son_contexte(brut: str, attendu: str) -> None:
+    """Les séparateurs réels (`/`, `.`, `,`, `)`) bornent bien la suite."""
+    assert masquer(brut) == attendu
+
+
 @pytest.mark.parametrize(
     "suite",
     [
-        pytest.param("Anticonstitutionnellement", id="mot-francais-a-capitale"),
-        pytest.param("storageQuotaExceeded", id="code-google-quota"),
-        pytest.param("userRateLimitExceeded", id="code-google-cadence"),
-        pytest.param("expired_access_token", id="code-dropbox-jeton-expire"),
-        pytest.param("too_many_write_operations", id="code-dropbox-ecritures"),
+        pytest.param("expired_access_tokenAbC", id="suffixe"),
+        pytest.param("Xexpired_access_token", id="prefixe"),
+        pytest.param("expired_access_token_2", id="suffixe-chiffre"),
+        pytest.param("expired_access_token-FaCtIcE", id="suffixe-tiret"),
+        pytest.param("EXPIRED_ACCESS_TOKEN", id="majuscules"),
+        pytest.param("Expired_Access_Token", id="casse-mixte"),
+        pytest.param("UserRateLimitExceeded", id="capitale-initiale"),
+        pytest.param("userratelimitexceeded1", id="minuscules-chiffre"),
+        pytest.param("storageQuotaExceeded+", id="suffixe-plus"),
+        pytest.param("too_many_write_operations_", id="suffixe-souligne"),
+        pytest.param("tooManyWriteOperationsFaCtIcE", id="code-inconnu"),
     ],
 )
-def test_reserve_un_mot_ou_un_code_technique_interminable_est_masque(
-    suite: str,
-) -> None:
-    """La passe 6 avale aussi les codes d'erreur des fournisseurs.
-
-    Le mot français à capitale initiale est un cas théorique ; la portée réelle
-    de la réserve, ce sont les codes techniques de vingt caractères ou plus que
-    Dropbox et Google renvoient. C'est acceptable : les fournisseurs du fork
-    traduisent la cause principale en français et n'ajoutent le code brut qu'en
-    appendice, si bien que la cause reste diagnosticable une fois le code
-    masqué. La réserve ne porte que sur la cause : les noms passent par
-    `masquer_un_nom()`.
-    """
+def test_une_suite_proche_d_un_code_reste_masquee(suite: str) -> None:
+    """Critère 3 : comparaison stricte, jamais un préfixe ni une casse libre."""
     assert len(suite) >= LONGUEUR_MIN_SUITE_OPAQUE
+    assert suite not in CODES_D_ERREUR_CONNUS
 
     assert masquer(suite) == VALEUR_MASQUEE
-    assert masquer_un_nom(suite) == suite
+
+
+@pytest.mark.parametrize(
+    ("brut", "attendu"),
+    [
+        # Passe 3 : la valeur d'une clé sensible reste masquée, même égale à
+        # un code de la liste.
+        pytest.param(
+            "access_token=expired_access_token",
+            f"access_token={VALEUR_MASQUEE}",
+            id="valeur-de-cle-egale-a-un-code",
+        ),
+        pytest.param(
+            '"refresh_token": "userRateLimitExceeded"',
+            f'"refresh_token": "{VALEUR_MASQUEE}"',
+            id="valeur-json-egale-a-un-code",
+        ),
+        pytest.param(
+            "invalid token storageQuotaExceeded",
+            f"invalid token {VALEUR_MASQUEE}",
+            id="mot-cle-espace-code",
+        ),
+        # Passe 4 : un jeton reconnaissable reste masqué, même s'il se termine
+        # par un code.
+        pytest.param(
+            "jeton sl.expired_access_token",
+            f"jeton {VALEUR_MASQUEE}",
+            id="jeton-dropbox-forme-de-code",
+        ),
+        # Passe 2 : l'en-tête d'autorisation reste masqué.
+        pytest.param(
+            "Bearer too_many_write_operations",
+            f"Bearer {VALEUR_MASQUEE}",
+            id="porteur-egal-a-un-code",
+        ),
+    ],
+)
+def test_les_passes_precedentes_l_emportent_sur_la_liste_blanche(
+    brut: str, attendu: str
+) -> None:
+    """La liste blanche n'agit qu'en passe 6 : elle ne rouvre aucune fuite."""
+    assert masquer(brut) == attendu
 
 
 def test_un_mot_interminable_en_minuscules_reste_lisible() -> None:

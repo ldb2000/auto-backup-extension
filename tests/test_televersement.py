@@ -1741,12 +1741,12 @@ async def test_des_erreurs_typees_reelles_restent_identiques_dans_l_evenement(
 
 
 @pytest.mark.parametrize(
-    ("erreur", "cause_reelle", "code_masque"),
+    ("erreur", "cause_reelle", "code"),
     [
         # `userRateLimitExceeded` (21 caractères, casse mixte) : même famille
         # d'erreur que `rateLimitExceeded` ci-dessus (limitation de débit,
-        # réessayée jusqu'à épuisement des tentatives), mais assez long pour
-        # que la passe 6 la masque.
+        # réessayée jusqu'à épuisement des tentatives), assez long pour que la
+        # passe 6 le masque sans la liste blanche de #48.
         pytest.param(
             erreur_de_la_reponse(429, _charge_google("userRateLimitExceeded")),
             "Google Drive a renvoyé une réponse inattendue (HTTP 429) : "
@@ -1754,9 +1754,10 @@ async def test_des_erreurs_typees_reelles_restent_identiques_dans_l_evenement(
             "userRateLimitExceeded",
             id="google-rate-limit-utilisateur",
         ),
-        # `too_many_write_operations` (26 caractères, `_`) : quota réel
-        # d'opérations d'écriture Google Drive, embarqué tel quel dans le
-        # message générique d'un 403 non qualifié.
+        # `too_many_write_operations` (26 caractères, `_`) : code Dropbox
+        # (`RateLimitReason`, `WriteError`), éprouvé ici par le message
+        # générique d'un 403 Google non qualifié, qui recopie tout motif tel
+        # quel : la liste blanche ne dépend pas du fournisseur.
         pytest.param(
             erreur_de_la_reponse(403, _charge_google("too_many_write_operations")),
             "Google Drive a refusé l'accès (403). Vérifiez que l'API Drive est "
@@ -1780,24 +1781,21 @@ async def test_des_erreurs_typees_reelles_restent_identiques_dans_l_evenement(
         ),
     ],
 )
-async def test_les_codes_de_fournisseur_reels_ge_20_caracteres_sont_masques(
+async def test_les_codes_de_fournisseur_reels_ge_20_caracteres_restent_lisibles(
     hass: HomeAssistant,
     instance: _Instance,
     erreur: DestinationError,
     cause_reelle: str,
-    code_masque: str,
+    code: str,
 ) -> None:
-    """Comportement assumé (arbitrage métier #44) pour trois codes ≥ 20 caractères.
+    """Critère 4 de #48 : les codes connus passent en clair dans `error`.
 
-    Critère 2 reformulé : les codes techniques de fournisseur d'au moins vingt
-    caractères (`userRateLimitExceeded`, `too_many_write_operations`,
-    `expired_access_token`) restent masqués par la passe 6 de `masquer()`,
-    exactement comme dans le journal (#35), les notifications (#17) et les
-    entités (#16). Les épargner est hors périmètre ici, reporté à l'issue #48.
-
-    Ce test fixe donc, positivement, le comportement retenu : le code devient
-    `***`, le reste du message ne bouge pas, et le résultat vaut
-    `masquer(cause_reelle)` — pas un texte retapé à la main.
+    Sous #44, ces trois codes de vingt caractères ou plus étaient réduits à
+    `***` par la passe 6 de `masquer()` (réserve assumée, arbitrage métier).
+    La liste blanche exacte de `destinations/masquage.py` les épargne
+    désormais : une automatisation peut filtrer sur le code. Le résultat vaut
+    toujours `masquer(cause_reelle)` — l'émission passe bien par le masquage —
+    et, la cause ne portant aucun secret, il est identique au message réel.
     """
     assert str(erreur) == cause_reelle, "le message réel a changé sous le test"
     echecs = await _declencher_un_echec(hass, instance, erreur)
@@ -1805,10 +1803,26 @@ async def test_les_codes_de_fournisseur_reels_ge_20_caracteres_sont_masques(
     assert len(echecs) == 1
     cause = echecs[0].data[ATTR_ERROR]
     assert cause == masquer(cause_reelle)
-    # Seul le code est remplacé : le reste du message (statut HTTP, nom de la
-    # destination, ponctuation française) ne bouge pas.
-    assert cause == cause_reelle.replace(code_masque, "***")
-    assert code_masque not in cause
+    assert cause == cause_reelle
+    assert code in cause
+    assert "***" not in cause
+
+
+async def test_un_code_connu_reste_lisible_mais_le_secret_voisin_est_masque(
+    hass: HomeAssistant, instance: _Instance
+) -> None:
+    """Critère 2 de #48, par l'événement : le code passe, le jeton non."""
+    jeton = "sl.B1a2C3FaCtIcE-0123456789abcdefghij"
+    erreur = DestinationError(
+        f"Dropbox refuse l'accès (HTTP 401) : expired_access_token/ ({jeton})"
+    )
+
+    echecs = await _declencher_un_echec(hass, instance, erreur)
+
+    assert len(echecs) == 1
+    assert echecs[0].data[ATTR_ERROR] == (
+        "Dropbox refuse l'accès (HTTP 401) : expired_access_token/ (***)"
+    )
 
 
 async def test_le_delai_depasse_reste_identique_dans_l_evenement(

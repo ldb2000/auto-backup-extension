@@ -31,7 +31,10 @@ Les passes vont de la plus précise à la plus générale :
 6. **suites opaques** d'au moins `LONGUEUR_MIN_SUITE_OPAQUE` caractères qui ne
    ressemblent pas à un mot — dernier filet pour un secret sans clé ni forme
    reconnaissable. C'est la seule passe qu'un appelant peut écarter
-   (`dernier_filet=False`, cf. `masquer_un_nom()`).
+   (`dernier_filet=False`, cf. `masquer_un_nom()`). Elle épargne les **codes
+   d'erreur connus des fournisseurs** (`CODES_D_ERREUR_CONNUS`, #48), et eux
+   seuls : la suite entière doit être égale, caractère pour caractère, à l'un
+   d'eux — jamais un motif, un préfixe ni une comparaison sans casse.
 
 Vient enfin la **troncature** facultative (`longueur_max`), pour un affichage
 qui ne peut pas accueillir une trace de pile complète.
@@ -84,18 +87,27 @@ messages en français. Restent trois angles morts connus et acceptés :
   que la réserve ci-dessus protège justement, pour un gain nul sur les deux
   seuls fournisseurs intégrés, dont les jetons sont longs et reconnus par leur
   forme. À revoir en même temps que l'ajout d'un fournisseur aux jetons courts.
-- **Mot interminable ou code technique d'un fournisseur.** La passe 6 masque
-  toute suite de `LONGUEUR_MIN_SUITE_OPAQUE` caractères ou plus qui mêle casses,
-  chiffres ou `_+` : un mot français à capitale initiale
-  (« Anticonstitutionnellement »), cas théorique, mais aussi — et c'est la
-  portée réelle de la réserve — les **codes d'erreur des fournisseurs**, qui
-  atteignent couramment cette longueur : `storageQuotaExceeded`,
-  `expired_access_token`, `too_many_write_operations`, `userRateLimitExceeded`.
-  C'est acceptable : les fournisseurs du fork traduisent la cause principale en
-  français et n'ajoutent le code brut qu'en appendice (« (motif : …) »), si bien
-  que la cause reste diagnosticable une fois le code masqué. Cette réserve ne
-  porte que sur la cause d'un échec : les noms passent par `masquer_un_nom()`,
-  hors de portée de cette passe.
+- **Mot interminable.** La passe 6 masque toute suite de
+  `LONGUEUR_MIN_SUITE_OPAQUE` caractères ou plus qui mêle casses, chiffres ou
+  `_+` : un mot français à capitale initiale (« Anticonstitutionnellement »),
+  cas théorique, ou un code d'erreur de fournisseur **absent** de
+  `CODES_D_ERREUR_CONNUS`. Les codes de la liste, eux, restent lisibles depuis
+  #48 : une automatisation peut filtrer sur `expired_access_token` ou
+  `userRateLimitExceeded` dans le champ `error` de `auto_backup.upload_failed`.
+  La liste est exacte et fermée : un code nouveau d'un fournisseur reste masqué
+  jusqu'à ce qu'on l'y ajoute, source à l'appui. Cette réserve ne porte que sur
+  la cause d'un échec : les noms passent par `masquer_un_nom()`, hors de portée
+  de cette passe.
+
+**Pourquoi la liste blanche ne rouvre aucune fuite.** Elle n'agit qu'en passe
+6, sur une suite que les passes précédentes n'ont pas déjà remplacée : la
+valeur d'une clé sensible (`access_token=expired_access_token`, passe 3) et un
+jeton reconnaissable (`sl.…`, passe 4) restent masqués même s'ils contenaient
+ou valaient un code. Chaque code est un identifiant documenté, composé de mots
+anglais, sans chiffre : il ne peut pas coïncider avec un jeton réel, qui est
+aléatoire et porte des chiffres ou un préfixe (`sl.`, `ya29.`, `1//`). Et la
+comparaison porte sur la suite **entière** : un secret qui commencerait ou
+finirait par un code (`expired_access_tokenAbC123`) reste masqué en entier.
 """
 
 from __future__ import annotations
@@ -103,6 +115,9 @@ from __future__ import annotations
 import logging
 import re
 import traceback
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
 
 from .models import VALEUR_MASQUEE
 
@@ -240,6 +255,59 @@ _MOTIF_CHEMIN = re.compile(
 # et le message perdrait tout intérêt de diagnostic.
 _MOTIF_SUITE_OPAQUE = re.compile(
     r"[A-Za-z0-9_+-]{" + str(LONGUEUR_MIN_SUITE_OPAQUE) + r",}"
+)
+
+# Codes d'erreur connus des fournisseurs, épargnés par la passe 6 (#48). Ce ne
+# sont pas des secrets mais le nom de la cause : un jeton expiré, un quota
+# épuisé, une limitation de débit. Les masquer privait une automatisation du
+# seul moyen de distinguer ces causes dans le champ `error` de
+# `auto_backup.upload_failed`.
+#
+# Liste **exacte** : la suite opaque trouvée par la passe 6 doit être égale,
+# casse comprise, à l'un de ces codes. Un code n'entre ici que s'il figure dans
+# la documentation du fournisseur, citée en regard. Les codes de moins de
+# `LONGUEUR_MIN_SUITE_OPAQUE` caractères n'atteignent pas la passe 6 ; ils sont
+# listés quand le fork les reconnaît, pour que la liste reste la référence des
+# codes lisibles.
+CODES_D_ERREUR_CONNUS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        # --- Dropbox API v2 (spécification officielle, dépôt
+        # github.com/dropbox/dropbox-api-spec) ---
+        # Jeton d'accès expiré : `auth.stone`, union `AuthError`. Recopié par
+        # `_erreur_d_acces()` du fournisseur Dropbox (HTTP 401).
+        "expired_access_token": "Dropbox API v2, auth.AuthError",
+        # Jeton d'accès invalide ou révoqué : `auth.stone`, union `AuthError`.
+        "invalid_access_token": "Dropbox API v2, auth.AuthError",
+        # Trop d'écritures simultanées dans le compte : `auth.stone`, union
+        # `RateLimitReason` ; `files.stone`, unions `WriteError` et
+        # `UploadSessionFinishError`.
+        "too_many_write_operations": (
+            "Dropbox API v2, auth.RateLimitReason, files.WriteError, "
+            "files.UploadSessionFinishError"
+        ),
+        # Espace saturé : `files.stone`, union `WriteError`. Reconnu par le
+        # fournisseur Dropbox (`MOTIF_ESPACE`).
+        "insufficient_space": "Dropbox API v2, files.WriteError",
+        # --- Google Drive API v3 (guide « Resolve errors »,
+        # developers.google.com/workspace/drive/api/guides/handle-errors),
+        # champ `error.errors[].reason` ---
+        # Limitation de débit par utilisateur (403 ou 429). Réessayée par
+        # l'envoi Google Drive (`RAISONS_REESSAYABLES`).
+        "userRateLimitExceeded": "Google Drive API, guide Resolve errors",
+        # Quota de stockage du compte épuisé (403). Reconnu par le fournisseur
+        # Google Drive (`RAISONS_DE_QUOTA`).
+        "storageQuotaExceeded": "Google Drive API, guide Resolve errors",
+        # Plafond de création d'éléments du compte atteint (403).
+        "activeItemCreationLimitExceeded": "Google Drive API, guide Resolve errors",
+        # Droits insuffisants sur le fichier (403).
+        "insufficientFilePermissions": "Google Drive API, guide Resolve errors",
+        # Application non autorisée sur le fichier, cas de la portée
+        # `drive.file` qu'utilise le fork (403).
+        "appNotAuthorizedToFile": "Google Drive API, guide Resolve errors",
+        # Trop d'éléments dans un même dossier, hors racine (403) : le dossier
+        # des sauvegardes peut l'atteindre.
+        "numChildrenInNonRootLimitExceeded": "Google Drive API, guide Resolve errors",
+    }
 )
 
 
@@ -403,6 +471,12 @@ def _masquer_l_affectation(trouve: re.Match[str]) -> str:
 
 
 def _masquer_la_suite_opaque(trouve: re.Match[str]) -> str:
-    """Masque une suite longue, sauf si elle n'est qu'un mot interminable."""
+    """Masque une suite longue, sauf mot interminable ou code connu (#48).
+
+    Le code n'est épargné que si la suite **entière** lui est égale : un
+    préfixe, un suffixe ou une casse différente suffit à la masquer.
+    """
     valeur = trouve[0]
+    if valeur in CODES_D_ERREUR_CONNUS:
+        return valeur
     return VALEUR_MASQUEE if _ressemble_a_un_secret(valeur) else valeur
