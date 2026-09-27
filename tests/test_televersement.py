@@ -15,6 +15,7 @@ Aucun test ne touche un fournisseur réel ni le réseau.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -1426,3 +1427,136 @@ def test_un_delai_non_numerique_est_refuse(saisie: Any) -> None:
     """Une valeur qui n'est pas un nombre est refusée, pas interprétée."""
     with pytest.raises(DestinationConfigError):
         _delai_de_televersement(saisie)
+
+
+### AUCUN SECRET DANS LE JOURNAL (#35) ###
+
+# Valeurs inventées, aux formes de celles qu'un fournisseur renvoie réellement :
+# un jeton Dropbox, un jeton Google, et l'URI de session d'un envoi reprenable
+# Google Drive, dont l'`upload_id` suffit à écrire dans le compte.
+JETON_DROPBOX_FACTICE = "sl.B1a2C3FaCtIcE-0123456789abcdefghij"
+JETON_GOOGLE_FACTICE = "ya29.a0AfH6FaCtIcE-0123456789abcdef"
+IDENTIFIANT_ENVOI_FACTICE = "AAAAFaCtIcE0123456789abcdefghijkl"
+URI_DE_SESSION_FACTICE = (
+    "https://www.googleapis.invalid/upload/drive/v3/files"
+    f"?uploadType=resumable&upload_id={IDENTIFIANT_ENVOI_FACTICE}"
+)
+SECRETS_FACTICES = (
+    JETON_DROPBOX_FACTICE,
+    JETON_GOOGLE_FACTICE,
+    IDENTIFIANT_ENVOI_FACTICE,
+)
+MESSAGE_AVEC_SECRETS = (
+    f"envoi refusé : Authorization: Bearer {JETON_GOOGLE_FACTICE}, "
+    f"access_token={JETON_DROPBOX_FACTICE}, session {URI_DE_SESSION_FACTICE}"
+)
+
+
+def _fuites(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Secrets factices présents dans le journal, tous niveaux confondus."""
+    return [secret for secret in SECRETS_FACTICES if secret in caplog.text]
+
+
+@pytest.mark.parametrize(
+    "erreur",
+    [
+        pytest.param(DestinationError(MESSAGE_AVEC_SECRETS), id="erreur-typee"),
+        pytest.param(RuntimeError(MESSAGE_AVEC_SECRETS), id="erreur-inattendue"),
+        pytest.param(
+            aiohttp.ClientConnectionError(
+                f"Connection reset while PUT {URI_DE_SESSION_FACTICE}"
+            ),
+            id="erreur-reseau-inattendue",
+        ),
+    ],
+)
+async def test_un_echec_de_fournisseur_ne_journalise_aucun_secret(
+    hass: HomeAssistant,
+    instance: _Instance,
+    caplog: pytest.LogCaptureFixture,
+    erreur: Exception,
+) -> None:
+    """Critère 1 : ni jeton ni URI de session dans le journal, même en debug."""
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+    instance.destination("destination_test").erreur_a_lever = erreur
+
+    with caplog.at_level(logging.DEBUG):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_BACKUP,
+            {ATTR_NAME: "Sauvegarde du 22", ATTR_UPLOAD_TO: "destination_test"},
+            blocking=True,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    assert not _fuites(caplog), f"secrets journalisés : {_fuites(caplog)}"
+    # L'échec reste journalisé et diagnosticable : slug et cause masquée.
+    erreurs = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert any(SLUG in message and "***" in message for message in erreurs)
+    # Aucune trace brute : l'enregistrement ne transporte pas l'exception.
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+async def test_une_erreur_inattendue_garde_sa_trace_masquee_en_debug(
+    hass: HomeAssistant, instance: _Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    """La trace sert encore au diagnostic, en `debug`, sans le secret."""
+    instance.destination("destination_test").erreur_a_lever = RuntimeError(
+        MESSAGE_AVEC_SECRETS
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    traces = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and "Traceback" in record.getMessage()
+    ]
+    assert len(traces) == 1
+    assert "RuntimeError: envoi refusé" in traces[0]
+    assert "async_upload" in traces[0]
+    assert not _fuites(caplog)
+
+
+async def test_une_erreur_inattendue_n_a_pas_de_trace_hors_debug(
+    hass: HomeAssistant, instance: _Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Au niveau par défaut, seule la ligne d'erreur masquée est écrite."""
+    instance.destination("destination_test").erreur_a_lever = RuntimeError(
+        MESSAGE_AVEC_SECRETS
+    )
+
+    with caplog.at_level(logging.INFO):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_BACKUP, {ATTR_UPLOAD_TO: "destination_test"}, blocking=True
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert "Traceback" not in caplog.text
+    assert "RuntimeError: envoi refusé" in caplog.text
+    assert not _fuites(caplog)
+
+
+async def test_la_cause_d_une_creation_echouee_est_masquee_en_debug(
+    hass: HomeAssistant, instance: _Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    """La cause relayée par `auto_backup.backup_failed` n'est pas maîtrisée."""
+    coordinateur = hass.data[DATA_UPLOADS]
+    coordinateur.async_enregistrer("Sauvegarde du 22", ("destination_test",))
+    hass.bus.async_fire(EVENT_BACKUP_START, {ATTR_NAME: "Sauvegarde du 22"})
+    await hass.async_block_till_done()
+
+    with caplog.at_level(logging.DEBUG):
+        hass.bus.async_fire(
+            EVENT_BACKUP_FAILED,
+            {ATTR_NAME: "Sauvegarde du 22", ATTR_ERROR: MESSAGE_AVEC_SECRETS},
+        )
+        await hass.async_block_till_done()
+
+    assert "abandonnée" in caplog.text
+    assert not _fuites(caplog)

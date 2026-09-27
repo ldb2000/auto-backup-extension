@@ -840,3 +840,42 @@ async def test_le_service_purge_reste_disponible_apres_rechargement(
     await hass.async_block_till_done()
 
     assert destination.sauvegardes == {}
+
+
+### Aucun secret dans le journal de la purge (#35) ###
+
+JETON_FACTICE_RENVOYE = "sl.B1a2C3FaCtIcE-0123456789abcdefghij"
+IDENTIFIANT_ENVOI_RENVOYE = "AAAAFaCtIcE0123456789abcdefghijkl"
+MESSAGE_AVEC_SECRETS = (
+    f"refus : Bearer {JETON_FACTICE_RENVOYE}, "
+    f"https://www.googleapis.invalid/upload?upload_id={IDENTIFIANT_ENVOI_RENVOYE}"
+)
+
+
+@pytest.mark.parametrize("phase", ["listage", "suppression"])
+@pytest.mark.parametrize(
+    "fabrique", [DestinationError, RuntimeError], ids=["typee", "inattendue"]
+)
+async def test_un_echec_de_purge_ne_journalise_aucun_secret(
+    hass: HomeAssistant,
+    entree: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+    phase: str,
+    fabrique: type[Exception],
+) -> None:
+    """Critère 1 de #35 : la cause relayée d'un fournisseur est masquée."""
+    destination = _destination(hass, "destination_test")
+    await _deposer(hass, destination, "vieille", jours=100)
+    panne = fabrique(MESSAGE_AVEC_SECRETS)
+    if phase == "listage":
+        destination.erreur_a_lever = panne
+    else:
+        destination.erreurs_de_suppression["vieille"] = panne
+
+    with caplog.at_level(logging.DEBUG):
+        assert await _coordinateur(hass).async_purger_toutes() == {}
+
+    assert "refus : Bearer ***" in caplog.text
+    assert JETON_FACTICE_RENVOYE not in caplog.text
+    assert IDENTIFIANT_ENVOI_RENVOYE not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

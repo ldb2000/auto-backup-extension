@@ -1515,3 +1515,50 @@ async def test_la_purge_qui_suit_un_televersement_se_fait_en_silence(
 
     # Ni erreur ni trace d'appel : le journal reste muet sur ce chemin.
     assert [enregistrement.message for enregistrement in caplog.records] == []
+
+
+### Aucun secret dans le journal, même quand l'envoi échoue (#35) ###
+
+JETON_GOOGLE_RENVOYE = "ya29.a0AfH6FaCtIcE-0123456789abcdef"
+
+
+async def test_une_coupure_citant_l_uri_de_session_ne_la_journalise_jamais(
+    hass: HomeAssistant,
+    entree_google: MockConfigEntry,
+    integration_prete: None,
+    aioclient_mock: AiohttpClientMocker,
+    fragments_courts: int,
+    delais: list[float],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Critère 1 de #35 : une erreur réseau qui cite l'URI de session.
+
+    C'est le cas concret de l'issue : `aiohttp` recopie volontiers l'URL de la
+    requête dans son message d'erreur, et pendant un envoi reprenable cette URL
+    porte l'`upload_id` — qui suffit à écrire dans le compte. Chaque reprise est
+    journalisée en `debug`, puis l'échec final en `error` : aucun des deux ne
+    doit laisser passer l'URI, ni le jeton que le message cite aussi.
+    """
+    coupure = ClientError(
+        f"Connection reset by peer: PUT {URL_SESSION} "
+        f"(Authorization: Bearer {JETON_GOOGLE_RENVOYE})"
+    )
+    _FauxDrive(aioclient_mock, pannes=[coupure] * 3)
+    echecs = async_capture_events(hass, EVENT_UPLOAD_FAILED)
+
+    with caplog.at_level(logging.DEBUG):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_BACKUP,
+            {"name": NOM_SAUVEGARDE, ATTR_UPLOAD_TO: IDENTIFIANT_DESTINATION},
+            blocking=True,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert len(echecs) == 1
+    assert delais == [1.0, 2.0]
+    journal = caplog.text
+    assert "Reprise de l'envoi après un échec réseau" in journal
+    assert "Échec du téléversement" in journal
+    for secret in (IDENTIFIANT_ENVOI, URL_SESSION, JETON_GOOGLE_RENVOYE, ACCES_FACTICE):
+        assert secret not in journal, secret
