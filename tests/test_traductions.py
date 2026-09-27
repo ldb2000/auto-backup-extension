@@ -692,3 +692,92 @@ def test_les_langues_heritees_restent_valides(langue: str) -> None:
         if _placeholders(texte) != _placeholders(anglais[chemin])
     ]
     assert not divergents, f"placeholders divergents en {langue} : {divergents}"
+
+
+### Écran désigné et orthographe des textes du fork (#55) ###
+
+# Home Assistant range ses problèmes dans « Paramètres → Système → Réparations »
+# (« Settings → System → Repairs ») : c'est là que l'utilisateur les trouve.
+ECRAN_DES_REPARATIONS = {
+    "fr": "Paramètres → Système → Réparations",
+    "en": "Settings → System → Repairs",
+}
+ACTION_DE_REAUTORISATION = {
+    "fr": "« Ré-autoriser une destination »",
+    "en": "“Re-authorize a destination”",
+}
+# Libellés d'un écran qui n'existe pas sous ce nom dans Home Assistant.
+ECRANS_INTROUVABLES = ("interface des intégrations", "integrations dashboard")
+
+
+def _textes_du_fork() -> Iterator[tuple[str, str]]:
+    """Textes lus par l'utilisateur ou le relecteur : traductions, doc, code."""
+    fichiers = [
+        TRADUCTIONS / "fr.json",
+        TRADUCTIONS / "en.json",
+        RACINE_DEPOT / "README.md",
+        *sorted((RACINE_DEPOT / "docs").rglob("*.md")),
+        *sorted((INTEGRATION / "destinations").rglob("*.py")),
+    ]
+    for fichier in fichiers:
+        yield (
+            str(fichier.relative_to(RACINE_DEPOT)),
+            fichier.read_text(encoding="utf-8"),
+        )
+
+
+@pytest.mark.parametrize("langue", LANGUES_ETENDUES)
+@pytest.mark.parametrize(
+    "chemin",
+    [
+        ("issues", "reauthentification_requise", "description"),
+        ("exceptions", "notification_reauth_message", "message"),
+    ],
+    ids=["probleme", "notification"],
+)
+def test_la_reautorisation_renvoie_aux_reparations(
+    langue: str, chemin: tuple[str, ...]
+) -> None:
+    """Critère 1 de #55 : l'écran exact, et l'action qui résout le problème."""
+    texte: Any = _traduction(langue)
+    for cle in chemin:
+        texte = texte[cle]
+
+    assert ECRAN_DES_REPARATIONS[langue] in texte
+    assert ACTION_DE_REAUTORISATION[langue] in texte
+
+
+def test_aucun_texte_ne_designe_un_ecran_introuvable() -> None:
+    """Critère 2 de #55 : aucun renvoi à « l'interface des intégrations »."""
+    fautifs = [
+        (fichier, libelle)
+        for fichier, contenu in _textes_du_fork()
+        for libelle in ECRANS_INTROUVABLES
+        if libelle in contenu.casefold()
+    ]
+    assert not fautifs, f"écran introuvable dans Home Assistant : {fautifs}"
+
+
+def test_l_anglais_suit_l_orthographe_americaine() -> None:
+    """Critère 3 de #55 : « authorize », comme Home Assistant, pas « authorise »."""
+    britanniques = [
+        ".".join(chemin)
+        for chemin, texte in _feuilles(_traduction("en"))
+        if "authoris" in texte.casefold()
+    ]
+    assert not britanniques, f"orthographe britannique : {britanniques}"
+
+
+@pytest.mark.parametrize(
+    ("langue", "fournisseur"), [("fr", "fournisseur"), ("en", "provider")]
+)
+def test_l_erreur_inconnue_n_accuse_pas_le_fournisseur(
+    langue: str, fournisseur: str
+) -> None:
+    """Critère 4 de #55 : `unknown` couvre aussi les erreurs internes."""
+    message = _traduction(langue)["exceptions"][
+        cle_de_traduction_de_l_erreur(CodeErreur.INCONNUE)
+    ]["message"]
+
+    assert fournisseur not in message.casefold()
+    assert "journal" in message or "log" in message

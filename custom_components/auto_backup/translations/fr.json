@@ -162,7 +162,7 @@
     "issues": {
         "reauthentification_requise": {
             "title": "Auto Backup : la destination « {nom} » doit être ré-autorisée",
-            "description": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {nom} » : l'autorisation a expiré ou a été révoquée. Les autres destinations continuent de fonctionner.\n\nPour la remettre en service, ouvrez les options de l'intégration Auto Backup, choisissez « Ré-autoriser une destination » puis « {nom} »."
+            "description": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {nom} » : l'autorisation a expiré ou a été révoquée. Les autres destinations continuent de fonctionner.\n\nCe problème figure dans Paramètres → Système → Réparations. Pour le résoudre, ouvrez les options de l'intégration Auto Backup (« Configurer »), choisissez « Ré-autoriser une destination » puis « {nom} »."
         }
     },
     "exceptions": {
@@ -176,7 +176,7 @@
             "message": "Auto Backup : la destination « {destination} » doit être ré-autorisée"
         },
         "notification_reauth_message": {
-            "message": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {destination} » : l'autorisation a expiré ou a été révoquée. Plus aucune sauvegarde ne lui sera envoyée ; les autres destinations continuent de fonctionner.\n\nPour la remettre en service, ouvrez les options de l'intégration Auto Backup, choisissez « Ré-autoriser une destination », puis « {destination} ».\n\nCette notification et le problème signalé dans l'interface des intégrations disparaîtront ensemble, à la ré-autorisation comme à la suppression de la destination."
+            "message": "Le fournisseur « {fournisseur} » a refusé de renouveler l'accès de la destination « {destination} » : l'autorisation a expiré ou a été révoquée. Plus aucune sauvegarde ne lui sera envoyée ; les autres destinations continuent de fonctionner.\n\nPour la remettre en service, ouvrez les options de l'intégration Auto Backup (« Configurer »), choisissez « Ré-autoriser une destination », puis « {destination} ».\n\nCette notification et le problème signalé dans Paramètres → Système → Réparations disparaîtront ensemble, à la ré-autorisation comme à la suppression de la destination."
         },
         "notification_sauvegarde_sans_nom": {
             "message": "sans nom"
@@ -227,7 +227,7 @@
             "message": "le fournisseur de la destination n'est pas pris en charge par cette version d'Auto Backup"
         },
         "erreur_unknown": {
-            "message": "erreur inattendue du fournisseur : le détail est consigné dans le journal de Home Assistant"
+            "message": "erreur inattendue : le détail est consigné dans le journal de Home Assistant"
         },
         "destination_inconnue": {
             "message": "Destination inconnue : « {destination} ». Destinations configurées : {disponibles}."
