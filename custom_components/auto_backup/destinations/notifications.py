@@ -165,6 +165,7 @@ def _async_creer_la_notification(
     hass: HomeAssistant,
     notification_id: str,
     composer: Callable[[dict[str, str]], tuple[str, str]],
+    toujours_d_actualite: Callable[[], bool],
 ) -> None:
     """Crée une notification dont `composer` écrit le titre et le message.
 
@@ -172,17 +173,44 @@ def _async_creer_la_notification(
     immédiatement. Sinon (langue changée à l'instant, cache pas encore
     rechargé), les traductions sont chargées une fois — avec repli anglais —
     puis la notification est créée. Les valeurs affichées (compteur, noms
-    masqués) sont figées avant ce chargement : l'attente ne change pas ce que
-    la notification dit.
+    masqués) sont figées avant ce chargement.
+
+    Deux garanties encadrent ce chargement :
+
+    - `toujours_d_actualite` est réévalué **après** l'attente : si la panne a
+      été résolue entre-temps (succès du téléversement, ré-autorisation), la
+      notification n'est pas créée — elle décrirait une panne terminée, que plus
+      rien ne viendrait retirer ;
+    - un chargement en échec ne fait pas perdre la notification : elle est
+      créée avec les textes anglais déjà en cache, ou à défaut avec les clés.
     """
     if (textes := _textes_en_cache(hass)) is not None:
         _creer(hass, notification_id, composer(textes))
         return
 
     async def charger_puis_creer() -> None:
-        textes = await async_get_translations(
-            hass, hass.config.language, CATEGORIE_DE_TRADUCTION, {DOMAIN}
-        )
+        try:
+            textes = await async_get_translations(
+                hass, hass.config.language, CATEGORIE_DE_TRADUCTION, {DOMAIN}
+            )
+        except Exception as err:  # la notification prime sur sa traduction
+            _LOGGER.warning(
+                "Chargement des traductions des notifications impossible (%s) : "
+                "repli sur l'anglais en cache",
+                type(err).__name__,
+            )
+            textes = async_get_cached_translations(
+                hass, "en", CATEGORIE_DE_TRADUCTION, DOMAIN
+            )
+            if not _textes_complets(textes):
+                textes = {}
+        if not toujours_d_actualite():
+            _LOGGER.debug(
+                "Notification « %s » abandonnée : la panne a été résolue pendant "
+                "le chargement des traductions",
+                notification_id,
+            )
+            return
         _creer(hass, notification_id, composer(textes))
 
     hass.async_create_task(charger_puis_creer(), eager_start=True)
@@ -306,7 +334,12 @@ class GestionnaireDeNotifications:
             )
 
         _async_creer_la_notification(
-            self._hass, identifiant_de_notification_d_echec(destination_id), composer
+            self._hass,
+            identifiant_de_notification_d_echec(destination_id),
+            composer,
+            # Un succès remet le compteur à zéro ; un échec plus récent crée sa
+            # propre notification, avec son propre compteur.
+            lambda: self._echecs.get(destination_id) == echecs,
         )
 
     @callback
@@ -426,10 +459,18 @@ def async_notifier_la_reauthentification(
             ),
         )
 
+    def toujours_a_reautoriser() -> bool:
+        """La destination attend-elle encore une nouvelle autorisation ?"""
+        destinations = hass.data.get(DATA_DESTINATIONS)
+        return destinations is not None and destinations.reauthentification_requise(
+            config.destination_id
+        )
+
     _async_creer_la_notification(
         hass,
         identifiant_de_notification_de_reauthentification(config.destination_id),
         composer,
+        toujours_a_reautoriser,
     )
 
 

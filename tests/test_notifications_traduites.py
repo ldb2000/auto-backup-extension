@@ -31,6 +31,7 @@ from custom_components.auto_backup.const import (
 )
 from custom_components.auto_backup.destinations import (
     DestinationConfig,
+    async_effacer_la_reauthentification,
     async_signaler_la_reauthentification,
     notifications,
 )
@@ -251,34 +252,17 @@ async def test_le_chargement_asynchrone_des_traductions_est_bien_emprunte(
     assert _notification_d_echec(hass)["title"] == TITRE_FRANCAIS
 
 
-### Limite connue : course pendant le chargement asynchrone ###
+### Course pendant le chargement asynchrone ###
 
 
-async def test_un_succes_pendant_le_chargement_ne_supprime_pas_la_notification_recreee(
-    hass: HomeAssistant,
-    integration_backup: None,
-    fournisseur_factice: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Documente le comportement actuel d'une course signalée sur l'issue.
+def _chargement_retarde(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    """Force le chemin asynchrone et retient le chargement jusqu'au signal.
 
-    Quand le cache de traductions manque, `_async_creer_la_notification`
-    fige les valeurs à afficher (compteur, noms masqués) dans une fermeture
-    `composer`, puis lance une tâche qui charge les traductions et crée la
-    notification à la fin (notifications.py ~163-188). Si un téléversement
-    vers la **même** destination réussit pendant que cette tâche est encore en
-    vol, `async_televersement_reussi` s'exécute d'abord et ne trouve rien à
-    retirer ; la tâche, elle, ignore ce succès et recrée malgré tout la
-    notification d'échec avec les valeurs figées avant lui. La destination
-    finit donc avec une notification d'échec périmée alors que son dernier
-    téléversement a réussi.
-
-    Ce test ne prétend pas que ce soit le comportement souhaité — seulement
-    que c'est le comportement actuel, pour qu'un futur changement soit
-    délibéré plutôt que découvert en production.
+    `_textes_en_cache` est forcé à `None` : le cache de traductions est partagé
+    entre tous les tests par `pytest_homeassistant_custom_component`, et le
+    provoquer froid serait fragile face à l'ordre d'exécution.
     """
     monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
-
     attente = asyncio.Event()
     original = notifications.async_get_translations
 
@@ -287,11 +271,30 @@ async def test_un_succes_pendant_le_chargement_ne_supprime_pas_la_notification_r
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(notifications, "async_get_translations", chargement_retarde)
+    return attente
 
+
+def _notifications_affichees(hass: HomeAssistant) -> dict[str, Any]:
+    return persistent_notification._async_get_or_create_notifications(hass)
+
+
+async def test_un_succes_pendant_le_chargement_ne_laisse_aucune_notification(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un succès survenu pendant le chargement des traductions l'emporte.
+
+    L'échec lance le chargement des traductions ; le téléversement suivant vers
+    la même destination réussit avant la fin de ce chargement. Une fois les
+    traductions chargées, la notification n'est pas créée : elle décrirait une
+    panne terminée, et plus aucun succès ne viendrait la retirer.
+    """
+    attente = _chargement_retarde(monkeypatch)
     await _charger(hass, "fr", config_factice())
+    identifiant = identifiant_de_notification_d_echec(DESTINATION)
 
-    # L'échec programme le chargement des traductions, qui reste en attente :
-    # aucune notification n'existe encore.
     hass.bus.async_fire(
         EVENT_UPLOAD_FAILED,
         {
@@ -302,25 +305,141 @@ async def test_un_succes_pendant_le_chargement_ne_supprime_pas_la_notification_r
             ATTR_ERROR: "quota exceeded",
         },
     )
-    assert notifications.identifiant_de_notification_d_echec(
-        DESTINATION
-    ) not in persistent_notification._async_get_or_create_notifications(hass)
+    assert identifiant not in _notifications_affichees(hass)
 
-    # Le téléversement suivant vers la même destination réussit, avant que le
-    # chargement des traductions de l'échec précédent ne se termine.
     hass.bus.async_fire(EVENT_UPLOAD_SUCCESSFUL, {ATTR_DESTINATION: DESTINATION})
-    assert notifications.identifiant_de_notification_d_echec(
-        DESTINATION
-    ) not in persistent_notification._async_get_or_create_notifications(hass)
 
-    # Le chargement se termine : la notification d'échec est recréée avec les
-    # valeurs figées avant le succès, qui n'en tient donc aucun compte.
     attente.set()
     await hass.async_block_till_done()
 
+    assert identifiant not in _notifications_affichees(hass)
+
+
+async def test_un_echec_plus_recent_affiche_son_propre_compteur(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deux échecs pendant le chargement : seule la notification du second reste."""
+    attente = _chargement_retarde(monkeypatch)
+    await _charger(hass, "fr", config_factice())
+
+    hass.bus.async_fire(
+        EVENT_UPLOAD_FAILED,
+        {ATTR_DESTINATION: DESTINATION, ATTR_DESTINATION_NAME: NOM_DE_LA_DESTINATION},
+    )
+    hass.bus.async_fire(
+        EVENT_UPLOAD_FAILED,
+        {ATTR_DESTINATION: DESTINATION, ATTR_DESTINATION_NAME: NOM_DE_LA_DESTINATION},
+    )
+    attente.set()
+    await hass.async_block_till_done()
+
+    message = _notification_d_echec(hass)["message"]
+    assert "Échecs consécutifs vers cette destination : 2." in message
+
+
+async def test_une_reautorisation_pendant_le_chargement_ne_laisse_aucune_notification(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_oauth_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cas symétrique : la ré-autorisation aboutit avant la fin du chargement."""
+    attente = _chargement_retarde(monkeypatch)
+    await _charger(hass, "fr", config_oauth_factice())
+    identifiant = identifiant_de_notification_de_reauthentification("destination_oauth")
+
+    async_signaler_la_reauthentification(
+        hass, DestinationConfig.from_dict(config_oauth_factice())
+    )
+    assert identifiant not in _notifications_affichees(hass)
+
+    async_effacer_la_reauthentification(hass, "destination_oauth")
+
+    attente.set()
+    await hass.async_block_till_done()
+
+    assert identifiant not in _notifications_affichees(hass)
+
+
+async def test_une_reautorisation_toujours_requise_est_notifiee_apres_chargement(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_oauth_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Témoin : sans résolution entre-temps, la notification est bien créée."""
+    attente = _chargement_retarde(monkeypatch)
+    await _charger(hass, "fr", config_oauth_factice())
+
+    async_signaler_la_reauthentification(
+        hass, DestinationConfig.from_dict(config_oauth_factice())
+    )
+    attente.set()
+    await hass.async_block_till_done()
+
+    notification = _notification(
+        hass, identifiant_de_notification_de_reauthentification("destination_oauth")
+    )
+    assert "doit être ré-autorisée" in notification["title"]
+
+
+### Chargement des traductions en échec ###
+
+
+async def test_un_chargement_en_echec_cree_quand_meme_la_notification(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sans traduction chargeable ni cache, la notification existe malgré tout.
+
+    Le repli affiche les clés : c'est laid, mais la panne reste signalée, sous
+    son identifiant stable. Le journal ne cite que le type de l'exception.
+    """
+    await _charger(hass, "fr", config_factice())
+    monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
+    monkeypatch.setattr(
+        notifications, "async_get_cached_translations", lambda *args: {}
+    )
+
+    async def chargement_en_echec(*args: Any, **kwargs: Any) -> dict[str, str]:
+        raise OSError("lecture impossible de /config/secret_token=abc")
+
+    monkeypatch.setattr(notifications, "async_get_translations", chargement_en_echec)
+
+    await _echec(hass)
+
     notification = _notification_d_echec(hass)
-    assert notification["title"] == TITRE_FRANCAIS
-    assert "Échecs consécutifs vers cette destination : 1." in notification["message"]
+    assert notification["notification_id"] == "auto_backup_upload_destination_test"
+    assert notification["title"] == notifications.CLE_TITRE_ECHEC
+    assert "OSError" in caplog.text
+    assert "secret_token" not in caplog.text
+
+
+async def test_un_chargement_en_echec_retombe_sur_l_anglais_en_cache(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_factice: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Si l'anglais est en cache, le repli l'affiche plutôt que les clés."""
+    await _charger(hass, "en", config_factice())
+    hass.config.language = "fr"
+    monkeypatch.setattr(notifications, "_textes_en_cache", lambda hass: None)
+
+    async def chargement_en_echec(*args: Any, **kwargs: Any) -> dict[str, str]:
+        raise OSError
+
+    monkeypatch.setattr(notifications, "async_get_translations", chargement_en_echec)
+
+    await _echec(hass)
+
+    assert _notification_d_echec(hass)["title"] == TITRE_ANGLAIS
 
 
 ### Ré-autorisation ###
