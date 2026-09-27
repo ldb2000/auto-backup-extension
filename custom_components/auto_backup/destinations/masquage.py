@@ -5,7 +5,10 @@ contenir un jeton : les API recopient volontiers la requête refusée, en-tête
 `Authorization` compris, dans leur message d'erreur. Le fork ne contrôle pas ce
 texte, et l'affiche pourtant à des endroits **durables et lisibles par tous** :
 une notification persistante (#17), un attribut d'entité recopié dans chaque
-état historisé par l'enregistreur (#16), le journal.
+état historisé par l'enregistreur (#16), le journal (#35), le champ `error` de
+l'événement `auto_backup.upload_failed` (#44). Ce dernier est masqué dès
+l'émission, puis de nouveau par les notifications et les entités qui le
+lisent : `masquer()` est idempotent, et ce double passage n'y change rien.
 
 Le masquage vivait en deux exemplaires, aux couvertures différentes ; c'était
 une faille en soi, l'un laissant passer ce que l'autre arrêtait. Ce module est

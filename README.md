@@ -138,6 +138,18 @@ nommé `<nom de la sauvegarde> [<slug>].tar` et porte un marqueur d'origine Auto
 - `auto_backup.upload_failed` : le téléversement a échoué (champs : `name`, `slug`,
   `destination`, `destination_name`, `error`).
 
+Le champ `error` de `auto_backup.upload_failed` porte la cause de l'échec **masquée** : jetons,
+valeurs de clés sensibles (`access_token`, `upload_id`…), adresses électroniques et chemins de
+fichiers absolus y sont remplacés par `***`, comme dans le journal, les notifications et les
+entités. L'événement est en effet visible dans les outils de développement, transmis à toute
+automatisation qui l'écoute et conservé par l'enregistreur. Une cause sans secret (« quota
+dépassé », « délai de téléversement dépassé (1800 s) ») reste identique mot pour mot. Le masquage
+avale aussi, par prudence, toute suite de vingt caractères ou plus sans espace qui mêle chiffres,
+majuscules ou `_` : un code technique de fournisseur (`too_many_write_operations`) ou un nom de
+destination ou de sauvegarde sans espace cité dans la cause (« Dropbox-Compte-Familial ») y
+apparaissent donc sous la forme `***`. Pour filtrer sur une destination, préférez les champs
+`destination` et `destination_name`, qui ne sont pas masqués.
+
 Chez **Dropbox**, la sauvegarde est déposée dans le dossier de la destination sous le nom
 `<nom de la sauvegarde> [<slug>].tar`. Un fichier de même nom n'est **jamais** remplacé : le
 téléversement échoue en le disant. Le détail (dossier, fragmentation des grosses sauvegardes,

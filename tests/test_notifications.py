@@ -54,6 +54,7 @@ from custom_components.auto_backup.destinations import (
     async_signaler_la_reauthentification,
     identifiant_du_probleme,
 )
+from custom_components.auto_backup.destinations.masquage import masquer
 from custom_components.auto_backup.destinations.models import VALEUR_MASQUEE
 from custom_components.auto_backup.destinations.notifications import (
     identifiant_de_notification_d_echec,
@@ -945,3 +946,48 @@ async def test_sans_entree_chargee_le_signalement_reste_silencieux(
     await hass.async_block_till_done()
 
     assert _notification_de_reauth(hass, DESTINATION) is None
+
+
+### Cause déjà masquée à l'émission (#44) ###
+
+# Cause telle qu'un fournisseur la renverrait : un jeton Google, et l'URI de
+# session d'un envoi reprenable. Valeurs inventées (marqueur `FaCtIcE`).
+CAUSE_AVEC_SECRETS = (
+    "envoi refusé : Authorization: Bearer ya29.a0AfH6FaCtIcE-0123456789abcdef, "
+    "session https://www.googleapis.invalid/upload/drive/v3/files"
+    "?uploadType=resumable&upload_id=AAAAFaCtIcE0123456789abcdefghijkl"
+)
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        pytest.param(CAUSE_AVEC_SECRETS, id="avec-secrets"),
+        pytest.param("quota du compte dépassé", id="sans-secret"),
+    ],
+)
+async def test_une_cause_deja_masquee_s_affiche_a_l_identique(
+    hass: HomeAssistant, entree_notifiante: MockConfigEntry, cause: str
+) -> None:
+    """Critère 3 de #44 : masquer à l'émission ne change rien à la notification.
+
+    `upload.py` émet désormais `masquer(cause)` ; la notification la masque de
+    nouveau. Le message affiché doit être celui qu'elle produisait à partir de
+    la cause brute.
+    """
+    await _echec(hass, cause=cause)
+    depuis_la_cause_brute = _notification_d_echec(hass)
+    assert depuis_la_cause_brute is not None
+
+    # Le succès remet le compteur d'échecs à zéro : le second message n'en
+    # diffère donc que si la cause s'affiche autrement.
+    await _succes(hass)
+    assert _notification_d_echec(hass) is None
+
+    await _echec(hass, cause=masquer(cause))
+    depuis_la_cause_masquee = _notification_d_echec(hass)
+    assert depuis_la_cause_masquee is not None
+
+    assert depuis_la_cause_masquee["message"] == depuis_la_cause_brute["message"]
+    assert depuis_la_cause_masquee["title"] == depuis_la_cause_brute["title"]
+    assert "FaCtIcE" not in depuis_la_cause_masquee["message"]
