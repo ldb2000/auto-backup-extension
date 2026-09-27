@@ -1738,8 +1738,9 @@ subsistent, chacun avec son test :
   Un caractère non ASCII — un homoglyphe cyrillique glissé dans un secret, par exemple — la
   découpe en morceaux qui, s'ils font chacun moins de `LONGUEUR_MIN_SUITE_OPAQUE` (vingt)
   caractères, échappent au dernier filet : la suite sort intacte. Accepté : les jetons des
-  fournisseurs intégrés sont en ASCII et reconnus par leur forme en passe 4, et aucun secret
-  n'est fabriqué par un tiers — le texte masqué vient du fournisseur. Élargir le motif à
+  fournisseurs intégrés sont en ASCII et reconnus par leur forme (passe 4) ou par la clé qui les
+  accompagne toujours dans les réponses du fournisseur (passe 3), et aucun secret n'est fabriqué
+  par un tiers — le texte masqué vient du fournisseur. Élargir le motif à
   l'Unicode, ou normaliser le texte avant masquage, ferait masquer le français accentué sans
   espace de vingt caractères ou plus (« sauvegarde-planifiée-échouée »), que ses accents coupent
   aujourd'hui. À rouvrir seulement avec un fournisseur dont les jetons sortent de l'ASCII.

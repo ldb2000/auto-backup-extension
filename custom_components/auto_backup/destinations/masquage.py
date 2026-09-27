@@ -105,11 +105,12 @@ messages en français. Restent quatre angles morts connus et acceptés :
   exemple — la découpe en morceaux qui, s'ils font chacun moins de
   `LONGUEUR_MIN_SUITE_OPAQUE` caractères, échappent au dernier filet : la
   suite sort intacte. Non exploitable aujourd'hui : les jetons des
-  fournisseurs intégrés sont en ASCII et reconnus par leur forme (passe 4), et
-  aucun secret n'est fabriqué par un tiers — le texte masqué vient du
-  fournisseur, qui n'a aucune raison d'y glisser un homoglyphe. Le motif n'est
-  **pas** élargi à l'Unicode, ni le texte normalisé avant masquage : le
-  français accentué sans espace de vingt caractères ou plus
+  fournisseurs intégrés sont en ASCII et reconnus par leur forme (passe 4) ou
+  par la clé qui les accompagne toujours dans les réponses du fournisseur
+  (passe 3), et aucun secret n'est fabriqué par un tiers — le texte masqué
+  vient du fournisseur, qui n'a aucune raison d'y glisser un homoglyphe. Le
+  motif n'est **pas** élargi à l'Unicode, ni le texte normalisé avant
+  masquage : le français accentué sans espace de vingt caractères ou plus
   (« sauvegarde-planifiée-échouée »), que ses accents coupent aujourd'hui,
   deviendrait une suite opaque et serait masqué. À rouvrir seulement avec un
   fournisseur dont les jetons sortent de l'ASCII.
