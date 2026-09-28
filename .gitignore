@@ -24,3 +24,6 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+# Instance Home Assistant de développement (`uv run hass -c dev-config`) :
+# base, journaux et jetons OAuth des destinations — ne jamais commiter
+dev-config/
