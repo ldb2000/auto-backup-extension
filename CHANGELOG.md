@@ -236,6 +236,10 @@ Le détail des changements, issue par issue, suit.
 - Le message du code `unknown` n'attribue plus l'erreur au fournisseur (« erreur inattendue : le détail est consigné dans le journal de Home Assistant » / « unexpected error: details are in the Home Assistant log ») : ce code couvre aussi les erreurs internes. Refs #55
 - Dans les refus de l'option `upload_to`, la valeur demandée répétée dans le message est tronquée à 100 caractères (terminés par « … ») : un appel de service portant une chaîne très longue ne la recopie plus en entier. Refs #55
 
+### Corrigé
+
+- Dropbox : l'identification du compte (`users/get_current_account`) part désormais avec le corps JSON `null` et `Content-Type: application/json`, forme documentée par Dropbox pour un point sans argument. Envoyée sans corps, elle recevait d'aiohttp un `Content-Type: application/octet-stream` que Dropbox refusait (HTTP 400) : aucune destination Dropbox ne pouvait être ajoutée ni ré-autorisée. Aucune requête Dropbox ne part plus sans corps explicite, et un test vérifie les en-têtes réellement émis à l'aide d'un serveur HTTP local. Refs #67
+
 ### Sécurité
 
 - Le dossier distant (`folder`) d'une destination est validé comme chemin relatif POSIX par `chemin_de_dossier()`, appelé par le schéma voluptuous comme par `DestinationConfig` : traversée (`..`), chemin absolu, lettre de lecteur, séparateur Windows, segment vide, espace de bordure et caractère de contrôle sont refusés avant d'atteindre un fournisseur. Refs #6
