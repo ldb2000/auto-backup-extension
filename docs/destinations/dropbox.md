@@ -11,14 +11,46 @@ Comptez cinq minutes. La procédure est à faire une seule fois par compte Dropb
 
 | Prérequis | Pourquoi |
 | --- | --- |
-| Une **URL externe HTTPS** configurée dans Home Assistant | Dropbox doit pouvoir vous renvoyer vers votre instance après l'autorisation. |
+| Une **URL externe HTTPS** configurée dans Home Assistant (ou, pour un test sur la machine même de Home Assistant, une URL locale `http://localhost:8123`) | Dropbox doit pouvoir vous renvoyer vers votre instance après l'autorisation. |
 | Un compte Dropbox personnel | Dropbox Business et les espaces d'équipe ne sont pas pris en charge. |
 
 L'URL externe se règle dans **Paramètres → Système → Réseau → URL Internet**. Elle doit être
 en `https://` : Dropbox refuse une URI de redirection en clair (`http://`), à la seule
-exception de `http://localhost`, qui ne convient pas ici puisque c'est votre navigateur, et
-non Home Assistant, qui suit la redirection. Sans URL externe, l'ajout d'une destination
-s'interrompt avec le message « Home Assistant n'a pas d'URL externe configurée ».
+exception de `http://localhost`.
+
+### Adresse de retour utilisée
+
+Auto Backup construit l'adresse de retour (`…/auth/auto_backup/callback`) à partir de la
+première de ces adresses qui convient :
+
+1. l'**URL Internet** (URL externe), ou l'adresse Home Assistant Cloud ;
+2. à défaut, l'**URL de réseau local** (URL interne), **seulement** si elle est en `https://`
+   ou en `http://localhost` (ou `http://127.0.0.1`).
+
+L'adresse par laquelle votre navigateur ouvre Home Assistant n'est pas utilisée : l'interface
+de Home Assistant ne la transmet pas aux options d'une intégration, où se fait l'ajout d'une
+destination.
+
+Si aucune adresse ne convient, l'ajout s'interrompt :
+
+- « Home Assistant n'a pas d'URL externe configurée, ni d'URL locale utilisable » : ni URL
+  Internet, ni URL de réseau local ;
+- « L'adresse … ne peut pas servir au retour d'autorisation » : l'adresse trouvée est en
+  `http://` sans être `localhost` (par exemple `http://homeassistant.local:8123`), et Dropbox
+  la refuserait.
+
+### Tester en local, sans URL externe
+
+C'est votre **navigateur** qui suit la redirection de Dropbox : `http://localhost` n'atteint
+Home Assistant que si le navigateur tourne **sur la même machine** que lui (instance de
+développement, par exemple). Dans ce cas :
+
+1. dans **Paramètres → Système → Réseau**, réglez l'**URL de réseau local** sur
+   `http://localhost:8123` (laissez l'URL Internet vide) ;
+2. ouvrez Home Assistant à l'adresse `http://localhost:8123` ;
+3. déclarez chez Dropbox (étape 3) l'URI `http://localhost:8123/auth/auto_backup/callback`.
+
+Depuis un autre poste, `localhost` désignerait ce poste : l'autorisation n'aboutirait pas.
 
 > **Nextcloud, reverse proxy, Nabu Casa…** peu importe la façon dont votre instance est
 > publiée : seule compte l'adresse que vous utilisez pour y accéder depuis l'extérieur.
@@ -76,7 +108,8 @@ Cliquez sur **Submit** en bas de l'onglet pour enregistrer les portées.
 
 Toujours dans votre application, onglet **Settings**, section **OAuth 2 → Redirect URIs** :
 
-1. Saisissez l'adresse suivante, en remplaçant `<instance>` par votre URL externe :
+1. Saisissez l'adresse suivante, en remplaçant `<instance>` par votre URL externe (pour un
+   test local, `http://localhost:8123/auth/auto_backup/callback`) :
 
    ```text
    https://<instance>/auth/auto_backup/callback
@@ -285,7 +318,8 @@ pas une erreur : elle est simplement rayée du registre.
 
 | Message | Cause la plus fréquente |
 | --- | --- |
-| « Home Assistant n'a pas d'URL externe configurée » | L'URL Internet n'est pas renseignée dans Paramètres → Système → Réseau. |
+| « Home Assistant n'a pas d'URL externe configurée, ni d'URL locale utilisable » | Ni URL Internet ni URL de réseau local dans Paramètres → Système → Réseau. Renseignez l'URL Internet en `https://` (ou, pour un test sur la machine même, l'URL de réseau local `http://localhost:8123`). |
+| « L'adresse … ne peut pas servir au retour d'autorisation » | L'adresse trouvée est en `http://` sans être `localhost` (par exemple `http://homeassistant.local:8123`). Renseignez une URL Internet en `https://`, ou suivez « Tester en local, sans URL externe ». |
 | « Le fournisseur a refusé le code d'autorisation » | Clé ou secret erroné, ou URI de redirection déclarée chez Dropbox différente de celle affichée par Auto Backup. |
 | « L'autorisation a été refusée ou annulée » | Vous avez cliqué sur *Cancel* dans la fenêtre Dropbox, ou fermé l'onglet. Rien n'a été créé : recommencez quand vous voulez. |
 | « Le fournisseur a refusé la première requête : … » | Juste après l'autorisation, Auto Backup demande à Dropbox qui est le compte connecté. Si cet appel échoue, **l'ajout s'arrête et rien n'est enregistré** : le message nomme la cause (permission manquante, panne passagère de Dropbox), et le détail renvoyé par Dropbox est consigné dans le journal de Home Assistant. Corrigez-la, puis relancez **Ajouter une destination** — vous n'avez rien à nettoyer. |
@@ -333,9 +367,10 @@ suivre reste celle du tableau de « Ce qui se passe ensuite ».
 
 ## Limites connues
 
-- **Une URL externe HTTPS et joignable est obligatoire.** Une instance accessible uniquement
-  en local (`http://homeassistant.local:8123`, adresse IP nue) ne peut pas recevoir le retour
-  d'autorisation de Dropbox.
+- **Une URL externe HTTPS et joignable est obligatoire**, sauf pour un test sur la machine
+  même de Home Assistant par `http://localhost:8123`. Une instance accessible uniquement en
+  local sur le réseau (`http://homeassistant.local:8123`, adresse IP nue) ne peut pas recevoir
+  le retour d'autorisation de Dropbox.
 - **Dropbox Business et les espaces d'équipe ne sont pas pris en charge** : les portées
   d'équipe (`team_*`) ne sont pas demandées et les chemins d'espace partagé ne sont pas gérés.
 - **Une application Dropbox non publiée est limitée** à un petit nombre de comptes connectés

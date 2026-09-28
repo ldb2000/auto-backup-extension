@@ -212,9 +212,11 @@ reprend le flux par `hass.config_entries.options.async_configure()`.
 - Contre : l'URI de redirection à déclarer chez le fournisseur n'est pas celle, habituelle, de
   Home Assistant, et le raccourci My Home Assistant (`https://my.home-assistant.io/redirect/oauth`)
   n'est pas utilisable : il ne sait rediriger que vers `/auth/external/callback`.
-- Contre : une instance sans URL externe configurée ne peut pas recevoir le retour. Le flux
-  s'interrompt alors avec un message explicite (`options.abort.url_indisponible`) plutôt que de
-  fabriquer une URL fausse.
+- Contre : une instance sans adresse de retour acceptable par le fournisseur (URL externe en
+  `https://`, ou URL locale `http://localhost` pour un test sur la machine même) ne peut pas
+  recevoir le retour. Le flux s'interrompt alors avec un message explicite
+  (`options.abort.url_indisponible` ou `options.abort.url_de_retour_http`) plutôt que de fabriquer
+  une URL fausse. Voir « Adresse de retour » ci-dessous (#66).
 
 ### Décision
 
@@ -227,6 +229,79 @@ de config flow — mais un aléa de 256 bits (`secrets.token_urlsafe(32)`) assoc
 Assistant, au flux d'options à reprendre et à l'URI de redirection utilisée. Il est à usage
 unique et expire au bout de quinze minutes : il sert à la fois de clé de reprise et de jeton
 anti-CSRF, et rejouer un retour d'autorisation ne relance rien.
+
+### Adresse de retour (issue #66)
+
+`url_de_retour()` (`destinations/oauth.py`) construit l'URI `<base>/auth/auto_backup/callback`.
+La première version reprenait la règle du cœur : la base est l'en-tête `HA-Frontend-Base` de la
+requête en cours, à défaut l'URL externe. Un test local (instance jointe par
+`http://localhost:8123`, sans URL externe) a montré que la première voie ne jouait jamais.
+
+**Enquête (Home Assistant 2026.9.0, frontend `home-assistant-frontend==20260826.4` épinglé par
+`homeassistant/components/frontend/manifest.json`).**
+
+- Frontend, `src/data/config_flow.ts` (tag `20260826.4`) : une constante
+  `` HEADERS = { "HA-Frontend-Base": `${location.protocol}//${location.host}` } `` (l. 29-31) est
+  passée à `callApi` par `createConfigFlow`, `fetchConfigFlow` et `handleConfigFlowStep`
+  (l. 45, 53, 65). `src/data/sub_config_flow.ts` fait de même (l. 4-6) pour les sous-entrées.
+- Frontend, `src/data/options_flow.ts` (même tag, l. 4-31) : `createOptionsFlow`,
+  `fetchOptionsFlow`, `handleOptionsFlowStep` et `deleteOptionsFlow` appellent `callApi` **sans
+  en-têtes**, vers `config/config_entries/options/flow[/<flow_id>]`. Le paquet construit
+  installé dans le `.venv` (`hass_frontend/frontend_latest/*.js`, module `43434`) le confirme :
+  les appels `options/flow` n'ont pas de quatrième argument, alors que le module `36802` (flux de
+  configuration) porte `{"HA-Frontend-Base": ...}`.
+- Cœur, `homeassistant/helpers/config_entry_oauth2_flow.py` : `HEADER_FRONTEND_BASE` (l. 60) n'est
+  lu que par `async_get_redirect_uri()` (l. 91-102), qui lève `RuntimeError("No header in
+  request")` s'il manque ; seul `components/plex/config_flow.py` (l. 62, 313) le lit ailleurs. Le
+  cœur ne l'utilise donc que dans des *config flows*.
+- Cœur, `homeassistant/helpers/network.py`, `get_url(hass, allow_internal=False,
+  prefer_external=True)` (l. 115-221) : l'URL interne est écartée d'emblée (l. 145) ; seule
+  `_get_external_url()` est essayée (URL externe, puis Home Assistant Cloud) ; le repli sur l'hôte
+  de la requête (l. 170-218) n'a lieu qu'avec `require_current_request=True`. Une URL interne
+  `http://localhost:8123`, `http://127.0.0.1:8123` ou `http://homeassistant.local:8123` n'est donc
+  jamais renvoyée : `NoURLAvailableError`.
+
+**Conclusion.** `HA-Frontend-Base` n'est transmis que pour les flux de configuration (et de
+sous-entrées), jamais pour les flux d'options où vivent l'ajout et la ré-autorisation d'une
+destination. Depuis le fork, l'adresse de retour venait toujours de l'URL externe.
+
+**Décision.** `url_de_retour()` retient la **première base acceptable** parmi :
+
+1. l'en-tête `HA-Frontend-Base`, s'il est présent (voie conservée pour un appel qui le fournirait,
+   par exemple une future version du frontend) ;
+2. l'URL externe (`get_url(hass, allow_internal=False, prefer_external=True)`, Cloud compris) ;
+3. l'URL interne **réglée par l'administrateur** (`hass.config.internal_url`). L'adresse IP
+   détectée, que `get_url()` utiliserait à défaut, est écartée : ce n'est jamais une adresse de
+   bouclage, elle serait donc toujours refusée, et la citer égarerait l'utilisateur.
+
+Une base est **acceptable** si c'est une origine nue (ni chemin, ni requête, ni fragment, ni
+identifiants) en `https://`, ou en `http://` sur `localhost` ou une adresse de bouclage
+(`127.0.0.0/8`, `::1`) : Dropbox et Google n'acceptent `http://` que pour ces adresses. Si aucune
+base n'est acceptable, le flux s'interrompt :
+
+- `options.abort.url_de_retour_http` cite la première base refusée (par exemple
+  `http://homeassistant.local:8123`) et dit quoi régler : une URL Internet en `https://`, ou, pour
+  un test sur la machine même, l'URL de réseau local `http://localhost:8123` ;
+- `options.abort.url_indisponible` quand aucune base n'existe, avec les mêmes consignes.
+
+Une URL externe HTTPS garde la priorité : le comportement des instances déjà configurées ne change
+pas.
+
+**Sécurité.**
+
+- Les URL externe et interne sont réglées par l'administrateur dans Home Assistant : une requête
+  ne peut pas les détourner. L'en-tête `Host`, fourni par le client, n'est jamais utilisé.
+- L'en-tête `HA-Frontend-Base` vient du navigateur d'un administrateur authentifié (les flux
+  d'options exigent ce rôle). Il est validé comme toute autre base : une base portant un chemin,
+  une requête ou un fragment détournerait la concaténation, elle est écartée.
+- Le fournisseur ne redirige que vers les URI **déclarées** dans l'application de l'utilisateur :
+  une adresse de retour non déclarée échoue chez lui, sans fuite du code. L'état reste l'aléa à
+  usage unique décrit plus haut.
+- `http://localhost` désigne la machine **du navigateur**. Utilisée depuis un autre poste,
+  l'adresse mène à ce poste : la redirection échoue (ou atteint un service local de ce poste, qui
+  ne recevrait qu'un code inutilisable sans le secret de l'application) et l'état expire. C'est
+  pourquoi cette voie est réservée, dans la documentation, au test sur la machine même de Home
+  Assistant.
 
 ### Où vivent les secrets
 
@@ -1147,7 +1222,9 @@ d'être réparable depuis les options. Un `403` ne le fait **pas** : API non act
 **Contrainte assumée : une URL externe publique.** Google n'accepte que des URI de redirection
 HTTPS sur un domaine public. Une instance joignable seulement en `.local`, par adresse IP ou en
 HTTP ne peut pas connecter Google Drive — ce n'est pas un défaut du fork, et aucun contournement
-n'est possible côté intégration. La procédure complète est dans
+n'est possible côté intégration. Seule exception, pour un test sur la machine même de Home
+Assistant : `http://localhost` (ou une adresse de bouclage), que Google exempte de ces règles
+(cf. « Adresse de retour », décision 4, #66). La procédure complète est dans
 [`docs/destinations/google-drive.md`](../destinations/google-drive.md).
 
 ## Rétention distante (issue #9)
