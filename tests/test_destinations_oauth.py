@@ -439,6 +439,36 @@ async def test_un_en_tete_inacceptable_cede_la_place_a_l_url_externe(
         current_request.reset(jeton)
 
 
+@pytest.mark.parametrize(
+    ("base", "origine"),
+    [
+        ("https://maison.exemple.fr", "https://maison.exemple.fr"),
+        ("https://maison.exemple.fr/", "https://maison.exemple.fr"),
+        ("http://localhost:8123", "http://localhost:8123"),
+        ("http://[::1]:8123", "http://[::1]:8123"),
+        ("https://maison.exemple.fr/%2e%2e", "https://maison.exemple.fr"),
+        ("https://maison.exemple.fr/%2E%2E/", "https://maison.exemple.fr"),
+    ],
+)
+async def test_l_adresse_de_retour_est_reconstruite_depuis_l_url_analysee(
+    hass: HomeAssistant, base: str, origine: str
+) -> None:
+    """Ce qui est validé est exactement ce qui est utilisé (revue sécurité #66).
+
+    yarl neutralise un chemin encodé (`/%2e%2e`) à l'analyse : recopier la
+    chaîne brute le ferait réapparaître dans l'adresse de retour. Les formes
+    usuelles, elles, restent inchangées.
+    """
+    jeton = _avec_l_en_tete(base)
+    try:
+        adresse = url_de_retour(hass)
+    finally:
+        current_request.reset(jeton)
+
+    assert adresse == f"{origine}{OAUTH_CALLBACK_PATH}"
+    assert "%2" not in adresse.casefold()
+
+
 async def test_un_en_tete_inacceptable_seul_est_refuse(hass: HomeAssistant) -> None:
     """Sans autre base, l'en-tête refusé est cité à l'utilisateur."""
     jeton = _avec_l_en_tete("http://homeassistant.local:8123")

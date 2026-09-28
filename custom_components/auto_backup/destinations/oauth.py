@@ -160,30 +160,39 @@ def _est_une_adresse_de_bouclage(hote: str | None) -> bool:
         return False
 
 
-def _base_acceptable(base: str) -> bool:
-    """La base peut-elle précéder `OAUTH_CALLBACK_PATH` chez le fournisseur ?
+def _origine_acceptable(base: str) -> str | None:
+    """Origine normalisée de la base si elle peut précéder `OAUTH_CALLBACK_PATH`.
 
-    Elle doit être une origine nue (schéma, hôte, port éventuel) : ni chemin,
+    La base doit être une origine nue (schéma, hôte, port éventuel) : ni chemin,
     ni requête, ni fragment, ni identifiants, qui détourneraient la
     concaténation. Le schéma est `https`, ou `http` sur une adresse de
     bouclage seulement : c'est la règle de Dropbox et de Google.
+
+    La valeur renvoyée est **reconstruite** à partir de l'URL analysée
+    (`URL.origin()` : schéma, hôte, port), jamais recopiée de la chaîne brute :
+    ce qui est validé est exactement ce qui est utilisé. Un chemin encodé que
+    yarl neutralise à l'analyse (`/%2e%2e`) ne peut donc pas réapparaître dans
+    l'adresse de retour. Renvoie `None` si la base est refusée.
     """
     try:
         url = URL(base)
     except ValueError:
-        return False
+        return None
     if (
-        not url.host
+        not url.absolute
+        or not url.host
         or url.user is not None
         or url.password is not None
         or url.path not in ("", "/")
         or url.query_string
         or url.fragment
     ):
-        return False
-    if url.scheme == "https":
-        return True
-    return url.scheme == "http" and _est_une_adresse_de_bouclage(url.host)
+        return None
+    if url.scheme == "https" or (
+        url.scheme == "http" and _est_une_adresse_de_bouclage(url.host)
+    ):
+        return str(url.origin())
+    return None
 
 
 def _bases_candidates(hass: HomeAssistant) -> Iterator[str]:
@@ -236,8 +245,8 @@ def url_de_retour(hass: HomeAssistant) -> str:
     """
     refusee: str | None = None
     for base in _bases_candidates(hass):
-        if _base_acceptable(base):
-            return f"{base.rstrip('/')}{OAUTH_CALLBACK_PATH}"
+        if (origine := _origine_acceptable(base)) is not None:
+            return f"{origine}{OAUTH_CALLBACK_PATH}"
         if refusee is None:
             refusee = base
     if refusee is not None:
