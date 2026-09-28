@@ -60,6 +60,7 @@ from custom_components.auto_backup.destinations import (
     url_de_retour,
 )
 from custom_components.auto_backup.destinations.oauth import (
+    AdresseDeRetourRefusee,
     EtatOAuth,
     consommer_un_etat,
     enregistrer_un_etat,
@@ -324,6 +325,139 @@ async def test_sans_url_externe_l_autorisation_est_impossible(
     """Sans URL joignable, aucune URI de redirection n'est inventée."""
     with pytest.raises(NoURLAvailableError):
         url_de_retour(hass)
+
+
+def _avec_l_en_tete(base: str) -> object:
+    """Simule une requête portant `HA-Frontend-Base` ; renvoie le jeton de reprise."""
+    return current_request.set(Mock(headers={HEADER_FRONTEND_BASE: base}))
+
+
+@pytest.mark.parametrize(
+    "interne",
+    [
+        "http://localhost:8123",
+        "http://127.0.0.1:8123",
+        "http://[::1]:8123",
+        "https://maison.lan:8123",
+    ],
+)
+async def test_sans_url_externe_une_url_interne_acceptable_sert_de_base(
+    hass: HomeAssistant, interne: str
+) -> None:
+    """#66 : un test local par `http://localhost:8123` n'exige pas d'URL externe.
+
+    Dropbox et Google acceptent `http://` sur une adresse de bouclage, et toute
+    adresse en `https://`.
+    """
+    await async_process_ha_core_config(hass, {"internal_url": interne})
+
+    assert url_de_retour(hass) == f"{interne}{OAUTH_CALLBACK_PATH}"
+
+
+@pytest.mark.parametrize(
+    "interne",
+    [
+        "http://homeassistant.local:8123",
+        "http://192.168.1.20:8123",
+        "http://localhost.exemple.test:8123",
+    ],
+)
+async def test_une_url_interne_http_non_locale_est_refusee(
+    hass: HomeAssistant, interne: str
+) -> None:
+    """#66 : aucune adresse vouée au refus du fournisseur n'est proposée."""
+    await async_process_ha_core_config(hass, {"internal_url": interne})
+
+    with pytest.raises(AdresseDeRetourRefusee) as erreur:
+        url_de_retour(hass)
+
+    assert erreur.value.adresse == interne
+
+
+async def test_une_url_externe_http_non_locale_est_refusee(
+    hass: HomeAssistant,
+) -> None:
+    """La règle vaut aussi pour l'URL externe : `http://` hors localhost refusé."""
+    await async_process_ha_core_config(
+        hass, {"external_url": "http://maison.exemple.test"}
+    )
+
+    with pytest.raises(AdresseDeRetourRefusee) as erreur:
+        url_de_retour(hass)
+
+    assert erreur.value.adresse == "http://maison.exemple.test"
+
+
+async def test_l_url_externe_prime_sur_l_url_interne(hass: HomeAssistant) -> None:
+    """Non-régression : avec une URL externe HTTPS, rien ne change (#66)."""
+    await async_process_ha_core_config(
+        hass, {"external_url": URL_EXTERNE, "internal_url": "http://localhost:8123"}
+    )
+
+    assert url_de_retour(hass) == URL_DE_RETOUR_ATTENDUE
+
+
+async def test_une_url_externe_refusee_cede_la_place_a_l_url_interne(
+    hass: HomeAssistant,
+) -> None:
+    """La première base acceptable l'emporte, pas la première trouvée."""
+    await async_process_ha_core_config(
+        hass,
+        {
+            "external_url": "http://maison.exemple.test",
+            "internal_url": "http://localhost:8123",
+        },
+    )
+
+    assert url_de_retour(hass) == f"http://localhost:8123{OAUTH_CALLBACK_PATH}"
+
+
+@pytest.mark.parametrize(
+    "en_tete",
+    [
+        "http://homeassistant.local:8123",
+        "https://piege.exemple.test/chemin",
+        "https://piege.exemple.test/?x=",
+        "https://piege.exemple.test#x",
+        "https://moi:secret@piege.exemple.test",
+        "javascript:alert(1)",
+        "maison.exemple.test",
+    ],
+)
+async def test_un_en_tete_inacceptable_cede_la_place_a_l_url_externe(
+    hass: HomeAssistant, url_externe: str, en_tete: str
+) -> None:
+    """L'en-tête vient du client : il est validé comme toute autre base.
+
+    Une base qui porterait un chemin, une requête, un fragment ou des
+    identifiants détournerait la concaténation avec `OAUTH_CALLBACK_PATH`.
+    """
+    jeton = _avec_l_en_tete(en_tete)
+    try:
+        assert url_de_retour(hass) == URL_DE_RETOUR_ATTENDUE
+    finally:
+        current_request.reset(jeton)
+
+
+async def test_un_en_tete_inacceptable_seul_est_refuse(hass: HomeAssistant) -> None:
+    """Sans autre base, l'en-tête refusé est cité à l'utilisateur."""
+    jeton = _avec_l_en_tete("http://homeassistant.local:8123")
+    try:
+        with pytest.raises(AdresseDeRetourRefusee) as erreur:
+            url_de_retour(hass)
+    finally:
+        current_request.reset(jeton)
+
+    assert erreur.value.adresse == "http://homeassistant.local:8123"
+
+
+async def test_un_en_tete_local_est_accepte(hass: HomeAssistant) -> None:
+    """`http://localhost` fourni par l'en-tête est une base acceptable."""
+    jeton = _avec_l_en_tete("http://localhost:8123/")
+    try:
+        assert url_de_retour(hass) == f"http://localhost:8123{OAUTH_CALLBACK_PATH}"
+    finally:
+        current_request.reset(jeton)
 
 
 async def test_l_url_d_autorisation_porte_l_etat_et_les_portees(
