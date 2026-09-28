@@ -151,6 +151,26 @@ de Home Assistant. Retirez ensuite l'accès chez le fournisseur :
 [autorisations du compte Google](https://myaccount.google.com/permissions). Les sauvegardes déjà
 déposées ne sont pas supprimées.
 
+### Faut-il une URL externe pour connecter une destination ?
+
+Oui, en usage normal : Dropbox et Google renvoient votre navigateur vers
+`https://<instance>/auth/auto_backup/callback` une fois l'accès autorisé, et n'acceptent qu'une
+adresse en `https://`. Renseignez l'**URL Internet** dans **Paramètres > Système > Réseau**.
+
+Auto Backup ne peut pas se fier à l'adresse que vous tapez dans votre navigateur : Home
+Assistant ne la transmet pas aux options d'une intégration, où se fait l'ajout d'une
+destination. Sans URL Internet, il se rabat sur l'**URL de réseau local**, **seulement** si elle
+est en `https://` ou en `http://localhost` : les fournisseurs refusent toute autre adresse en
+`http://`, et Auto Backup s'interrompt alors en citant l'adresse refusée plutôt que de vous en
+faire déclarer une qui échouerait.
+
+**Pour un test sur la machine même de Home Assistant** (instance de développement), réglez l'URL
+de réseau local sur `http://localhost:8123`, ouvrez Home Assistant à cette adresse et déclarez
+chez le fournisseur `http://localhost:8123/auth/auto_backup/callback`. Depuis un autre poste,
+`localhost` désignerait ce poste : l'autorisation n'aboutirait pas. Le détail est dans les
+guides [Dropbox](destinations/dropbox.md#tester-en-local-sans-url-externe) et
+[Google Drive](destinations/google-drive.md#tester-en-local-sans-url-externe).
+
 ## Ré-authentification
 
 ### Home Assistant me demande de ré-autoriser une destination : que faire ?

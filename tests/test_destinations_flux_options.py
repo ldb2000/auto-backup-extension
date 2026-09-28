@@ -494,6 +494,118 @@ async def test_sans_url_externe_l_ajout_s_interrompt(
     assert resultat["reason"] == "url_indisponible"
 
 
+async def _entree_sans_url_externe(
+    hass: HomeAssistant, options: dict[str, Any] | None = None
+) -> MockConfigEntry:
+    """Entrée chargée sur une instance dont seule l'URL interne est réglée."""
+    entree = MockConfigEntry(
+        domain=DOMAIN, title="Auto Backup", data={}, options=options or {}
+    )
+    entree.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entree.entry_id)
+    await hass.async_block_till_done()
+    return entree
+
+
+async def test_sans_url_externe_l_url_interne_localhost_permet_l_ajout(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_oauth_factice: str,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """#66 : test local par `http://localhost:8123`, sans URL externe."""
+    await async_process_ha_core_config(hass, {"internal_url": "http://localhost:8123"})
+    entree = await _entree_sans_url_externe(hass)
+    attendue = f"http://localhost:8123{OAUTH_CALLBACK_PATH}"
+
+    resultat = await ouvrir_les_options(entree.entry_id, "ajouter_destination")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_PROVIDER: PROVIDER_OAUTH_FACTICE}
+    )
+    assert resultat["step_id"] == "identifiants"
+    assert resultat["description_placeholders"]["url_de_retour"] == attendue
+
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"],
+        {CONF_CLIENT_ID: CLIENT_ID_FACTICE, CONF_CLIENT_SECRET: CLIENT_SECRET_FACTICE},
+    )
+    assert resultat["type"] is FlowResultType.EXTERNAL_STEP
+    assert URL(resultat["url"]).query["redirect_uri"] == attendue
+
+
+async def test_une_url_interne_http_non_locale_interrompt_l_ajout(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_oauth_factice: str,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """#66 : `http://homeassistant.local` serait refusé par le fournisseur."""
+    await async_process_ha_core_config(
+        hass, {"internal_url": "http://homeassistant.local:8123"}
+    )
+    entree = await _entree_sans_url_externe(hass)
+
+    resultat = await ouvrir_les_options(entree.entry_id, "ajouter_destination")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_PROVIDER: PROVIDER_OAUTH_FACTICE}
+    )
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "url_de_retour_http"
+    assert resultat["description_placeholders"] == {
+        "adresse": "http://homeassistant.local:8123"
+    }
+
+
+async def test_une_url_interne_http_non_locale_interrompt_la_reautorisation(
+    hass: HomeAssistant,
+    integration_backup: None,
+    fournisseur_oauth_factice: str,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """La ré-autorisation passe par la même adresse de retour, et le même refus."""
+    await async_process_ha_core_config(
+        hass, {"internal_url": "http://192.168.1.20:8123"}
+    )
+    entree = await _entree_sans_url_externe(
+        hass, {CONF_DESTINATIONS: [config_oauth_factice()]}
+    )
+
+    resultat = await ouvrir_les_options(entree.entry_id, "reautoriser_destination")
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_DESTINATION_ID: "destination_oauth"}
+    )
+
+    assert resultat["type"] is FlowResultType.ABORT
+    assert resultat["reason"] == "url_de_retour_http"
+    assert resultat["description_placeholders"] == {
+        "adresse": "http://192.168.1.20:8123"
+    }
+
+
+async def test_la_reautorisation_garde_l_url_externe_https(
+    hass: HomeAssistant,
+    entree_avec_destination: MockConfigEntry,
+    ouvrir_les_options: OuvrirLesOptions,
+) -> None:
+    """Non-régression #66 : l'URL externe HTTPS reste l'adresse de retour."""
+    await async_process_ha_core_config(
+        hass, {"external_url": URL_EXTERNE, "internal_url": "http://localhost:8123"}
+    )
+
+    resultat = await ouvrir_les_options(
+        entree_avec_destination.entry_id, "reautoriser_destination"
+    )
+    resultat = await hass.config_entries.options.async_configure(
+        resultat["flow_id"], {CONF_DESTINATION_ID: "destination_oauth"}
+    )
+
+    assert resultat["type"] is FlowResultType.EXTERNAL_STEP
+    assert URL(resultat["url"]).query["redirect_uri"] == (
+        f"{URL_EXTERNE}{OAUTH_CALLBACK_PATH}"
+    )
+
+
 async def test_une_autorisation_refusee_interrompt_le_flux(
     hass: HomeAssistant,
     entree: MockConfigEntry,

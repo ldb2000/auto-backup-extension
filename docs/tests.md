@@ -182,7 +182,9 @@ Trois règles pour ces tests :
   journaux, même en niveau `debug`.
 - **L'instance doit être joignable.** L'URI de redirection dérive de l'URL externe de
   l'instance : `await async_process_ha_core_config(hass, {"external_url": ...})` avant de
-  démarrer un flux d'autorisation, sans quoi celui-ci s'interrompt sur `url_indisponible`.
+  démarrer un flux d'autorisation, sans quoi celui-ci s'interrompt sur `url_indisponible`. Une
+  URL interne `http://localhost:…` (`"internal_url"`) en tient lieu ; une URL interne en
+  `http://` non locale interrompt le flux sur `url_de_retour_http` (#66).
 - **Les écritures directes dans `entry.options` doivent porter les options upstream.**
   L'écouteur de mise à jour upstream lit `auto_purge` et `backup_timeout` sans valeur de repli ;
   le code du fork passe pour cela par `options_avec_destinations()`, mais un test qui écrit à la
