@@ -31,8 +31,10 @@ import asyncio
 import logging
 import secrets
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from typing import Any
 
 import voluptuous as vol
@@ -40,6 +42,7 @@ from aiohttp import ClientError, web
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import UnknownFlow
 from homeassistant.exceptions import (
+    HomeAssistantError,
     OAuth2TokenRequestError,
     OAuth2TokenRequestReauthError,
 )
@@ -49,7 +52,8 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
     LocalOAuth2Implementation,
 )
 from homeassistant.helpers.http import KEY_HASS, HomeAssistantView, current_request
-from homeassistant.helpers.network import get_url
+from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.util.network import normalize_url
 from yarl import URL
 
 from ..const import (
@@ -130,22 +134,124 @@ def spec_oauth_du_fournisseur(provider_id: str) -> OAuth2ProviderSpec | None:
     return spec if isinstance(spec, OAuth2ProviderSpec) else None
 
 
+class AdresseDeRetourRefusee(HomeAssistantError):
+    """Adresse de retour que Dropbox et Google refuseraient (issue #66).
+
+    Ces fournisseurs n'acceptent une URI de redirection en `http://` que pour
+    `localhost` (ou une adresse de bouclage). Plutôt que d'afficher une adresse
+    vouée à l'échec, le flux s'interrompt et cite `adresse`, la base refusée.
+    """
+
+    def __init__(self, adresse: str) -> None:
+        """Mémorise la base refusée, affichée telle quelle à l'utilisateur."""
+        super().__init__(f"adresse de retour refusée : {adresse}")
+        self.adresse = adresse
+
+
+def _est_une_adresse_de_bouclage(hote: str | None) -> bool:
+    """`localhost` ou une adresse IP de bouclage (`127.0.0.0/8`, `::1`)."""
+    if not hote:
+        return False
+    if hote.casefold() == "localhost":
+        return True
+    try:
+        return ip_address(hote).is_loopback
+    except ValueError:
+        return False
+
+
+def _origine_acceptable(base: str) -> str | None:
+    """Origine normalisée de la base si elle peut précéder `OAUTH_CALLBACK_PATH`.
+
+    La base doit être une origine nue (schéma, hôte, port éventuel) : ni chemin,
+    ni requête, ni fragment, ni identifiants, qui détourneraient la
+    concaténation. Le schéma est `https`, ou `http` sur une adresse de
+    bouclage seulement : c'est la règle de Dropbox et de Google.
+
+    La valeur renvoyée est **reconstruite** à partir de l'URL analysée
+    (`URL.origin()` : schéma, hôte, port), jamais recopiée de la chaîne brute :
+    ce qui est validé est exactement ce qui est utilisé. Un chemin encodé que
+    yarl neutralise à l'analyse (`/%2e%2e`) ne peut donc pas réapparaître dans
+    l'adresse de retour. Renvoie `None` si la base est refusée.
+    """
+    try:
+        url = URL(base)
+    except ValueError:
+        return None
+    if (
+        not url.absolute
+        or not url.host
+        or url.user is not None
+        or url.password is not None
+        or url.path not in ("", "/")
+        or url.query_string
+        or url.fragment
+    ):
+        return None
+    if url.scheme == "https" or (
+        url.scheme == "http" and _est_une_adresse_de_bouclage(url.host)
+    ):
+        return str(url.origin())
+    return None
+
+
+def _bases_candidates(hass: HomeAssistant) -> Iterator[str]:
+    """Bases possibles de l'adresse de retour, par ordre de préférence.
+
+    1. l'en-tête `HA-Frontend-Base` de la requête en cours ;
+    2. l'URL externe (URL Internet ou Home Assistant Cloud) ;
+    3. l'URL interne, telle que l'administrateur l'a réglée (URL du réseau
+       local). L'adresse IP détectée que `get_url()` utiliserait à défaut est
+       écartée : jamais de bouclage, elle serait toujours refusée en `http://`,
+       et citer une adresse que l'utilisateur n'a pas réglée l'égarerait.
+
+    L'en-tête `Host` de la requête n'est jamais utilisé : il est fourni par le
+    client, et `get_url()` n'y recourt qu'avec `require_current_request=True`.
+    """
+    requete = current_request.get()
+    if requete is not None and (base := requete.headers.get(HEADER_FRONTEND_BASE)):
+        yield str(base).rstrip("/")
+    with suppress(NoURLAvailableError):
+        yield get_url(hass, allow_internal=False, prefer_external=True)
+    if hass.config.internal_url:
+        yield normalize_url(hass.config.internal_url)
+
+
 @callback
 def url_de_retour(hass: HomeAssistant) -> str:
     """URI de redirection à déclarer dans l'application OAuth2 de l'utilisateur.
 
-    La base est celle utilisée par le cœur de Home Assistant : l'en-tête
-    `HA-Frontend-Base` de la requête en cours, c'est-à-dire l'adresse par
-    laquelle l'utilisateur accède réellement à son instance. Hors requête (appel
-    interne, test), l'URL externe configurée prend le relais ; sans elle,
-    `NoURLAvailableError` est levée et le flux s'interrompt avec un message
-    explicite plutôt que de fabriquer une URL fausse.
+    La première base acceptable parmi les candidates suivantes est retenue :
+
+    1. l'en-tête `HA-Frontend-Base` de la requête en cours, c'est-à-dire
+       l'adresse par laquelle le navigateur accède à l'instance. **L'interface
+       de Home Assistant ne l'envoie que dans les flux de configuration**
+       (`src/data/config_flow.ts`), jamais dans les flux d'options
+       (`src/data/options_flow.ts`) où vit l'ajout d'une destination : cette
+       voie ne sert donc qu'aux appels qui le fournissent explicitement ;
+    2. l'URL externe (URL Internet, ou l'URL de Home Assistant Cloud) ;
+    3. l'URL interne réglée par l'administrateur (URL du réseau local), pour
+       un test sur la machine même de Home Assistant par
+       `http://localhost:8123`.
+
+    Une base est acceptable si elle est en `https://`, ou en `http://` sur
+    `localhost` ou une adresse de bouclage : Dropbox et Google refusent toute
+    autre URI en `http://`. Les URL externe et interne sont réglées par
+    l'administrateur, pas par la requête : aucune ne peut être détournée par un
+    client. Si aucune candidate n'est acceptable, la première refusée est citée
+    par `AdresseDeRetourRefusee` ; s'il n'y en a aucune, `NoURLAvailableError`
+    est levée. Dans les deux cas le flux s'interrompt avec un message qui dit
+    quoi configurer, plutôt que de fabriquer une adresse fausse (#66).
     """
-    requete = current_request.get()
-    if requete is not None and (base := requete.headers.get(HEADER_FRONTEND_BASE)):
-        return f"{base}{OAUTH_CALLBACK_PATH}"
-    base = get_url(hass, allow_internal=False, prefer_external=True)
-    return f"{base}{OAUTH_CALLBACK_PATH}"
+    refusee: str | None = None
+    for base in _bases_candidates(hass):
+        if (origine := _origine_acceptable(base)) is not None:
+            return f"{origine}{OAUTH_CALLBACK_PATH}"
+        if refusee is None:
+            refusee = base
+    if refusee is not None:
+        raise AdresseDeRetourRefusee(refusee)
+    raise NoURLAvailableError
 
 
 @callback
@@ -518,6 +624,7 @@ def async_session_de_la_destination(
 
 
 __all__ = [
+    "AdresseDeRetourRefusee",
     "DestinationOAuth2Implementation",
     "DestinationOAuth2Session",
     "EtatOAuth",

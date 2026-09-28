@@ -101,6 +101,7 @@ from .errors import DestinationConfigError, DestinationError, UnknownProviderErr
 from .masquage import masquer
 from .models import DestinationConfig
 from .oauth import (
+    AdresseDeRetourRefusee,
     DestinationOAuth2Implementation,
     async_enregistrer_la_vue_de_retour,
     implementation_de_la_destination,
@@ -529,6 +530,8 @@ class GestionDesDestinationsMixin:
         """
         try:
             retour = url_de_retour(self.hass)
+        except AdresseDeRetourRefusee as err:
+            return self._abandon_adresse_de_retour_refusee(err)
         except NoURLAvailableError:
             return self.async_abort(reason="url_indisponible")
 
@@ -567,6 +570,15 @@ class GestionDesDestinationsMixin:
             },
         )
 
+    def _abandon_adresse_de_retour_refusee(
+        self, err: AdresseDeRetourRefusee
+    ) -> ConfigFlowResult:
+        """Interrompt le flux en citant l'adresse que le fournisseur refuserait."""
+        return self.async_abort(
+            reason="url_de_retour_http",
+            description_placeholders={"adresse": err.adresse},
+        )
+
     async def async_step_autorisation(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -594,6 +606,8 @@ class GestionDesDestinationsMixin:
                 url = await implementation.async_generate_authorize_url(self.flow_id)
         except TimeoutError:
             return self.async_abort(reason="delai_url_autorisation")
+        except AdresseDeRetourRefusee as err:
+            return self._abandon_adresse_de_retour_refusee(err)
         except NoURLAvailableError:
             return self.async_abort(reason="url_indisponible")
 

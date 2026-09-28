@@ -93,7 +93,9 @@ revenez à ce dossier). Changer de compte reste l'affaire de
 **Ré-autoriser une destination**.
 
 Votre instance doit donc avoir une **URL externe configurée** (Paramètres > Système > Réseau)
-pour que le fournisseur puisse vous y ramener. Cette URL doit être :
+pour que le fournisseur puisse vous y ramener. Seule exception : un test sur la machine même de
+Home Assistant, avec une URL de réseau local `http://localhost:8123` (voir la
+[FAQ](docs/faq.md#faut-il-une-url-externe-pour-connecter-une-destination-)). Cette URL doit être :
 - **HTTPS** (pas HTTP) : requis par les fournisseurs pour des raisons de sécurité ;
 - **publiquement accessible** : elle ne peut pas être locale (`.local`) ou basée sur une adresse
   IP nue (par exemple, `192.168.1.10`). Certains fournisseurs comme Google Drive refusent les

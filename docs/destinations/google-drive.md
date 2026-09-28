@@ -8,7 +8,8 @@ avec l'intégration.
 > **À lire avant de commencer.** Google n'accepte de renvoyer l'utilisateur que vers une adresse
 > **HTTPS sur un domaine public**. Une instance joignable uniquement en `http://`, en `.local`
 > ou par une adresse IP (`192.168.1.10`, `100.x.y.z`) **ne peut pas** connecter Google Drive :
-> Google refusera l'URI de redirection au moment où vous l'enregistrez. Voir
+> Google refusera l'URI de redirection au moment où vous l'enregistrez. Seule exception : un
+> test sur la machine même de Home Assistant, par `http://localhost:8123`. Voir
 > [Prérequis : une URL externe publique](#prérequis--une-url-externe-publique).
 
 > **Attention : la console Google Cloud a changé en 2025.** Les noms des écrans et des onglets
@@ -38,15 +39,46 @@ sauvegarde à la main dans Drive, Auto Backup ne la retrouvera pas.
 L'autorisation se termine par une redirection du navigateur vers votre instance, sur l'adresse
 `https://<votre-instance>/auth/auto_backup/callback`. Google impose à cette adresse :
 
-- le schéma **HTTPS** — `http://` est refusé (sauf `http://localhost`, inutilisable ici, car
-  c'est votre navigateur qui doit joindre Home Assistant) ;
+- le schéma **HTTPS** — `http://` est refusé, sauf `http://localhost` (voir « Tester en local »
+  ci-dessous) ;
 - un **nom de domaine public** — `homeassistant.local`, `.internal`, `.home` et les adresses IP
-  nues sont refusés ;
+  nues sont refusés (sauf `localhost` et `127.0.0.1`) ;
 - une **correspondance exacte** — pas de joker, et le chemin compte.
 
 Renseignez donc l'URL externe de votre instance dans **Paramètres > Système > Réseau > URL
-internet** (par exemple `https://ha.mondomaine.fr`) avant de commencer. Sans elle, le flux
-d'ajout s'interrompt avec le message « Home Assistant n'a pas d'URL externe configurée ».
+internet** (par exemple `https://ha.mondomaine.fr`) avant de commencer.
+
+### Adresse de retour utilisée
+
+Auto Backup construit l'adresse de retour à partir de la première de ces adresses qui convient :
+
+1. l'**URL Internet** (URL externe), ou l'adresse Home Assistant Cloud ;
+2. à défaut, l'**URL de réseau local** (URL interne), **seulement** si elle est en `https://`
+   ou en `http://localhost` (ou `http://127.0.0.1`).
+
+L'adresse par laquelle votre navigateur ouvre Home Assistant n'est pas utilisée : l'interface
+de Home Assistant ne la transmet pas aux options d'une intégration, où se fait l'ajout d'une
+destination. Si aucune adresse ne convient, l'ajout s'interrompt avec l'un de ces messages :
+
+- « Home Assistant n'a pas d'URL externe configurée, ni d'URL locale utilisable » ;
+- « L'adresse … ne peut pas servir au retour d'autorisation » : l'adresse trouvée est en
+  `http://` sans être `localhost` (par exemple `http://homeassistant.local:8123`).
+
+Une URL de réseau local en `https://` est acceptée par Auto Backup, mais Google la refusera si
+son nom de domaine n'est pas public.
+
+### Tester en local, sans URL externe
+
+C'est votre **navigateur** qui suit la redirection de Google : `http://localhost` n'atteint
+Home Assistant que si le navigateur tourne **sur la même machine** que lui (instance de
+développement, par exemple). Dans ce cas :
+
+1. dans **Paramètres > Système > Réseau**, réglez l'**URL de réseau local** sur
+   `http://localhost:8123` (laissez l'URL Internet vide) ;
+2. ouvrez Home Assistant à l'adresse `http://localhost:8123` ;
+3. déclarez chez Google (étape 4) l'URI `http://localhost:8123/auth/auto_backup/callback`.
+
+Depuis un autre poste, `localhost` désignerait ce poste : l'autorisation n'aboutirait pas.
 
 > Le raccourci habituel `https://my.home-assistant.io/redirect/oauth` **n'est pas utilisable** :
 > il ne sait rediriger que vers l'adresse standard de Home Assistant, alors que les destinations
@@ -109,7 +141,8 @@ chaque semaine.
    https://<votre-instance>/auth/auto_backup/callback
    ```
 
-   en remplaçant `<votre-instance>` par votre URL externe, **sans barre oblique finale**.
+   en remplaçant `<votre-instance>` par votre URL externe, **sans barre oblique finale** (pour
+   un test local : `http://localhost:8123/auth/auto_backup/callback`).
    Home Assistant vous affiche l'adresse exacte à l'étape « Identifiants de votre application »
    du flux d'ajout : le plus sûr est de la copier depuis là.
 5. Validez : Google affiche l'**ID client** et le **code secret du client**. Gardez-les sous la
@@ -278,7 +311,8 @@ n'atteint ce plafond.
 
 | Message | Cause probable | Correction |
 | --- | --- | --- |
-| « Home Assistant n'a pas d'URL externe configurée » | aucune URL externe, ou elle n'est pas publique | Paramètres > Système > Réseau, puis recommencez |
+| « Home Assistant n'a pas d'URL externe configurée, ni d'URL locale utilisable » | ni URL Internet ni URL de réseau local | Paramètres > Système > Réseau : URL Internet en `https://` (ou, pour un test sur la machine même, URL de réseau local `http://localhost:8123`), puis recommencez |
+| « L'adresse … ne peut pas servir au retour d'autorisation » | l'adresse trouvée est en `http://` sans être `localhost` | renseignez une URL Internet en `https://`, ou suivez « Tester en local, sans URL externe » |
 | `redirect_uri_mismatch` (affiché par Google) | l'URI déclarée ne correspond pas exactement | recopiez l'adresse affichée par le formulaire, sans barre oblique finale |
 | « Le fournisseur a refusé le code d'autorisation » | ID client ou secret erroné (`invalid_client`), ou URI de redirection différente | vérifiez les identifiants dans la console Google, puis relancez l'ajout |
 | « L'autorisation a été refusée ou annulée chez le fournisseur » | consentement annulé, ou compte absent des utilisateurs test | autorisez avec un compte autorisé, ou publiez l'application |
