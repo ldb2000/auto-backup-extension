@@ -2199,7 +2199,9 @@ Cette issue crée le socle ; plusieurs éléments sont volontairement différés
   procédure pas à pas (création de l'application ou du projet, portées, identifiants, URI de
   redirection) et énoncent le prérequis d'URL externe HTTPS. Google refuse en outre les URI non
   publiques (`.local`, adresse IP nue) : une instance sans URL externe publique ne peut pas
-  connecter Google Drive. Reste la doc utilisateur d'ensemble (#19).
+  connecter Google Drive. Reste la doc utilisateur d'ensemble (#19). Précisé en #66 : sans URL
+  externe, une URL de réseau local `http://localhost` permet un test sur la machine même de Home
+  Assistant (voir la décision 4, « Adresse de retour »).
 
 - **Libellés de fournisseur** : le sélecteur affichait l'identifiant technique (`dropbox`,
   `google_drive`) comme libellé utilisateur. **Traité en #10** : un fournisseur déclare son
