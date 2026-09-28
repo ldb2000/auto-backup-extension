@@ -843,8 +843,10 @@ async def test_la_verification_d_acces_interroge_le_compte(
         appel for appel in aioclient_mock.mock_calls if str(appel[1]) == URL_COMPTE
     ]
     assert len(appels) == 2
-    # Dropbox refuse un `Content-Type` sur un point d'entrée sans argument.
-    assert "Content-Type" not in appels[0][3]
+    # Point d'entrée sans argument : le corps JSON `null` et son type sont
+    # déclarés explicitement (issue #67), jamais laissés à aiohttp.
+    assert appels[0][3]["Content-Type"] == "application/json"
+    assert appels[0][2] == "null"
 
 
 @pytest.mark.parametrize(

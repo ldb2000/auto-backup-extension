@@ -188,6 +188,9 @@ TIMEOUT_TRANSFERT = ClientTimeout(
 
 TYPE_BINAIRE = "application/octet-stream"
 TYPE_JSON = "application/json"
+# Corps d'un appel RPC sans argument, tel que Dropbox le documente : le JSON
+# `null`, accompagné de `Content-Type: application/json` (issue #67).
+CORPS_SANS_ARGUMENT = "null"
 
 # Fragments d'`error_summary` reconnus. Dropbox les préfixe du champ fautif
 # (`path/conflict/file/...`) : la comparaison se fait donc par inclusion.
@@ -732,13 +735,20 @@ class DropboxDestination(RemoteDestination):
     async def _async_appel_rpc(self, url: str) -> Mapping[str, Any]:
         """Appelle un point RPC de l'API Dropbox et renvoie sa réponse JSON.
 
-        `users/get_current_account` ne prend aucun argument : Dropbox demande
-        alors un corps vide et **aucun** en-tête `Content-Type`, faute de quoi il
-        répond `400 Bad Request`.
+        `users/get_current_account` ne prend aucun argument. Dropbox accepte
+        alors deux formes : un corps vide **sans** `Content-Type`, ou le corps
+        JSON `null` avec `Content-Type: application/json`. C'est la seconde qui
+        est envoyée : `aiohttp` ajoute d'office `Content-Type:
+        application/octet-stream` à un POST sans corps, que Dropbox refuse en
+        `400 Bad Request` (issue #67). Déclarer explicitement le corps et son type
+        ne dépend d'aucun comportement implicite du client HTTP.
         """
         jeton = await self._session.async_get_access_token()
         reponse = await self._async_requete(
-            url, entetes={"Authorization": f"Bearer {jeton}"}, delai=DELAI_APPEL
+            url,
+            entetes={"Authorization": f"Bearer {jeton}", "Content-Type": TYPE_JSON},
+            corps=CORPS_SANS_ARGUMENT,
+            delai=DELAI_APPEL,
         )
         self._verifier_le_statut(reponse.statut, reponse.corps)
         return self._charge_de_la_reponse(reponse.corps)
@@ -748,7 +758,7 @@ class DropboxDestination(RemoteDestination):
         url: str,
         *,
         entetes: Mapping[str, str],
-        corps: Any = None,
+        corps: Any,
         delai: float,
         timeout_client: ClientTimeout | None = None,
     ) -> _ReponseDropbox:
@@ -759,13 +769,17 @@ class DropboxDestination(RemoteDestination):
         et ne doivent donc jamais la remettre en cause. Le statut HTTP, lui, est
         interprété par l'appelant, qui seul sait ce qu'il tentait de faire.
 
-        `corps` n'est transmis que s'il existe : un appel RPC sans argument
-        exige un corps vide **et** aucun `Content-Type`, faute de quoi Dropbox
-        répond `400 Bad Request`.
+        `corps` est **obligatoire** et transmis tel quel, avec l'en-tête
+        `Content-Type` choisi par l'appelant dans `entetes` : `application/json`
+        pour un appel RPC (le corps `null` s'il n'a pas d'argument),
+        `application/octet-stream` pour un point de contenu, dont le fragment
+        peut être vide. Aucune requête ne part sans corps : `aiohttp` y ajouterait
+        d'office `Content-Type: application/octet-stream`, que les points RPC de
+        Dropbox refusent en `400 Bad Request` (issue #67).
         """
-        options: dict[str, Any] = {"headers": dict(entetes)}
-        if corps is not None:
-            options["data"] = corps
+        if corps is None:
+            raise ValueError("une requête Dropbox exige un corps explicite")
+        options: dict[str, Any] = {"headers": dict(entetes), "data": corps}
         if timeout_client is not None:
             options["timeout"] = timeout_client
         client = async_get_clientsession(self._hass)
